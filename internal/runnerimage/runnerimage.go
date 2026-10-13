@@ -5,11 +5,17 @@ package runnerimage
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/dominikzabcik/boxrunner/internal/config"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -86,7 +92,89 @@ func Build(ctx context.Context, d *docker.Client, version string) error {
 	if err != nil {
 		return err
 	}
-	return d.Build(ctx, buf, layout.Image, map[string]string{"RUNNER_VERSION": version})
+	return d.Build(ctx, buf, docker.BuildOptions{Tag: layout.Image, Args: map[string]string{"RUNNER_VERSION": version}, Pull: true})
+}
+
+// Labels that tie a class image to what it was built from.
+const (
+	LabelBase    = "boxrunner.base"
+	LabelContext = "boxrunner.context"
+)
+
+// DirTar packs a build context directory into a tar stream with fixed
+// metadata, and returns the SHA-256 of that stream, so the same files always
+// give the same hash.
+func DirTar(dir string) (*bytes.Buffer, string, error) {
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !d.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := w.WriteHeader(&tar.Header{Name: filepath.ToSlash(rel), Mode: int64(info.Mode().Perm()), Size: int64(len(data))}); err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
+	})
+	if err == nil {
+		err = w.Close()
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("build context %s: %w", dir, err)
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return &buf, hex.EncodeToString(sum[:]), nil
+}
+
+// EnsureClasses builds the image of every class that has a dockerfile, when
+// it is missing or was built from another job image or other files. It
+// returns the classes it built.
+func EnsureClasses(ctx context.Context, d *docker.Client, classes []config.Class) ([]string, error) {
+	base, ok, err := d.Image(ctx, layout.Image)
+	if err != nil || !ok {
+		return nil, cmp.Or(err, errors.New("the job image is not built yet"))
+	}
+	var built []string
+	for _, c := range classes {
+		if c.Dockerfile == "" {
+			continue
+		}
+		buf, hash, err := DirTar(filepath.Dir(c.Dockerfile))
+		if err != nil {
+			return built, fmt.Errorf("class %s: %w", c.Name, err)
+		}
+		img, ok, err := d.Image(ctx, c.Image)
+		if err != nil {
+			return built, err
+		}
+		if ok && img.Labels[LabelBase] == base.ID && img.Labels[LabelContext] == hash {
+			continue
+		}
+		err = d.Build(ctx, buf, docker.BuildOptions{
+			Tag:        c.Image,
+			Dockerfile: filepath.Base(c.Dockerfile),
+			Args:       map[string]string{"BASE": layout.Image},
+			Labels:     map[string]string{LabelBase: base.ID, LabelContext: hash},
+		})
+		if err != nil {
+			return built, fmt.Errorf("class %s: %w", c.Name, err)
+		}
+		built = append(built, c.Name)
+	}
+	return built, nil
 }
 
 // Built returns the runner version of the job image, or "" when there is none.

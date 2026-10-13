@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,5 +59,27 @@ func TestTarHoldsTheContext(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "Dockerfile file,docker exec" {
 		t.Errorf("tar = %v", got)
+	}
+}
+
+func TestDirTarHashFollowsContent(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Dockerfile", "ARG BASE\nFROM ${BASE}\n")
+	write("setup.sh", "echo hi\n")
+	_, first, err := DirTar(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, again, _ := DirTar(dir); again != first {
+		t.Errorf("same files gave %s then %s", first, again)
+	}
+	write("setup.sh", "echo bye\n")
+	if _, changed, _ := DirTar(dir); changed == first {
+		t.Error("a changed file kept the hash")
 	}
 }

@@ -326,7 +326,19 @@ func (a *Agent) build(ctx context.Context, version string) {
 		a.post(scheduler.BuildFailed{})
 		return
 	}
+	a.ensureClasses(ctx)
 	a.post(scheduler.ImageBuilt{Version: version})
+}
+
+// ensureClasses rebuilds the class images whose job image or files changed.
+func (a *Agent) ensureClasses(ctx context.Context) {
+	built, err := runnerimage.EnsureClasses(ctx, a.Docker, a.Config.Classes)
+	for _, class := range built {
+		a.Log.Info("built the class image", "class", class)
+	}
+	if err != nil {
+		a.Log.Error("building a class image failed", "err", err)
+	}
 }
 
 // shutdown removes runners that have not taken a job, so GitHub hands their
@@ -385,6 +397,9 @@ func (a *Agent) checkImage(ctx context.Context) {
 	if built, err := runnerimage.Built(ctx, a.Docker); err != nil {
 		a.Log.Error("reading the job image", "err", err)
 	} else {
+		if built != "" {
+			a.ensureClasses(ctx)
+		}
 		a.post(scheduler.ImageBuilt{Version: built})
 	}
 	client := &http.Client{Timeout: 30 * time.Second}

@@ -267,16 +267,29 @@ func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
 
 // ImageLabels returns an image's labels, or false when the image is missing.
 func (c *Client) ImageLabels(ctx context.Context, ref string) (map[string]string, bool, error) {
+	img, ok, err := c.Image(ctx, ref)
+	return img.Labels, ok, err
+}
+
+// ImageInfo is what boxrunner reads of an image.
+type ImageInfo struct {
+	ID     string
+	Labels map[string]string
+}
+
+// Image inspects an image; ok is false when there is none.
+func (c *Client) Image(ctx context.Context, ref string) (ImageInfo, bool, error) {
 	var out struct {
+		ID     string `json:"Id"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 	}
 	err := c.call(ctx, http.MethodGet, "/images/"+ref+"/json", "", nil, &out)
 	if NotFound(err) {
-		return nil, false, nil
+		return ImageInfo{}, false, nil
 	}
-	return out.Config.Labels, err == nil, err
+	return ImageInfo{ID: out.ID, Labels: out.Config.Labels}, err == nil, err
 }
 
 func (c *Client) RemoveImage(ctx context.Context, ref string) error {
@@ -287,11 +300,35 @@ func (c *Client) RemoveImage(ctx context.Context, ref string) error {
 	return err
 }
 
-// Build builds a tar build context into an image tagged tag, pulling the base
-// image fresh. It returns the first error the build reports.
-func (c *Client) Build(ctx context.Context, tarContext io.Reader, tag string, args map[string]string) error {
-	buildArgs, _ := json.Marshal(args)
-	q := url.Values{"t": {tag}, "buildargs": {string(buildArgs)}, "pull": {"1"}, "rm": {"1"}, "forcerm": {"1"}}
+// BuildOptions names the image a build produces and how it is built.
+type BuildOptions struct {
+	Tag    string
+	Args   map[string]string
+	Labels map[string]string
+	// Pull fetches the base image fresh. Off for images built FROM a local one.
+	Pull bool
+	// Dockerfile is the file's path inside the context; empty means "Dockerfile".
+	Dockerfile string
+}
+
+// Build builds a tar build context into an image. It returns the first error
+// the build reports.
+func (c *Client) Build(ctx context.Context, tarContext io.Reader, o BuildOptions) error {
+	q := url.Values{"t": {o.Tag}, "rm": {"1"}, "forcerm": {"1"}}
+	if len(o.Args) > 0 {
+		b, _ := json.Marshal(o.Args)
+		q.Set("buildargs", string(b))
+	}
+	if len(o.Labels) > 0 {
+		b, _ := json.Marshal(o.Labels)
+		q.Set("labels", string(b))
+	}
+	if o.Pull {
+		q.Set("pull", "1")
+	}
+	if o.Dockerfile != "" {
+		q.Set("dockerfile", o.Dockerfile)
+	}
 	resp, err := c.do(ctx, http.MethodPost, "/build?"+q.Encode(), "application/x-tar", tarContext)
 	if err != nil {
 		return err

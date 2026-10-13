@@ -200,3 +200,33 @@ func TestSetTopLevel(t *testing.T) {
 		t.Errorf("SetTopLevel on empty file = %q", got)
 	}
 }
+
+func TestParseDockerfile(t *testing.T) {
+	got, err := Parse([]byte(`
+worker = "https://w.example.dev"
+box = "box-1"
+[[class]]
+name = "web"
+cpus = 4
+memory = "4GiB"
+max = 1
+dockerfile = "/etc/boxrunner/images/web/../web/Dockerfile"
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := got.Classes[0]
+	if c.Dockerfile != "/etc/boxrunner/images/web/Dockerfile" || c.Image != "boxrunner/class-web:local" {
+		t.Errorf("dockerfile = %q, image = %q", c.Dockerfile, c.Image)
+	}
+
+	for file, want := range map[string]string{
+		`dockerfile = "images/web/Dockerfile"`:                "config:\nclass \"web\": dockerfile: \"images/web/Dockerfile\" must be an absolute path",
+		"dockerfile = \"/d/Dockerfile\"\nimage = \"x:local\"": "config:\nclass \"web\": image and dockerfile: set one; a dockerfile names its own image",
+	} {
+		_, err := Parse([]byte("worker = \"https://w.example.dev\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"+file+"\n"), "box")
+		if err == nil || err.Error() != want {
+			t.Errorf("Parse(%s) error = %v\nwant %s", file, err, want)
+		}
+	}
+}

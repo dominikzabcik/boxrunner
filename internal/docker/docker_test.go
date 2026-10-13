@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,7 +22,14 @@ type seen struct {
 // fakeDaemon serves the Engine API on a unix socket. route answers a request
 // by its method and path; /version answers with apiVersion.
 func fakeDaemon(t *testing.T, apiVersion string, route func(w http.ResponseWriter, r *http.Request)) (*Client, *[]seen) {
-	socket := filepath.Join(t.TempDir(), "docker.sock")
+	// A unix socket path must stay under 104 bytes on macOS, which a long
+	// test name in t.TempDir() can exceed.
+	dir, err := os.MkdirTemp("", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "docker.sock")
 	l, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +156,7 @@ func TestBuildReportsError(t *testing.T) {
 		io.WriteString(w, `{"stream":"Step 1/9 : FROM ghcr.io/actions/actions-runner:2.329.0"}`+"\n")
 		io.WriteString(w, `{"errorDetail":{"message":"manifest unknown"},"error":"manifest unknown"}`+"\n")
 	})
-	err := c.Build(context.Background(), strings.NewReader("tar bytes"), "boxrunner/runner:local", map[string]string{"RUNNER_VERSION": "2.329.0"})
+	err := c.Build(context.Background(), strings.NewReader("tar bytes"), BuildOptions{Tag: "boxrunner/runner:local", Args: map[string]string{"RUNNER_VERSION": "2.329.0"}, Pull: true})
 	if err == nil || err.Error() != "docker build: manifest unknown" {
 		t.Errorf("Build = %v", err)
 	}
@@ -156,5 +164,23 @@ func TestBuildReportsError(t *testing.T) {
 	wantURI := "/v1.47/build?buildargs=%7B%22RUNNER_VERSION%22%3A%222.329.0%22%7D&forcerm=1&pull=1&rm=1&t=boxrunner%2Frunner%3Alocal"
 	if got.uri != wantURI || got.contentType != "application/x-tar" || got.body != 9 {
 		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestBuildFromLocalBaseWithLabels(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"stream":"Successfully built"}`+"\n")
+	})
+	err := c.Build(context.Background(), strings.NewReader("tar"), BuildOptions{
+		Tag:    "boxrunner/class-web:local",
+		Args:   map[string]string{"BASE": "boxrunner/runner:local"},
+		Labels: map[string]string{"boxrunner.base": "sha256:abc"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantURI := "/v1.47/build?buildargs=%7B%22BASE%22%3A%22boxrunner%2Frunner%3Alocal%22%7D&forcerm=1&labels=%7B%22boxrunner.base%22%3A%22sha256%3Aabc%22%7D&rm=1&t=boxrunner%2Fclass-web%3Alocal"
+	if got := (*requests)[0]; got.uri != wantURI {
+		t.Errorf("uri = %s", got.uri)
 	}
 }

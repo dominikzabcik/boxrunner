@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -90,6 +91,9 @@ type Class struct {
 	// Max is how many runners of this class may start or run at once.
 	Max   int
 	Image string
+	// Dockerfile, when set, builds Image FROM the job image; the agent
+	// rebuilds it whenever the job image or the Dockerfile's directory changes.
+	Dockerfile string
 }
 
 type Config struct {
@@ -127,14 +131,15 @@ type rawConfig struct {
 }
 
 type rawClass struct {
-	Name     string  `toml:"name"`
-	CPUs     float64 `toml:"cpus"`
-	Memory   string  `toml:"memory"`
-	Pids     int64   `toml:"pids"`
-	Shm      string  `toml:"shm"`
-	Priority string  `toml:"priority"`
-	Max      int     `toml:"max"`
-	Image    string  `toml:"image"`
+	Name       string  `toml:"name"`
+	CPUs       float64 `toml:"cpus"`
+	Memory     string  `toml:"memory"`
+	Pids       int64   `toml:"pids"`
+	Shm        string  `toml:"shm"`
+	Priority   string  `toml:"priority"`
+	Max        int     `toml:"max"`
+	Image      string  `toml:"image"`
+	Dockerfile string  `toml:"dockerfile"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -260,11 +265,22 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 	if rc.Max < 1 {
 		errs = append(errs, errors.New("max: must be at least 1; remove the class to turn it off"))
 	}
-	if c.Image == "" {
+	switch {
+	case rc.Dockerfile != "" && rc.Image != "":
+		errs = append(errs, errors.New("image and dockerfile: set one; a dockerfile names its own image"))
+	case rc.Dockerfile != "" && !filepath.IsAbs(rc.Dockerfile):
+		errs = append(errs, fmt.Errorf("dockerfile: %q must be an absolute path", rc.Dockerfile))
+	case rc.Dockerfile != "":
+		c.Dockerfile = filepath.Clean(rc.Dockerfile)
+		c.Image = ClassImage(rc.Name)
+	case c.Image == "":
 		c.Image = layout.Image
 	}
 	return c, errs
 }
+
+// ClassImage is the tag of the image a class's dockerfile builds.
+func ClassImage(class string) string { return "boxrunner/class-" + class + ":local" }
 
 // BoxName turns a hostname into a box name: its first label, lower case,
 // with anything outside [a-z0-9-] replaced by a dash.
