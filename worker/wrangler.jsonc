@@ -4,6 +4,8 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-01",
 	"workers_dev": true,
+	// The Worker holds the App key; one address is enough.
+	"preview_urls": false,
 	"observability": { "enabled": true },
 	"vars": {
 		// The runner classes the Worker serves, comma-separated. Each becomes a
