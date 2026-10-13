@@ -1,7 +1,7 @@
 import { signAppJwt } from './crypto';
 import * as github from './github';
 import { ApiError } from './http';
-import { parseClasses, type App, type ClassName, type Classes, type Repo, type RepoName, type ScaleSetId } from './model';
+import { parseClasses, repoFilter, type App, type ClassName, type Classes, type Repo, type RepoName, type ScaleSetId } from './model';
 import type { Store } from './store';
 
 const minute = 60_000;
@@ -77,16 +77,17 @@ export class Box {
 		return this.memo('jwt', tokenLifetime, () => signAppJwt(app.id, app.key, Math.floor(Date.now() / 1000)));
 	}
 
-	/** Private, unarchived repositories across the App's installations. */
+	/** Private, unarchived repositories across the App's installations, narrowed by `REPOS` when it is set. */
 	repos(app: App): Promise<Repo[]> {
 		return this.memo('repos', repoListLifetime, async () => {
 			const jwt = await this.jwt(app);
+			const listed = repoFilter(this.env.REPOS);
 			const served: Repo[] = [];
 			for (const installationId of await github.installationIds(jwt)) {
 				// Listing needs a token for the whole installation, so it gets metadata and nothing else.
 				const token = await github.installationToken(jwt, installationId, { metadata: 'read' });
 				for (const repo of await github.installationRepos(token)) {
-					if (repo.private && !repo.archived) served.push({ name: repo.name, id: repo.id, installationId });
+					if (repo.private && !repo.archived && listed(repo.name)) served.push({ name: repo.name, id: repo.id, installationId });
 				}
 			}
 			return served;

@@ -67,3 +67,18 @@ export function parseClasses(value: string | undefined): Classes {
 	}
 	return { ok: true, classes };
 }
+
+/**
+ * Reads the optional `REPOS` variable, a comma-separated list of `owner/name`.
+ * The Worker then serves only those of the App's repositories; empty serves
+ * every private repository the App is installed on.
+ */
+export function repoFilter(value: string | undefined): (name: string) => boolean {
+	const names = new Set(
+		(value ?? '')
+			.split(',')
+			.map((name) => name.trim().toLowerCase())
+			.filter(Boolean),
+	);
+	return names.size === 0 ? () => true : (name) => names.has(name.toLowerCase());
+}

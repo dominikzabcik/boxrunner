@@ -123,7 +123,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - the scale sets it created or adopted, by repository and class
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 
-The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy.
+The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories.
 
 ### Setup
 

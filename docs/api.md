@@ -35,7 +35,7 @@ Repositories are named `owner/name` and matched case-insensitively. Scale set id
 
 ## `GET /v1/repos`
 
-The private, unarchived repositories the App is installed on, and the classes the Worker serves. The Worker caches the list for a minute. Listing needs a token for each whole installation, so that token gets `metadata: read` and nothing else; every other installation token is narrowed to one repository.
+The private, unarchived repositories the App is installed on, narrowed to the `REPOS` variable when it is set, and the classes the Worker serves. The Worker caches the list for a minute. Listing needs a token for each whole installation, so that token gets `metadata: read` and nothing else; every other installation token is narrowed to one repository.
 
 ```json
 {

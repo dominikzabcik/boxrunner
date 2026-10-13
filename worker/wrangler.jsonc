@@ -10,7 +10,10 @@
 	"vars": {
 		// The runner classes the Worker serves, comma-separated. Each becomes a
 		// scale set's name and its only label, so a workflow picks one with runs-on.
-		"CLASSES": "boxrunner,boxrunner-light"
+		"CLASSES": "boxrunner,boxrunner-light",
+		// Optional: only these repositories (owner/name, comma-separated) out of
+		// the private ones the App is installed on. Empty serves them all.
+		"REPOS": ""
 	},
 	"secrets": {
 		"required": ["SETUP_SECRET"]

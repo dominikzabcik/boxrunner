@@ -289,7 +289,7 @@ function tokenPage(status: number, title: string, slug: string, origin: string, 
 ${
 	firstTime
 		? `<h2>1. Install the App</h2>
-<p><a href="${escape(install)}">Install ${escape(slug)} on your private repositories</a>. Public repositories are never served.</p>
+<p><a href="${escape(install)}">Install ${escape(slug)}</a> and choose <strong>Only select repositories</strong>. The box serves every private repository the App can see, so pick the ones whose jobs should run there. Public repositories are never served.</p>
 <h2>2. Install the agent</h2>`
 		: '<h2>Install the agent again</h2>'
 }
