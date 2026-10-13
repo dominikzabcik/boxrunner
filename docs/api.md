@@ -7,26 +7,35 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 - Every request carries `Authorization: Bearer <box token>` and `Boxrunner-Version: <agent version>`.
 - Every response carries `Boxrunner-Protocol: 1` and `Cache-Control: no-store`.
 - Errors have one shape, `{"error": "<code>", "message": "<human sentence>"}`.
+- Any other method or path answers `404 not_found` in the same shape.
+
+**Versions.** `Boxrunner-Version` is the agent's semver (`1.4.2`, `0.3.0-rc.1`). The Worker speaks protocol 1 and serves agent majors 0 and 1. Any other major, a missing header or one that is not semver gets `426 upgrade_required`, whose message names what the agent sent.
+
+**Order of checks.** Version (426), setup finished and `CLASSES` readable (503), box token (401), budget (429), then the body or query (400) and the endpoint's own checks.
+
+**Budget.** Each box token may make 120 requests at once and then one every two seconds, about 1,800 an hour, under half of the free plan's 100,000 requests a day. A request over the budget gets `429 rate_limited` with `Retry-After` in seconds. The budget lives in the Durable Object's memory, so a restart refills it, which only happens after the Worker sat idle. Requests with a wrong token are refused before they spend it. A new box token starts with a full budget.
 
 | Status | `error` | Meaning | The agent |
 |---|---|---|---|
 | 400 | `bad_request` | Malformed body or a missing field | Logs it as a bug and does not retry |
-| 400 | `unknown_class` | The class is not in the Worker's `CLASSES` | Stops serving that class and logs which classes exist |
+| 400 | `unknown_class` | The class, or the class a scale set was made for, is not in the Worker's `CLASSES` | Stops serving that class and logs which classes exist |
 | 401 | `unauthorized` | Missing or wrong box token | Stops and logs that the token is wrong |
-| 404 | `not_found` | Unknown scale set, session or runner for this repository | Treats it as already gone |
+| 404 | `not_found` | Unknown scale set, session or runner for this repository, or a scale set GitHub no longer has | Treats it as already gone; for a scale set, calls `POST /v1/scalesets` again |
 | 409 | `session_exists` | Another session holds the scale set | Retries with backoff |
 | 409 | `runner_busy` | The runner already took a job | Leaves the runner alone |
-| 410 | `repo_ineligible` | Public, archived, or the App is no longer installed | Stops serving the repository |
+| 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed | Stops serving the repository |
 | 426 | `upgrade_required` | The agent's major version differs from the Worker's | Stops and logs the upgrade command |
 | 429 | `rate_limited` | Too many requests for this box token | Backs off |
 | 502 | `github_error` | GitHub answered with an error; `message` names the call and status | Backs off |
-| 503 | `not_configured` | Setup has not finished | Stops and logs the setup URL |
+| 503 | `not_configured` | Setup has not finished, or `CLASSES` is unreadable (the message says why) | Stops and logs the setup URL |
 
-Repositories are named `owner/name`. Scale set ids are numbers. Session ids are UUIDs.
+Repositories are named `owner/name` and matched case-insensitively. Scale set ids are numbers. Session ids are UUIDs.
+
+`CLASSES` is a comma-separated list of lower-case letters, digits and dashes. A label GitHub's own runners answer to (`ubuntu-*`, `windows-*`, `macos-*`, `self-hosted`) makes it unreadable, because a scale set with that label would take jobs meant for GitHub's machines.
 
 ## `GET /v1/repos`
 
-The private repositories the App is installed on, and the classes the Worker serves.
+The private, unarchived repositories the App is installed on, and the classes the Worker serves. The Worker caches the list for a minute. Listing needs a token for each whole installation, so that token gets `metadata: read` and nothing else; every other installation token is narrowed to one repository.
 
 ```json
 {
@@ -37,7 +46,7 @@ The private repositories the App is installed on, and the classes the Worker ser
 
 ## `POST /v1/scalesets`
 
-Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name. Runner self-update stays on.
+Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name, in the default runner group. Runner self-update stays on. A scale set that already exists at GitHub under that name is adopted rather than duplicated, and concurrent calls create one.
 
 Request:
 
@@ -53,7 +62,7 @@ Response:
 
 ## `POST /v1/sessions`
 
-Opens a message session for a scale set. `owner` is the box name. The response holds everything the agent needs to talk to the queue directly.
+Opens a message session for a scale set. `owner` is the box name: up to 64 letters, digits, dots, dashes or underscores, starting with a letter or digit. The response holds everything the agent needs to talk to the queue directly.
 
 Request:
 
@@ -81,7 +90,7 @@ Response:
 }
 ```
 
-`409 session_exists` while an earlier session is still open.
+`409 session_exists` while an earlier session is still open. `404 not_found` when GitHub no longer has the scale set; the Worker forgets it, so the next `POST /v1/scalesets` creates a new one.
 
 ## `PATCH /v1/sessions/{sessionId}`
 
@@ -90,6 +99,8 @@ Refreshes a session whose queue token expired or will soon. The body names the r
 ```json
 { "repo": "octo/site", "scaleSetId": 7 }
 ```
+
+`404 not_found` when the session is gone; open a new one.
 
 ## `DELETE /v1/sessions/{sessionId}?repo=octo/site&scaleSetId=7`
 
@@ -115,7 +126,7 @@ The agent passes `jitConfig` to the container as `ACTIONS_RUNNER_INPUT_JITCONFIG
 
 ## `DELETE /v1/runners/{runnerId}?repo=octo/site&scaleSetId=7`
 
-Removes a runner that has not taken a job. Answers 204, including when the runner was already gone, and `409 runner_busy` when it is running a job.
+Removes a runner that has not taken a job. Answers 204, including when the runner was already gone, `409 runner_busy` when it is running a job, and `404 not_found` when the runner belongs to another scale set.
 
 ## What the Worker checks on every call
 
@@ -123,7 +134,8 @@ Removes a runner that has not taken a job. Answers 204, including when the runne
 - The repository is in the list `GET /v1/repos` would return.
 - The class is in `CLASSES`.
 - The scale set id belongs to that repository and was created for one of the Worker's classes.
-- Before a session opens, is refreshed or a runner is minted: the repository is private. If it is not, the answer is `410 repo_ineligible` and the scale set is deleted.
+- Before a session opens, is refreshed or a runner is minted: the repository is still private, read fresh from GitHub. If it turned public, the Worker deletes every scale set it made for the repository and answers `410 repo_ineligible`; if deleting fails, it answers `502 github_error` and deletes on the next call. An archived repository or one the App left also gets `410 repo_ineligible`.
+- Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners.
 
 ## Talking to the queue
 

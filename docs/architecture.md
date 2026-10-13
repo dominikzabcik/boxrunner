@@ -118,10 +118,12 @@ Measured on a 4-core ARM box, CPU only: four timed threads of a normal job took 
 
 The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed Durable Object:
 
-- the App's id, private key and webhook secret
-- the hash of the box token
-- the class list
-- cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, single-flight so concurrent calls derive them once
+- the App's id, slug, private key and webhook secret
+- the SHA-256 hash of the box token
+- the scale sets it created or adopted, by repository and class
+- cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
+
+The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy.
 
 ### Setup
 
@@ -132,7 +134,9 @@ Setup happens in the browser, and nobody copies a private key.
 3. **Install the App** on the repositories that should use the box.
 4. **Install the agent.** The page shows a box token once, with the command that installs the agent.
 
-After that, `/setup` answers 410 until the owner resets it with Wrangler.
+After that, `/setup` answers 410 and offers two forms, each needing the setup secret: `POST /setup/token` replaces the box token, and `POST /setup/reset` makes the Worker forget its App so setup can run again.
+
+The setup secret must be at least 32 characters, or the setup pages refuse to work. The browser's state cookie expires after an hour.
 
 ### API for the agent
 
@@ -148,7 +152,7 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 | `POST /v1/runners` | Mint a one-job runner config for a scale set |
 | `DELETE /v1/runners/:id` | Remove a runner that has not taken a job |
 
-The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale set deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours.
+The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours.
 
 ## Agent commands
 

@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `wrangler dev`. In production, set it with
+# `wrangler secret put SETUP_SECRET`: a long random value, at least 32 characters,
+# for example the output of `openssl rand -base64 32`. It guards /setup.
+SETUP_SECRET=

@@ -1,0 +1,20 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "boxrunner",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"workers_dev": true,
+	"observability": { "enabled": true },
+	"vars": {
+		// The runner classes the Worker serves, comma-separated. Each becomes a
+		// scale set's name and its only label, so a workflow picks one with runs-on.
+		"CLASSES": "boxrunner,boxrunner-light"
+	},
+	"secrets": {
+		"required": ["SETUP_SECRET"]
+	},
+	"durable_objects": {
+		"bindings": [{ "name": "BOX", "class_name": "BoxObject" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoxObject"] }]
+}
