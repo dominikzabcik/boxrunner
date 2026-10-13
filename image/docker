@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "boxrunner: Docker is not available inside jobs in this version of boxrunner." >&2
+echo "boxrunner: services:, container: jobs, Docker container actions and docker build need a GitHub-hosted runner for now." >&2
+exit 1

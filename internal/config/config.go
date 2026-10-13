@@ -1,0 +1,280 @@
+// Package config parses /etc/boxrunner/config.toml into typed values. Every
+// check happens here; the rest of the agent trusts a Config.
+package config
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"math"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+
+	"github.com/dominikzabcik/boxrunner/internal/layout"
+)
+
+type Priority int
+
+const (
+	Normal Priority = iota
+	Idle
+)
+
+func (p Priority) String() string {
+	if p == Idle {
+		return "idle"
+	}
+	return "normal"
+}
+
+// Bytes is a size in bytes.
+type Bytes int64
+
+const (
+	KiB Bytes = 1 << 10
+	MiB Bytes = 1 << 20
+	GiB Bytes = 1 << 30
+	GB  Bytes = 1_000_000_000
+)
+
+var units = map[string]Bytes{
+	"": 1, "b": 1,
+	"kb": 1_000, "mb": 1_000_000, "gb": GB, "tb": 1_000 * GB,
+	"kib": KiB, "mib": MiB, "gib": GiB, "tib": 1 << 40,
+}
+
+var sizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]*)$`)
+
+// ParseBytes reads "10GB" (decimal), "6GiB" (binary) or a plain byte count.
+func ParseBytes(s string) (Bytes, error) {
+	m := sizePattern.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return 0, fmt.Errorf("%q is not a size like 6GiB or 10GB", s)
+	}
+	unit, ok := units[strings.ToLower(m[2])]
+	if !ok {
+		return 0, fmt.Errorf("%q has an unknown unit %q (use B, KB, MB, GB, TB, KiB, MiB, GiB or TiB)", s, m[2])
+	}
+	n, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || n*float64(unit) > math.MaxInt64 {
+		return 0, fmt.Errorf("%q is too large", s)
+	}
+	return Bytes(math.Round(n * float64(unit))), nil
+}
+
+// String writes the size in the largest binary unit that divides it.
+func (b Bytes) String() string {
+	switch {
+	case b != 0 && b%GiB == 0:
+		return fmt.Sprintf("%dGiB", b/GiB)
+	case b != 0 && b%MiB == 0:
+		return fmt.Sprintf("%dMiB", b/MiB)
+	default:
+		return fmt.Sprintf("%dB", int64(b))
+	}
+}
+
+type Class struct {
+	// Name is the runs-on label and the scale set's name.
+	Name     string
+	NanoCPUs int64
+	Memory   Bytes
+	Pids     int64
+	Shm      Bytes
+	Priority Priority
+	// Max is how many runners of this class may start or run at once.
+	Max   int
+	Image string
+}
+
+type Config struct {
+	Worker    *url.URL
+	Box       string
+	DiskFloor Bytes
+	Classes   []Class
+}
+
+func (c Config) Class(name string) (Class, bool) {
+	i := slices.IndexFunc(c.Classes, func(k Class) bool { return k.Name == name })
+	if i < 0 {
+		return Class{}, false
+	}
+	return c.Classes[i], true
+}
+
+const (
+	DefaultDiskFloor = 10 * GB
+	DefaultPids      = 4096
+	DefaultShm       = 1 * GiB
+	// A runner's name is "<box>-<class>-<6 hex>" and GitHub allows 64 characters.
+	maxRunnerName = 64
+	nameSuffix    = 8
+	minMemory     = 256 * MiB
+)
+
+var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+type rawConfig struct {
+	Worker    string     `toml:"worker"`
+	Box       string     `toml:"box"`
+	DiskFloor string     `toml:"disk_floor"`
+	Classes   []rawClass `toml:"class"`
+}
+
+type rawClass struct {
+	Name     string  `toml:"name"`
+	CPUs     float64 `toml:"cpus"`
+	Memory   string  `toml:"memory"`
+	Pids     int64   `toml:"pids"`
+	Shm      string  `toml:"shm"`
+	Priority string  `toml:"priority"`
+	Max      int     `toml:"max"`
+	Image    string  `toml:"image"`
+}
+
+// Parse reads a config file. hostname names the box when the file does not.
+func Parse(data []byte, hostname string) (Config, error) {
+	var raw rawConfig
+	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&raw)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	var errs []error
+	for _, key := range meta.Undecoded() {
+		errs = append(errs, fmt.Errorf("unknown key %q", key.String()))
+	}
+
+	var cfg Config
+	if cfg.Worker, err = parseWorker(raw.Worker); err != nil {
+		errs = append(errs, err)
+	}
+
+	cfg.Box = raw.Box
+	if cfg.Box == "" {
+		cfg.Box = BoxName(hostname)
+	}
+	if !namePattern.MatchString(cfg.Box) {
+		errs = append(errs, fmt.Errorf("box: %q must be lower-case letters, digits and dashes", cfg.Box))
+	}
+
+	cfg.DiskFloor = DefaultDiskFloor
+	if raw.DiskFloor != "" {
+		if cfg.DiskFloor, err = ParseBytes(raw.DiskFloor); err != nil {
+			errs = append(errs, fmt.Errorf("disk_floor: %w", err))
+		}
+	}
+
+	if len(raw.Classes) == 0 {
+		errs = append(errs, errors.New("no [[class]]: at least one is needed"))
+	}
+	seen := map[string]bool{}
+	for i, rc := range raw.Classes {
+		class, classErrs := parseClass(rc, cfg.Box)
+		label := fmt.Sprintf("class %d", i+1)
+		if rc.Name != "" {
+			label = fmt.Sprintf("class %q", rc.Name)
+		}
+		if seen[rc.Name] && rc.Name != "" {
+			classErrs = append(classErrs, errors.New("appears twice"))
+		}
+		seen[rc.Name] = true
+		for _, e := range classErrs {
+			errs = append(errs, fmt.Errorf("%s: %w", label, e))
+		}
+		cfg.Classes = append(cfg.Classes, class)
+	}
+
+	if err := errors.Join(errs...); err != nil {
+		return Config{}, fmt.Errorf("config:\n%w", err)
+	}
+	return cfg, nil
+}
+
+func parseWorker(s string) (*url.URL, error) {
+	if s == "" {
+		return nil, errors.New("worker: missing; it is the Worker's URL, such as https://boxrunner.example.workers.dev")
+	}
+	u, err := url.Parse(strings.TrimRight(s, "/"))
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("worker: %q is not a URL", s)
+	}
+	loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return nil, fmt.Errorf("worker: %q must use https", s)
+	}
+	return u, nil
+}
+
+func parseClass(rc rawClass, box string) (Class, []error) {
+	var errs []error
+	c := Class{
+		Name:     rc.Name,
+		NanoCPUs: int64(math.Round(rc.CPUs * 1e9)),
+		Pids:     rc.Pids,
+		Max:      rc.Max,
+		Image:    rc.Image,
+		Shm:      DefaultShm,
+	}
+	switch {
+	case rc.Name == "":
+		errs = append(errs, errors.New("name: missing"))
+	case !namePattern.MatchString(rc.Name):
+		errs = append(errs, fmt.Errorf("name: %q must be lower-case letters, digits and dashes", rc.Name))
+	case len(box)+1+len(rc.Name)+nameSuffix > maxRunnerName:
+		errs = append(errs, fmt.Errorf("name: box and class names together must stay under %d characters", maxRunnerName-nameSuffix))
+	}
+	if rc.CPUs <= 0 {
+		errs = append(errs, errors.New("cpus: must be more than 0"))
+	}
+	var err error
+	if rc.Memory == "" {
+		errs = append(errs, errors.New("memory: missing"))
+	} else if c.Memory, err = ParseBytes(rc.Memory); err != nil {
+		errs = append(errs, fmt.Errorf("memory: %w", err))
+	} else if c.Memory < minMemory {
+		errs = append(errs, fmt.Errorf("memory: %s is less than %s", c.Memory, minMemory))
+	}
+	if rc.Shm != "" {
+		if c.Shm, err = ParseBytes(rc.Shm); err != nil {
+			errs = append(errs, fmt.Errorf("shm: %w", err))
+		}
+	}
+	if c.Pids == 0 {
+		c.Pids = DefaultPids
+	} else if c.Pids < 0 {
+		errs = append(errs, errors.New("pids: must be more than 0"))
+	}
+	switch rc.Priority {
+	case "", "normal":
+		c.Priority = Normal
+	case "idle":
+		c.Priority = Idle
+	default:
+		errs = append(errs, fmt.Errorf("priority: %q must be \"normal\" or \"idle\"", rc.Priority))
+	}
+	if rc.Max < 1 {
+		errs = append(errs, errors.New("max: must be at least 1; remove the class to turn it off"))
+	}
+	if c.Image == "" {
+		c.Image = layout.Image
+	}
+	return c, errs
+}
+
+// BoxName turns a hostname into a box name: its first label, lower case,
+// with anything outside [a-z0-9-] replaced by a dash.
+func BoxName(hostname string) string {
+	label, _, _ := strings.Cut(strings.ToLower(hostname), ".")
+	name := []byte(label)
+	for i, c := range name {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			name[i] = '-'
+		}
+	}
+	return strings.Trim(string(name), "-")
+}
