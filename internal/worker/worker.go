@@ -252,7 +252,14 @@ func (c *Client) do(ctx context.Context, call, method, path string, query url.Va
 		case errors.As(err, &werr) && werr.handling() != retry:
 			return err
 		}
-		c.log.Warn("worker call failed, retrying", "call", call, "attempt", attempt+1, "err", err)
+		switch {
+		case werr != nil && werr.Code == SessionExists && attempt == 0:
+			// Expected after a crash: GitHub releases the old session in about a minute.
+			c.log.Info("waiting for GitHub to release the previous session", "call", call, "err", err)
+		case werr != nil && werr.Code == SessionExists:
+		default:
+			c.log.Warn("worker call failed, retrying", "call", call, "attempt", attempt+1, "err", err)
+		}
 		if werr := c.backoff.Wait(ctx, attempt); werr != nil {
 			return err
 		}

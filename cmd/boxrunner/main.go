@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/dominikzabcik/boxrunner/internal/bench"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,7 @@ Usage:
   boxrunner run
   boxrunner status
   boxrunner doctor
+  boxrunner bench [--threads N] [--rounds N]
   boxrunner uninstall
   boxrunner version
 `
@@ -58,6 +60,8 @@ func main() {
 		err = statusCmd(ctx)
 	case "doctor":
 		err = doctorCmd(ctx)
+	case "bench":
+		err = benchCmd(ctx, os.Args[2:])
 	case "uninstall":
 		err = uninstallCmd(ctx)
 	case "version", "--version", "-v":
@@ -245,5 +249,28 @@ func doctorCmd(ctx context.Context) error {
 	if failed > 0 {
 		return exitError{1, fmt.Errorf("%d checks failed", failed)}
 	}
+	return nil
+}
+
+func benchCmd(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("bench", flag.ExitOnError)
+	threads := fs.Int("threads", runtime.NumCPU(), "CPU-bound processes in the timed job, and busy containers beside it")
+	rounds := fs.Int("rounds", 3, "runs per scenario; the report shows the median")
+	iterations := fs.Int("iterations", 15_000_000, "loop iterations per process")
+	fs.Parse(args)
+	docker := func(ctx context.Context, args ...string) (string, error) {
+		out, err := exec.CommandContext(ctx, "docker", args...).Output()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return "", fmt.Errorf("docker %s: %s", args[0], strings.TrimSpace(string(exit.Stderr)))
+		}
+		return string(out), err
+	}
+	fmt.Fprintf(os.Stderr, "Timing %d threads alone, then beside %d busy containers at idle and at normal priority. This takes a few minutes.\n", *threads, *threads)
+	results, err := bench.Measure(ctx, docker, layout.Image, *threads, *iterations, *rounds)
+	if err != nil {
+		return err
+	}
+	fmt.Print(bench.Report(results, *threads))
 	return nil
 }
