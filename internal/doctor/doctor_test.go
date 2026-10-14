@@ -196,3 +196,13 @@ func TestVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestDraining(t *testing.T) {
+	if got := Draining(status.Snapshot{}); got != nil {
+		t.Errorf("Draining of a serving agent = %+v", got)
+	}
+	want := []Result{{"draining", false, "the agent opens no sessions and starts no runners; resume with: sudo boxrunner resume"}}
+	if got := Draining(status.Snapshot{Draining: true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Draining = %+v, want %+v", got, want)
+	}
+}

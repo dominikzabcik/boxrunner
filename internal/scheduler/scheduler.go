@@ -141,6 +141,9 @@ type State struct {
 	Image    Image
 	// Backoff holds the classes whose runners fail before a job, by class.
 	Backoff map[string]Backoff
+	// Draining starts no runner and removes every runner without a job, warm
+	// ones included; running jobs keep running.
+	Draining bool
 }
 
 func New(cfg config.Config) State {
@@ -202,6 +205,8 @@ func Decide(s State, now time.Time) []Action {
 		case r.Phase == Exited:
 			logs := !r.TookJob && s.Backoff[r.ScaleSet.Class].Runner == r.Name
 			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited", Logs: logs})
+		case r.Phase == Starting && s.Draining:
+			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "draining"})
 		case r.Phase == Starting && !warm[r.Name] && now.Sub(r.Since) >= IdleTimeout:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "took no job within 3 minutes"})
 		case r.Phase == Running && maxDuration > 0 && now.Sub(r.Since) >= maxDuration:
@@ -221,7 +226,7 @@ func Decide(s State, now time.Time) []Action {
 		}
 	}
 
-	if s.DiskFree >= s.DiskFloor {
+	if s.DiskFree >= s.DiskFloor && !s.Draining {
 		actions = append(actions, starts(s, now)...)
 	}
 
@@ -411,6 +416,9 @@ type BuildFailed struct{}
 
 type LatestRunner struct{ Version string }
 
+// Drain starts draining the box, or with On false stops.
+type Drain struct{ On bool }
+
 func (Update) event()           {}
 func (ScaleSetGone) event()     {}
 func (Observed) event()         {}
@@ -424,6 +432,7 @@ func (Busy) event()             {}
 func (ImageBuilt) event()       {}
 func (BuildFailed) event()      {}
 func (LatestRunner) event()     {}
+func (Drain) event()            {}
 
 // Apply returns the state after an event. It never changes s.
 func Apply(s State, e Event, now time.Time) State {
@@ -522,6 +531,8 @@ func Apply(s State, e Event, now time.Time) State {
 		s.Image.Building, s.Image.RetryAt = false, now.Add(BuildRetry)
 	case LatestRunner:
 		s.Image.Latest = e.Version
+	case Drain:
+		s.Draining = e.On
 	default:
 		panic("scheduler: unhandled event")
 	}

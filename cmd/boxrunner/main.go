@@ -42,6 +42,8 @@ Usage:
   boxrunner upgrade [--downgrade] [VERSION]
   boxrunner run
   boxrunner status
+  boxrunner drain [--wait]
+  boxrunner resume
   boxrunner doctor
   boxrunner bench [--threads N] [--rounds N]
   boxrunner shell [RUNNER]
@@ -66,6 +68,10 @@ func main() {
 		err = runCmd(ctx)
 	case "status":
 		err = statusCmd(ctx)
+	case "drain":
+		err = drainCmd(ctx, os.Args[2:])
+	case "resume":
+		err = resumeCmd(ctx)
 	case "doctor":
 		err = doctorCmd(ctx)
 	case "bench":
@@ -268,6 +274,54 @@ func statusCmd(ctx context.Context) error {
 		return err
 	}
 	status.Print(os.Stdout, s, time.Now())
+	return nil
+}
+
+// drainEvery is how often drain --wait asks the agent whether it is drained.
+const drainEvery = 5 * time.Second
+
+func drainCmd(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("drain", flag.ExitOnError)
+	wait := flags.Bool("wait", false, "return once every session is closed and no job container runs")
+	flags.Parse(args)
+	if err := status.Drain(ctx, layout.Socket, true); err != nil {
+		return err
+	}
+	fmt.Println("Draining: the agent closes its sessions and starts no runners until `sudo boxrunner resume`. Running jobs keep running.")
+	if !*wait {
+		return nil
+	}
+	shown := ""
+	for {
+		s, err := status.Fetch(ctx, layout.Socket)
+		if err != nil {
+			return err
+		}
+		if s.Drained() {
+			fmt.Println("Drained: no sessions and no job containers.")
+			return nil
+		}
+		var names []string
+		for _, r := range s.Busy() {
+			names = append(names, fmt.Sprintf("%s (%s, %s)", r.Name, r.Repo, r.Phase))
+		}
+		if line := strings.Join(names, ", "); len(names) > 0 && line != shown {
+			fmt.Println("Waiting for " + line)
+			shown = line
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(drainEvery):
+		}
+	}
+}
+
+func resumeCmd(ctx context.Context) error {
+	if err := status.Drain(ctx, layout.Socket, false); err != nil {
+		return err
+	}
+	fmt.Println("Resumed: the agent opens its sessions and starts runners again.")
 	return nil
 }
 

@@ -268,6 +268,7 @@ type harness struct {
 	docker *fakeDocker
 	github *fakeGitHub
 	jobs   string
+	drain  string
 	socket string
 	cancel context.CancelFunc
 	done   chan error
@@ -280,6 +281,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		docker: &fakeDocker{containers: containers, volumes: map[string]bool{}},
 		github: &fakeGitHub{queue: make(chan string, 8), busy: busy},
 		jobs:   filepath.Join(t.TempDir(), "jobs.jsonl"),
+		drain:  filepath.Join(t.TempDir(), "draining"),
 		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
 	}
@@ -308,6 +310,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			Worker:               worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
 			Run:                  func(context.Context, string, string, ...string) (string, error) { return "", nil },
 			JobsLog:              h.jobs,
+			DrainFile:            h.drain,
 			Socket:               h.socket,
 			ReleasesURL:          srv.URL + "/releases/latest",
 			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
@@ -496,6 +499,83 @@ func TestWarmRunner(t *testing.T) {
 	if calls := h.github.workerCalls(); !slices.Contains(calls, "DELETE /v1/runners/41?repo=octo%2Fsite&scaleSetId=7") {
 		t.Errorf("worker calls = %q", calls)
 	}
+}
+
+// Draining closes the session and removes the warm runner but keeps the
+// running job; once that job's container exits the box is drained. The drain
+// outlasts a restart, and resuming opens the session again.
+func TestDrainAndResume(t *testing.T) {
+	labels := map[string]string{"boxrunner.box": "box-1", "boxrunner.runner": "box-1-boxrunner-aaaaaa", "boxrunner.runner-id": "40",
+		"boxrunner.repo": "octo/site", "boxrunner.class": "boxrunner", "boxrunner.scaleset-id": "7"}
+	h := startAgent(t, map[string]*container{
+		"box-1-boxrunner-aaaaaa": {Name: "box-1-boxrunner-aaaaaa", Labels: labels, State: "running", Created: time.Now().Unix()},
+	}, map[string]bool{"40": true}, func(c *config.Class, _ *harness) {
+		c.Max, c.Repos, c.Warm = 2, []string{"octo/site"}, []string{"octo/site"}
+	})
+	fetch := func() status.Snapshot {
+		snap, _ := status.Fetch(context.Background(), h.socket)
+		return snap
+	}
+	h.github.queue <- message(1, 1, `{"messageType":"JobStarted","runnerRequestId":501,"runnerId":40,"runnerName":"box-1-boxrunner-aaaaaa"}`)
+	waitFor(t, "a warm runner beside the job", func() bool { return len(h.docker.snapshot()) == 2 })
+	if err := status.Drain(context.Background(), h.socket, true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the warm runner to go", func() bool { return len(h.docker.snapshot()) == 1 })
+	var snap status.Snapshot
+	waitFor(t, "a closed session", func() bool { snap = fetch(); return snap.Draining && len(snap.ScaleSets) == 0 })
+	if snap.Drained() || len(snap.Runners) != 1 || snap.Runners[0].Name != "box-1-boxrunner-aaaaaa" || h.docker.snapshot()["box-1-boxrunner-aaaaaa"].State != "running" {
+		t.Errorf("status while the job runs = %+v", snap)
+	}
+	if _, err := os.Stat(h.drain); err != nil {
+		t.Errorf("drain file: %v", err)
+	}
+	h.docker.mu.Lock()
+	h.docker.containers["box-1-boxrunner-aaaaaa"].State = "exited"
+	h.docker.mu.Unlock()
+	waitFor(t, "a drained box", func() bool { return fetch().Drained() })
+	time.Sleep(300 * time.Millisecond)
+	h.stop(t)
+	want := []string{
+		"GET /v1/repos",
+		`POST /v1/scalesets {"class":"boxrunner","repo":"octo/site"}`,
+		`POST /v1/sessions {"owner":"box-1","repo":"octo/site","scaleSetId":7}`,
+		`POST /v1/runners {"name":"WARM","repo":"octo/site","scaleSetId":7}`,
+		"DELETE /v1/runners/41?repo=octo%2Fsite&scaleSetId=7",
+		"DELETE /v1/sessions/s1?repo=octo%2Fsite&scaleSetId=7",
+	}
+	calls := h.github.workerCalls()
+	for i, c := range calls {
+		if strings.HasPrefix(c, "POST /v1/runners ") {
+			calls[i] = `POST /v1/runners {"name":"WARM","repo":"octo/site","scaleSetId":7}`
+		}
+	}
+	slices.Sort(calls)
+	slices.Sort(want)
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("worker calls =\n%q\nwant\n%q", calls, want)
+	}
+
+	drain := h.drain
+	h = startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.drain = drain })
+	waitFor(t, "status after the restart", func() bool { return fetch().Draining })
+	time.Sleep(300 * time.Millisecond)
+	if calls := h.github.workerCalls(); len(calls) != 0 {
+		t.Errorf("worker calls of a draining agent = %q", calls)
+	}
+	if err := status.Drain(context.Background(), h.socket, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a session after resuming", func() bool {
+		return slices.Contains(h.github.workerCalls(), `POST /v1/sessions {"owner":"box-1","repo":"octo/site","scaleSetId":7}`)
+	})
+	if _, err := os.Stat(drain); !os.IsNotExist(err) {
+		t.Errorf("drain file after resuming: %v", err)
+	}
+	if fetch().Draining {
+		t.Error("status still says draining")
+	}
+	h.stop(t)
 }
 
 // A scale set another box's session holds shows in status as that box's, the

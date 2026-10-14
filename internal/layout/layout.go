@@ -8,10 +8,12 @@ const (
 	TokenPath   = "/etc/boxrunner/token"
 	StateDir    = "/var/lib/boxrunner"
 	JobsLogPath = "/var/lib/boxrunner/jobs.jsonl"
-	Socket      = "/run/boxrunner.sock"
-	Binary      = "/usr/local/bin/boxrunner"
-	UnitName    = "boxrunner.service"
-	UnitPath    = "/etc/systemd/system/boxrunner.service"
+	// DrainPath exists while the box drains, so a drain outlasts a restart.
+	DrainPath = "/var/lib/boxrunner/draining"
+	Socket    = "/run/boxrunner.sock"
+	Binary    = "/usr/local/bin/boxrunner"
+	UnitName  = "boxrunner.service"
+	UnitPath  = "/etc/systemd/system/boxrunner.service"
 	// A dash in a slice name means nesting to systemd, so the idle slice uses
 	// an underscore to stay at the top level (docs/decisions.md).
 	IdleSlice     = "boxrunner_idle.slice"

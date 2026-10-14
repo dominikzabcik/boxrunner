@@ -134,10 +134,19 @@ func (c Checks) All(ctx context.Context) []Result {
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
+		results = append(results, Draining(s)...)
 		results = append(results, Held(s, time.Now())...)
 		results = append(results, Elsewhere(s)...)
 	}
 	return results
+}
+
+// Draining fails while `boxrunner drain` keeps the agent from serving.
+func Draining(s status.Snapshot) []Result {
+	if !s.Draining {
+		return nil
+	}
+	return []Result{{"draining", false, "the agent opens no sessions and starts no runners; resume with: sudo boxrunner resume"}}
 }
 
 // Elsewhere fails once for every repository and class the running agent

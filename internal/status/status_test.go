@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -54,7 +55,14 @@ func TestServeAndFetch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	want := Snapshot{Box: "box-1", Version: "0.1.0", Runners: []Runner{{Name: "r1", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0}}}
-	go Serve(ctx, socket, func() Snapshot { return want })
+	var drains []bool
+	go Serve(ctx, socket, func() Snapshot { return want }, func(on bool) error {
+		drains = append(drains, on)
+		if len(drains) == 3 {
+			return errors.New("writing /var/lib/boxrunner/draining: read-only file system")
+		}
+		return nil
+	})
 	var got Snapshot
 	var err error
 	for range 50 {
@@ -65,6 +73,51 @@ func TestServeAndFetch(t *testing.T) {
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("Fetch = %+v, %v", got, err)
+	}
+	if err := Drain(ctx, socket, true); err != nil {
+		t.Errorf("Drain = %v", err)
+	}
+	if err := Drain(ctx, socket, false); err != nil {
+		t.Errorf("Drain(false) = %v", err)
+	}
+	if err := Drain(ctx, socket, true); err == nil || err.Error() != "the agent refused /drain: writing /var/lib/boxrunner/draining: read-only file system" {
+		t.Errorf("Drain that the agent refuses = %v", err)
+	}
+	if want := []bool{true, false, true}; !reflect.DeepEqual(drains, want) {
+		t.Errorf("drain calls = %v, want %v", drains, want)
+	}
+}
+
+func TestDrained(t *testing.T) {
+	running := Runner{Name: "r1", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0}
+	kept := Runner{Name: "r2", Repo: "octo/site", Class: "boxrunner", Phase: "exited", Since: t0}
+	cases := []struct {
+		name string
+		snap Snapshot
+		want bool
+	}{
+		{"serving", Snapshot{}, false},
+		{"a session still open", Snapshot{Draining: true, ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 0}}}, false},
+		{"a job still running", Snapshot{Draining: true, Runners: []Runner{running, kept}}, false},
+		{"only a kept failed container", Snapshot{Draining: true, Runners: []Runner{kept}}, true},
+		{"nothing left", Snapshot{Draining: true}, true},
+	}
+	for _, c := range cases {
+		if got := c.snap.Drained(); got != c.want {
+			t.Errorf("%s: Drained = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPrintDraining(t *testing.T) {
+	snap := Snapshot{Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000, Draining: true}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
+		"Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n" +
+		"CLASS  PRIORITY  RUNNERS  MAX\n"
+	if got := b.String(); !strings.HasPrefix(got, want) {
+		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
 	}
 }
 
