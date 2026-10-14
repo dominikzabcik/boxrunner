@@ -17,6 +17,10 @@ import (
 // removed.
 const IdleTimeout = 3 * time.Minute
 
+// ResultWait is how long a stopped container of a class that keeps failed
+// jobs waits for the job's result before it is removed.
+const ResultWait = 30 * time.Second
+
 // BuildRetry is how long a failed image build waits before the next attempt.
 const BuildRetry = time.Hour
 
@@ -54,6 +58,10 @@ type Runner struct {
 	Phase   Phase
 	Since   time.Time
 	TookJob bool
+	// Result is GitHub's result for the runner's job, once it completed.
+	Result string
+	// KeepUntil holds an exited container for inspection until then.
+	KeepUntil time.Time
 	// Disk is what the container wrote, in bytes.
 	Disk int64
 }
@@ -72,6 +80,8 @@ type ScaleSet struct {
 type Class struct {
 	Max      int
 	Priority config.Priority
+	// KeepFailed holds a failed job's container this long before it is removed.
+	KeepFailed time.Duration
 }
 
 type Image struct {
@@ -100,7 +110,7 @@ func New(cfg config.Config) State {
 		DiskFloor: int64(cfg.DiskFloor),
 	}
 	for _, c := range cfg.Classes {
-		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority}
+		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority, KeepFailed: c.KeepFailed}
 	}
 	return s
 }
@@ -138,6 +148,9 @@ func Decide(s State, now time.Time) []Action {
 		switch {
 		case r.Phase == Removing:
 			removing = true
+		case r.Phase == Exited && now.Before(r.KeepUntil):
+		case r.Phase == Exited && r.TookJob && r.Result == "" && s.Classes[r.ScaleSet.Class].KeepFailed > 0 && now.Sub(r.Since) < ResultWait:
+			// The container stopped before GitHub's message said how the job ended; a failed one is kept.
 		case r.Phase == Exited:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited"})
 		case r.Phase == Starting && now.Sub(r.Since) >= IdleTimeout:
@@ -331,7 +344,10 @@ func Apply(s State, e Event, now time.Time) State {
 				if r.Phase != Removing {
 					r.Phase, r.Since = Exited, now
 				}
-				r.TookJob = true
+				r.TookJob, r.Result = true, j.Result
+				if keep := s.Classes[r.ScaleSet.Class].KeepFailed; keep > 0 && j.Result == "failed" {
+					r.KeepUntil = now.Add(keep)
+				}
 			})
 		}
 		s.ScaleSets[e.ScaleSet] = ScaleSet{ID: e.ID, Jobs: e.Jobs}

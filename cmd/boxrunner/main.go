@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/dominikzabcik/boxrunner/internal/bench"
+	"github.com/dominikzabcik/boxrunner/internal/shell"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/agent"
@@ -39,6 +41,7 @@ Usage:
   boxrunner status
   boxrunner doctor
   boxrunner bench [--threads N] [--rounds N]
+  boxrunner shell [RUNNER]
   boxrunner uninstall
   boxrunner version
 `
@@ -62,6 +65,8 @@ func main() {
 		err = doctorCmd(ctx)
 	case "bench":
 		err = benchCmd(ctx, os.Args[2:])
+	case "shell":
+		err = shellCmd(ctx, os.Args[2:])
 	case "uninstall":
 		err = uninstallCmd(ctx)
 	case "version", "--version", "-v":
@@ -274,4 +279,53 @@ func benchCmd(ctx context.Context, args []string) error {
 	}
 	fmt.Print(bench.Report(results, *threads))
 	return nil
+}
+
+func shellCmd(ctx context.Context, args []string) error {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label="+layout.LabelBox, "--format", shell.Format).Output()
+	if err != nil {
+		return fmt.Errorf("listing job containers: %w", err)
+	}
+	jobs := shell.Parse(string(out))
+	if len(args) == 0 {
+		if len(jobs) == 0 {
+			fmt.Println("No job containers right now. A class with keep_failed keeps failed ones; see docs/config.md.")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "RUNNER\tREPOSITORY\tCLASS\tSTATE")
+		for _, j := range jobs {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", j.Name, j.Repo, j.Class, j.Status)
+		}
+		w.Flush()
+		fmt.Println("\nOpen a shell with: sudo boxrunner shell RUNNER (any unique part of the name)")
+		return nil
+	}
+	job, err := shell.Pick(jobs, args[0])
+	if err != nil {
+		return err
+	}
+	if job.Running() {
+		return attach(ctx, shell.Join(job)...)
+	}
+	// A stopped container cannot run a shell, so open one in a snapshot of it.
+	image := "boxrunner/inspect:" + job.Name
+	if out, err := exec.CommandContext(ctx, "docker", "commit", job.Name, image).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker commit: %s", strings.TrimSpace(string(out)))
+	}
+	defer exec.Command("docker", "rmi", "-f", image).Run()
+	fmt.Fprintf(os.Stderr, "%s has stopped; this shell runs in a copy of its container, which goes away when you exit.\n", job.Name)
+	return attach(ctx, shell.Inspect(image)...)
+}
+
+// attach runs docker with this terminal attached.
+func attach(ctx context.Context, args ...string) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return nil
+	}
+	return err
 }

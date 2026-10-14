@@ -51,6 +51,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `max` | required | Runners of this class at once on this box. |
 | `image` | `boxrunner/runner:local` | Any image whose entrypoint runs the Actions runner. |
 | `dockerfile` | none | Builds the class's own image; see below. Set either this or `image`. |
+| `keep_failed` | none | Keeps a failed job's container this long, like `15m`, so `sudo boxrunner shell` can open a shell in a copy of it with the workspace as the job left it. At most `24h`. Kept containers do not count toward `max`. |
 | `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. |
 | `docker` | `false` | Gives each job its own Docker daemon; see below. |
 

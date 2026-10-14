@@ -1,0 +1,32 @@
+package shell
+
+import (
+	"reflect"
+	"testing"
+)
+
+const listed = "box-1-boxrunner-3f9a2c\trunning\tocto/site\tboxrunner\tUp 4 minutes\n" +
+	"box-1-boxrunner-light-61d0aa\texited\tocto/api\tboxrunner-light\tExited (1) 2 minutes ago\n"
+
+func TestParseAndPick(t *testing.T) {
+	jobs := Parse(listed)
+	want := []Job{
+		{Name: "box-1-boxrunner-3f9a2c", State: "running", Repo: "octo/site", Class: "boxrunner", Status: "Up 4 minutes"},
+		{Name: "box-1-boxrunner-light-61d0aa", State: "exited", Repo: "octo/api", Class: "boxrunner-light", Status: "Exited (1) 2 minutes ago"},
+	}
+	if !reflect.DeepEqual(jobs, want) {
+		t.Fatalf("Parse = %+v", jobs)
+	}
+	if j, err := Pick(jobs, "3f9a"); err != nil || j.Name != "box-1-boxrunner-3f9a2c" || !j.Running() {
+		t.Errorf("Pick by part = %+v, %v", j, err)
+	}
+	if _, err := Pick(jobs, "boxrunner"); err == nil || err.Error() != `"boxrunner" matches box-1-boxrunner-3f9a2c, box-1-boxrunner-light-61d0aa; use more of the name` {
+		t.Errorf("ambiguous Pick error = %v", err)
+	}
+	if _, err := Pick(jobs, "zzz"); err == nil || err.Error() != `no job container matches "zzz"; run boxrunner shell to list them` {
+		t.Errorf("missing Pick error = %v", err)
+	}
+	if got := Parse(""); got != nil {
+		t.Errorf("Parse(empty) = %v", got)
+	}
+}

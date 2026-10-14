@@ -163,6 +163,7 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 |---|---|
 | `boxrunner install` | Converges the box: Docker, Sysbox with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
 | `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration |
+| `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
 | `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, and with a `docker` class, Sysbox and a Docker daemon inside a job container |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, network, rules, slice and files. Docker and Sysbox stay. |
 | `boxrunner worker deploy` | Deploys the Worker with Wrangler and opens its setup page |

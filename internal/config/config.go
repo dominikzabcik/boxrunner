@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -91,6 +92,8 @@ type Class struct {
 	// Max is how many runners of this class may start or run at once.
 	Max   int
 	Image string
+	// KeepFailed keeps a failed job's container this long for boxrunner shell.
+	KeepFailed time.Duration
 	// Repos, when set, limits the class to these repositories (owner/name,
 	// lower case); otherwise it serves every repository the Worker lists.
 	Repos []string
@@ -146,6 +149,7 @@ type rawClass struct {
 	Image      string   `toml:"image"`
 	Dockerfile string   `toml:"dockerfile"`
 	Repos      []string `toml:"repos"`
+	KeepFailed string   `toml:"keep_failed"`
 	Docker     bool     `toml:"docker"`
 }
 
@@ -272,6 +276,17 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 	}
 	if rc.Max < 1 {
 		errs = append(errs, errors.New("max: must be at least 1; remove the class to turn it off"))
+	}
+	if rc.KeepFailed != "" {
+		d, err := time.ParseDuration(rc.KeepFailed)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("keep_failed: %q is not a duration like 15m or 2h", rc.KeepFailed))
+		case d < 0 || d > 24*time.Hour:
+			errs = append(errs, fmt.Errorf("keep_failed: %s must be between 0 and 24h", rc.KeepFailed))
+		default:
+			c.KeepFailed = d
+		}
 	}
 	for _, r := range rc.Repos {
 		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {

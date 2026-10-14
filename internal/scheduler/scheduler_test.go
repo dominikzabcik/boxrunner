@@ -330,3 +330,45 @@ func TestImageEvents(t *testing.T) {
 		t.Errorf("after a build: %+v", s.Image)
 	}
 }
+
+func TestKeepFailed(t *testing.T) {
+	keeping := func(runners ...Runner) State {
+		s := state(1, 2, map[Key]ScaleSet{}, runners...)
+		c := s.Classes["boxrunner"]
+		c.KeepFailed = 15 * time.Minute
+		s.Classes["boxrunner"] = c
+		return s
+	}
+	failed := Update{ScaleSet: siteMain, ID: 7, Completed: []queue.JobCompleted{{Result: "failed", RunnerName: "r1"}}}
+	ok := Update{ScaleSet: siteMain, ID: 7, Completed: []queue.JobCompleted{{Result: "succeeded", RunnerName: "r1"}}}
+	running := Runner{Name: "r1", ScaleSet: siteMain, ScaleSetID: 7, ID: 41, Phase: Running, Since: at(0), TookJob: true}
+
+	s := Apply(keeping(running), failed, at(5))
+	if got := Decide(s, at(19)); len(got) != 0 {
+		t.Errorf("a failed job is kept for 15 minutes; at 14 min Decide = %v", got)
+	}
+	if got, want := Decide(s, at(20)), []Action{Remove{Runner: "r1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after 15 min Decide = %v, want %v", got, want)
+	}
+	if got, want := Decide(Apply(keeping(running), ok, at(5)), at(5)), []Action{Remove{Runner: "r1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a succeeded job is removed at once; Decide = %v, want %v", got, want)
+	}
+
+	// The container stops before GitHub says how the job ended.
+	stopped := Apply(keeping(running), Observed{DiskFree: 50 * gb}, at(5))
+	if got := Decide(stopped, at(5.25)); len(got) != 0 {
+		t.Errorf("a stopped container waits for its result; Decide = %v", got)
+	}
+	if got := Decide(Apply(stopped, failed, at(5.4)), at(6)); len(got) != 0 {
+		t.Errorf("then a failed result keeps it; Decide = %v", got)
+	}
+	if got, want := Decide(stopped, at(6)), []Action{Remove{Runner: "r1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("without a result for 30 s it is removed; Decide = %v, want %v", got, want)
+	}
+
+	// A class that keeps nothing removes a failed job at once.
+	plain := Apply(state(1, 2, map[Key]ScaleSet{}, running), failed, at(5))
+	if got, want := Decide(plain, at(5)), []Action{Remove{Runner: "r1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("without keep_failed Decide = %v, want %v", got, want)
+	}
+}
