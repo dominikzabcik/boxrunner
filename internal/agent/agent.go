@@ -32,6 +32,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
 	"github.com/dominikzabcik/boxrunner/internal/release"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
@@ -59,7 +60,7 @@ type Options struct {
 	JobsLog        string
 	DrainFile      string
 	Socket         string
-	ReleasesURL    string
+	Runner         runnerdigests.Source
 	Tick           time.Duration
 	HeartbeatEvery time.Duration
 	SysboxDir      string
@@ -116,7 +117,6 @@ func Run(ctx context.Context, o Options) error {
 	o.JobsLog = cmp.Or(o.JobsLog, layout.JobsLogPath)
 	o.DrainFile = cmp.Or(o.DrainFile, layout.DrainPath)
 	o.Socket = cmp.Or(o.Socket, layout.Socket)
-	o.ReleasesURL = cmp.Or(o.ReleasesURL, runnerimage.ReleasesLatest)
 	o.BoxrunnerReleasesURL = cmp.Or(o.BoxrunnerReleasesURL, release.Releases+"/latest")
 	o.Tick = cmp.Or(o.Tick, decideEvery)
 	o.HeartbeatEvery = cmp.Or(o.HeartbeatEvery, heartbeatEvery)
@@ -353,7 +353,7 @@ func (a *Agent) dispatch(ctx context.Context, s scheduler.State, action schedule
 		a.spawn(func() { a.remove(work, r, act.Deregister, act.Logs) })
 	case scheduler.Build:
 		s = scheduler.Apply(s, scheduler.BuildDispatched{}, now)
-		a.spawn(func() { a.build(ctx, act.Version) })
+		a.spawn(func() { a.build(ctx, act.Version, act.Digest) })
 	default:
 		panic(fmt.Sprintf("agent: unhandled action %T", action))
 	}
@@ -490,17 +490,24 @@ func (a *Agent) remove(ctx context.Context, r scheduler.Runner, deregister, logs
 
 const stopGrace = 30 * time.Second
 
-func (a *Agent) build(ctx context.Context, version string) {
+func (a *Agent) build(ctx context.Context, version, digest string) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	a.Log.Info("building the job image", "runner", version)
-	if err := runnerimage.Build(ctx, a.Docker, version); err != nil {
+	a.Log.Info("building the job image", "runner", version, "digest", digest)
+	err := runnerimage.Build(ctx, a.Docker, a.Runner, version, digest)
+	var mismatch *runnerdigests.Mismatch
+	switch {
+	case errors.As(err, &mismatch):
+		a.Log.Error("refused to build the job image; jobs keep the current image", "runner", version, "reason", err)
+		a.post(scheduler.BuildFailed{Refused: err.Error()})
+		return
+	case err != nil:
 		a.Log.Error("building the job image failed", "runner", version, "err", err)
 		a.post(scheduler.BuildFailed{})
 		return
 	}
 	a.ensureClasses(ctx)
-	a.post(scheduler.ImageBuilt{Version: version})
+	a.post(scheduler.ImageBuilt{Version: version, Digest: digest})
 }
 
 // ensureClasses rebuilds the class images whose job image or files changed,
@@ -602,20 +609,24 @@ func (a *Agent) checkImage(ctx context.Context) {
 	if built, err := runnerimage.Built(ctx, a.Docker); err != nil {
 		a.Log.Error("reading the job image", "err", err)
 	} else {
-		if built != "" {
+		if built.Identity != "" {
 			a.ensureClasses(ctx)
 		}
-		a.post(scheduler.ImageBuilt{Version: built})
+		a.post(scheduler.ImageBuilt{Version: built.Identity, Digest: built.Digest})
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
 	for {
 		wait := imageEvery
-		latest, err := release.Latest(ctx, client, a.ReleasesURL)
-		if err != nil {
-			a.Log.Warn("checking the runner's latest release", "err", err)
+		choice, err := a.Runner.Choose(ctx)
+		switch {
+		case err != nil:
+			a.Log.Warn("choosing the runner image; jobs keep the current image", "err", err)
 			wait = imageRetry
-		} else {
-			a.post(scheduler.LatestRunner{Version: runnerimage.Identity(latest)})
+		default:
+			if choice.Unlisted != "" {
+				a.Log.Info("boxrunner's CI has not verified the runner's latest release yet", "latest", choice.Unlisted, "building", choice.Version)
+				wait = imageRetry
+			}
+			a.post(scheduler.LatestRunner{Version: runnerimage.Identity(choice.Version), Digest: choice.Digest, Unlisted: choice.Unlisted})
 		}
 		select {
 		case <-ctx.Done():
@@ -650,7 +661,10 @@ func (a *Agent) publish(s scheduler.State) {
 	workerVersion, _ := a.Worker.WorkerVersion()
 	snap := status.Snapshot{
 		Box: a.Config.Box, Version: a.Version, Worker: workerVersion,
-		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
+		Image: status.ImageStatus{
+			Built: s.Image.Built, Digest: s.Image.Digest, Latest: s.Image.Latest, Unlisted: s.Image.Unlisted,
+			Refused: s.Image.Refused, Disk: a.imageDisk.Load(),
+		},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
 		Draining: s.Draining, Finished: a.finished,

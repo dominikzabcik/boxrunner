@@ -46,6 +46,9 @@ const (
 	LabelVersion    = "boxrunner.runner-version"
 	// LabelImage holds the job image's identity: runner version and build context.
 	LabelImage = "boxrunner.image"
+	// LabelDigest holds the digest of the runner image the job image is built
+	// from, which boxrunner's CI verified.
+	LabelDigest = "boxrunner.runner-digest"
 	// LabelMirror marks the registry mirror's container and volume; on the
 	// container it holds the mirror's identity: image and address.
 	LabelMirror = "boxrunner.mirror"

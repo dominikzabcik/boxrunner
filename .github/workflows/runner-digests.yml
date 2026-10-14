@@ -1,0 +1,111 @@
+name: Runner digests
+
+# Verifies the provenance of each actions/runner image with
+# scripts/runner-digests.sh and publishes the list to the digests branch,
+# where boxes read it (docs/architecture.md#image). Pull requests verify
+# without publishing. It runs only on GitHub-hosted runners: a box of ours
+# must not vouch for the images it builds from.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/runner-digests.sh
+      - .github/workflows/runner-digests.yml
+  pull_request:
+    paths:
+      - scripts/runner-digests.sh
+      - .github/workflows/runner-digests.yml
+
+permissions: {}
+
+concurrency:
+  group: runner-digests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      list: ${{ steps.verify.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify every runner release's image
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/runner-digests.sh > runner-digests.json
+          echo "list=$(jq -c . runner-digests.json)" >> "$GITHUB_OUTPUT"
+          { echo '```json'; cat runner-digests.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # commit to the digests branch
+      id-token: write # sign the attestation through Sigstore
+      attestations: write # store the attestation with GitHub
+    env:
+      BRANCH: digests
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Compare with the published list
+        id: compare
+        env:
+          LIST: ${{ needs.verify.outputs.list }}
+        run: |
+          jq . <<<"$LIST" > runner-digests.json
+          parent=""
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --silent 2>/dev/null; then
+            parent=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq .object.sha)
+            gh api -H "Accept: application/vnd.github.raw+json" "repos/$GITHUB_REPOSITORY/contents/runner-digests.json?ref=$parent" > published.json
+            if cmp -s published.json runner-digests.json; then
+              echo "The published list is current." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # Lets anyone check a copy of the list with gh attestation verify. Boxes
+      # cannot: they would need a Sigstore verifier, which this list replaces.
+      - name: Attest the list
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: runner-digests.json
+
+      # A commit through the API, so no credentials are written to disk. The
+      # branch only moves forward and keeps every list it ever published.
+      - name: Commit the list to the digests branch
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          PARENT: ${{ steps.compare.outputs.parent }}
+        run: |
+          tree=$(jq -n --rawfile list runner-digests.json \
+            '{tree: [{path: "runner-digests.json", mode: "100644", type: "blob", content: $list}]}' |
+            gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)
+          message="List the verified runner images up to $(jq -r 'keys_unsorted | last' runner-digests.json)
+
+          From $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          commit=$(jq -n --arg tree "$tree" --arg parent "$PARENT" --arg message "$message" \
+            '{message: $message, tree: $tree, parents: (if $parent == "" then [] else [$parent] end)}' |
+            gh api "repos/$GITHUB_REPOSITORY/git/commits" --input - --jq .sha)
+          if [ -n "$PARENT" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$commit" -F force=false --silent
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent
+          fi
+          echo "Published $commit to $BRANCH." >> "$GITHUB_STEP_SUMMARY"

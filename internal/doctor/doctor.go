@@ -140,6 +140,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, Draining(s)...)
 		results = append(results, Held(s, time.Now())...)
 		results = append(results, Elsewhere(s)...)
+		results = append(results, RunnerImage(s.Image)...)
 	}
 	return results
 }
@@ -172,6 +173,24 @@ func Elsewhere(s status.Snapshot) []Result {
 	var results []Result
 	for _, e := range s.Elsewhere {
 		results = append(results, Result{"other box", false, e.Sentence()})
+	}
+	return results
+}
+
+// RunnerImage says whether the job image is built from a runner image whose
+// digest boxrunner's CI verified, and fails while the agent refuses to build
+// a newer one.
+func RunnerImage(img status.ImageStatus) []Result {
+	var results []Result
+	switch {
+	case img.Built == "":
+	case img.Digest == "":
+		results = append(results, Result{"runner image", false, "the job image was built before boxrunner built from the runner images its CI verified; the agent rebuilds it while no normal-priority job runs"})
+	default:
+		results = append(results, Result{"runner image", true, img.Digest + ", which boxrunner's CI verified"})
+	}
+	if img.Refused != "" {
+		results = append(results, Result{"runner image", false, "refused to build: " + img.Refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"})
 	}
 	return results
 }
@@ -256,16 +275,33 @@ func joined(items []string) string {
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
-// Releases compares this agent and its Worker with boxrunner's latest release.
-// Run it after All, which has the Worker answer. A result that is not OK is a
-// warning: the box works, but a newer release is out or the check could not run.
+// Releases compares this agent and its Worker with boxrunner's latest release,
+// and the job image with the runner's. Run it after All, which has the Worker
+// answer. A result that is not OK is a warning: the box works, but a newer
+// release is out or the check could not run.
 func (c Checks) Releases(ctx context.Context) []Result {
 	latest, err := release.Latest(ctx, c.HTTP, c.ReleasesURL)
 	workerVersion, answered := "", false
 	if c.Worker != nil {
 		workerVersion, answered = c.Worker.WorkerVersion()
 	}
-	return Versions(c.Version, latest, err, workerVersion, answered)
+	results := Versions(c.Version, latest, err, workerVersion, answered)
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
+		results = append(results, UnlistedRunner(s.Image)...)
+	}
+	return results
+}
+
+// UnlistedRunner warns while the runner's latest release is out but
+// boxrunner's CI has not verified its image, so the agent builds an older one.
+func UnlistedRunner(img status.ImageStatus) []Result {
+	if img.Unlisted == "" {
+		return nil
+	}
+	building, _, _ := strings.Cut(img.Latest, "+")
+	return []Result{{"runner release", false, fmt.Sprintf("runner %s is out, but boxrunner's CI has not verified its image yet; the agent builds %s until it does, and checks the list hourly", img.Unlisted, building)}}
 }
 
 // Versions words the results of Releases. The Worker gets a result only when

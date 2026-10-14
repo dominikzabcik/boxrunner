@@ -21,7 +21,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
-	"github.com/dominikzabcik/boxrunner/internal/release"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 )
 
@@ -240,11 +240,12 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		if err := needDocker(); err != nil {
 			return d, err
 		}
-		version, err := release.Latest(ctx, &http.Client{Timeout: 30 * time.Second}, runnerimage.ReleasesLatest)
+		var runner runnerdigests.Source
+		choice, err := runner.Choose(ctx)
 		if err != nil {
 			return d, err
 		}
-		return d, runnerimage.Build(ctx, d, runnerimage.Identity(version))
+		return d, runnerimage.Build(ctx, d, runner, runnerimage.Identity(choice.Version), choice.Digest)
 	case EnableUnit:
 		return d, command("systemctl", "enable", "--now", layout.UnitName)
 	case RestartUnit:

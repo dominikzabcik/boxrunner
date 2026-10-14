@@ -130,8 +130,17 @@ type Runner struct {
 }
 
 type ImageStatus struct {
-	Built  string `json:"built"`
+	Built string `json:"built"`
+	// Digest is the runner image's that Built is built from, empty for a job
+	// image built before boxrunner built from the digests its CI verified.
+	Digest string `json:"digest,omitempty"`
 	Latest string `json:"latest"`
+	// Unlisted is the runner's latest release while boxrunner's CI has not
+	// verified its image; Latest is then an older release.
+	Unlisted string `json:"unlisted,omitempty"`
+	// Refused says why the agent last refused to build a runner image, until
+	// a build succeeds.
+	Refused string `json:"refused,omitempty"`
 	// Disk is what the job, class and runner images take, 0 when unknown.
 	Disk int64 `json:"disk,omitempty"`
 }
@@ -384,6 +393,16 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	}
 	if release.Newer(s.Latest, s.Worker) {
 		fmt.Fprintf(w, "The Worker runs %s. Redeploy it from %s: see docs/upgrading.md.\n\n", s.Worker, s.Latest)
+	}
+	if s.Image.Digest != "" {
+		fmt.Fprintf(w, "The job image is built from runner image %s, which boxrunner's CI verified.\n\n", s.Image.Digest)
+	}
+	if s.Image.Unlisted != "" {
+		building, _, _ := strings.Cut(s.Image.Latest, "+")
+		fmt.Fprintf(w, "Runner %s is out, but boxrunner's CI has not verified its image yet, so the agent builds %s until it does.\n\n", s.Image.Unlisted, building)
+	}
+	if s.Image.Refused != "" {
+		fmt.Fprintf(w, "The agent refused to build the job image, and jobs keep the current image: %s\n\n", s.Image.Refused)
 	}
 	if s.Draining {
 		fmt.Fprint(w, "Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n")

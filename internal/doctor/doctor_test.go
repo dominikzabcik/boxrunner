@@ -189,6 +189,43 @@ func TestHeld(t *testing.T) {
 	}
 }
 
+func TestRunnerImage(t *testing.T) {
+	refused := "ghcr.io/actions/actions-runner:2.339.0 points to sha256:0bad, not to sha256:e549 that boxrunner's CI verified"
+	verified := Result{"runner image", true, "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807, which boxrunner's CI verified"}
+	cases := []struct {
+		name string
+		img  status.ImageStatus
+		want []Result
+	}{
+		{"no job image yet", status.ImageStatus{}, nil},
+		{"verified", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807"}, []Result{verified}},
+		{
+			"built before the list", status.ImageStatus{Built: "2.338.0+5be01c7d2a9e"},
+			[]Result{{"runner image", false, "the job image was built before boxrunner built from the runner images its CI verified; the agent rebuilds it while no normal-priority job runs"}},
+		},
+		{
+			"a newer image refused", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807", Refused: refused},
+			[]Result{verified, {"runner image", false, "refused to build: " + refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"}},
+		},
+	}
+	for _, c := range cases {
+		if got := RunnerImage(c.img); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: RunnerImage = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestUnlistedRunner(t *testing.T) {
+	if got := UnlistedRunner(status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Latest: "2.338.0+3f9a2c0b1d4e"}); got != nil {
+		t.Errorf("UnlistedRunner with the latest release listed = %+v", got)
+	}
+	got := UnlistedRunner(status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Latest: "2.338.0+3f9a2c0b1d4e", Unlisted: "2.339.0"})
+	want := []Result{{"runner release", false, "runner 2.339.0 is out, but boxrunner's CI has not verified its image yet; the agent builds 2.338.0 until it does, and checks the list hourly"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UnlistedRunner = %+v, want %+v", got, want)
+	}
+}
+
 func TestVersions(t *testing.T) {
 	upgrade := Result{"release", false, "boxrunner 0.2.2 is out and this agent is 0.2.1; upgrade with: sudo boxrunner upgrade"}
 	cases := []struct {

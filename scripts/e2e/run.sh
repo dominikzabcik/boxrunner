@@ -80,9 +80,11 @@ expect "$work/doctor.txt" '^ok +idle slice +container runs in /boxrunner_idle.sl
 if [ "$mode" = docker ]; then
 	expect "$work/doctor.txt" '^ok +sysbox ' '^ok +docker in jobs ' '^ok +registry mirror '
 fi
-# The release checks ask github.com for boxrunner's latest release, so they
-# only warn: a release out after this commit is no fault of the box.
-if grep -vE "^(ok  |warn  (release|worker release) )" "$work/doctor.txt"; then
+# The release checks ask github.com for boxrunner's and the runner's latest
+# releases, so they only warn: a release out after this commit, or one the
+# runner digests workflow has not verified yet, is no fault of the box.
+expect "$work/doctor.txt" '^ok +runner image +sha256:[0-9a-f]{64}, which boxrunner.s CI verified$'
+if grep -vE "^(ok  |warn  (release|worker release|runner release) )" "$work/doctor.txt"; then
 	fail "doctor printed the lines above"
 fi
 
