@@ -6,7 +6,7 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 
 - Every request carries `Authorization: Bearer <box token>` and `Boxrunner-Version: <agent version>`.
 - Every response carries `Boxrunner-Protocol: 1` and `Cache-Control: no-store`.
-- Errors have one shape, `{"error": "<code>", "message": "<human sentence>"}`.
+- Errors have one shape, `{"error": "<code>", "message": "<human sentence>"}`. Only `session_exists` adds a field, `heldBy`.
 - Any other method or path answers `404 not_found` in the same shape.
 
 **Versions.** `Boxrunner-Version` is the agent's semver (`1.4.2`, `0.3.0-rc.1`). The Worker speaks protocol 1 and serves agent majors 0 and 1. Any other major, a missing header or one that is not semver gets `426 upgrade_required`, whose message names what the agent sent.
@@ -21,7 +21,7 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 | 400 | `unknown_class` | The class, or the class a scale set was made for, is not in the Worker's `CLASSES` | Stops serving that class and logs which classes exist |
 | 401 | `unauthorized` | Missing or wrong box token | Stops and logs that the token is wrong |
 | 404 | `not_found` | Unknown scale set, session or runner for this repository, or a scale set GitHub no longer has | Treats it as already gone; for a scale set, calls `POST /v1/scalesets` again |
-| 409 | `session_exists` | Another session holds the scale set | Retries with backoff |
+| 409 | `session_exists` | Another session holds the scale set; `heldBy` names the box that opened it when that is another box that still reports | Retries with backoff; with `heldBy`, tries again within five minutes and names that box in `status` and `doctor` |
 | 409 | `runner_busy` | The runner already took a job | Leaves the runner alone |
 | 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed | Stops serving the repository |
 | 426 | `upgrade_required` | The agent's major version differs from the Worker's | Stops and logs the upgrade command |
@@ -93,7 +93,13 @@ Response:
 }
 ```
 
-`409 session_exists` while an earlier session is still open. `404 not_found` when GitHub no longer has the scale set; the Worker forgets it, so the next `POST /v1/scalesets` creates a new one.
+`409 session_exists` while an earlier session is still open. The Worker keeps which box opened each session until that box closes it. When that is a box other than `owner` whose last heartbeat is at most two minutes old, the answer names it:
+
+```json
+{ "error": "session_exists", "message": "box-2 holds the session of scale set 7, so it serves octo/site boxrunner.", "heldBy": "box-2" }
+```
+
+A session `owner` itself left open, or one of a box that stopped reporting, answers without `heldBy`: GitHub releases such a session on its own. `404 not_found` when GitHub no longer has the scale set; the Worker forgets it, so the next `POST /v1/scalesets` creates a new one.
 
 ## `PATCH /v1/sessions/{sessionId}`
 

@@ -14,7 +14,7 @@ boxrunner runs GitHub Actions jobs in fresh containers on a Linux box you alread
 
 - **Public repositories.** Anyone who can open a pull request can run code on a self-hosted runner, so the Worker refuses public repositories. There is no switch.
 - **Virtual-machine isolation.** Jobs share the host kernel. Firecracker and Kata need `/dev/kvm`, which common VPS plans do not offer.
-- **Several boxes per Worker in v0.1.** One Worker serves one box.
+- **One label spread over several boxes.** Several boxes can share a Worker when each serves its own classes or repositories ([config](config.md#several-boxes)). Two boxes that serve the same repository and class do not share its jobs, because one session at a time holds a scale set.
 - **A hosted service.** Everyone runs their own Worker and their own box.
 
 ## Parts and what each one holds
@@ -89,7 +89,7 @@ Scheduler rules:
 
 - **On stop**, the agent closes its sessions and removes the runners that have not taken a job. Jobs that are running keep running.
 - **On start**, it adopts the containers labelled with its box name. Running jobs count toward `max`, and containers whose runner never took a job are removed. Then it opens its sessions.
-- **After a crash**, a session left open blocks a new one with 409. GitHub released one such session after about a minute (*measured* once). The agent retries with backoff until then.
+- **After a crash**, a session left open blocks a new one with 409. GitHub released one such session after about a minute (*measured* once). The agent retries with backoff until then. When the session belongs to another box that still reports, the agent instead tries again within five minutes and names that box in `status` and `doctor`.
 - **It never deletes and re-creates a scale set** to get around the block. A job already assigned to a deleted scale set stays queued, and a new scale set with the same name does not take it (*measured*).
 - **After a restart, warm runners start again.** The agent sees Docker before its sessions report their scale sets, so an adopted warm runner that waited longer than three minutes is removed, and a new one starts once the session is open.
 
@@ -106,7 +106,7 @@ gh run cancel <run id> -R <owner/name>
 gh run rerun <run id> -R <owner/name>
 ```
 
-`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after a box that never ran a job starts, or after a session left open blocked the agent, `boxrunner status` points here. A restart of a box that has run jobs does not.
+`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after a box that never ran a job starts, or after a session left open blocked the agent, `boxrunner status` points here. A session that another box holds and still serves from does not count. A restart of a box that has run jobs does not.
 
 Before retiring a box on purpose, run `sudo boxrunner uninstall` on it. Stopping the agent closes the sessions and removes the runners that took no job, so GitHub hands their jobs to the next session and nothing is stranded. Uninstall then removes every container, running jobs included, so let those finish first or re-run them on the new box.
 
@@ -145,6 +145,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - the App's id, slug, private key and webhook secret
 - the SHA-256 hash of the box token
 - the scale sets it created or adopted, by repository and class
+- which box opened each scale set's session, until that box closes it
 - the classes paused on the dashboard, with who paused each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)
@@ -193,7 +194,7 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 | `boxrunner install` | Converges the box: Docker, Sysbox with `--sysbox`, `--docker` or a class that needs it, the registry mirror with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
 | `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration |
 | `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
-| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
+| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, registry mirror and its cache, network, rules, slice and files. Docker and Sysbox stay. |
 | `boxrunner worker deploy` | Deploys the Worker with Wrangler and opens its setup page |
 

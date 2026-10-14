@@ -70,6 +70,44 @@ A class that does not set `isolation` uses `sysbox` when Docker has the `sysbox-
 
 Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer on Linux 5.15 or newer, on amd64 and arm64. Docker keeps running while Sysbox installs: install first writes Docker's current bridge address and address pools into `/etc/docker/daemon.json`, so Sysbox's package only makes Docker reload its configuration.
 
+## Several boxes
+
+Several boxes can share one Worker and its box token. Give each box its own `box` name and its own work: different classes, or the same class with `repos` lists that do not overlap. A workflow then picks the box through the class in `runs-on`, and the dashboard shows each box by name.
+
+```toml
+# /etc/boxrunner/config.toml on the first box
+box = "box-1"
+
+[[class]]
+name = "boxrunner"
+cpus = 4
+memory = "6GiB"
+max = 1
+repos = ["octo/site"]
+```
+
+```toml
+# /etc/boxrunner/config.toml on the second box
+box = "box-2"
+
+[[class]]
+name = "boxrunner"
+cpus = 8
+memory = "12GiB"
+max = 2
+repos = ["octo/docs"]
+```
+
+A class only one box serves, such as `boxrunner-large` on a bigger machine, works the same way; add it to the Worker's `CLASSES`.
+
+The Worker makes one scale set per repository and class, and GitHub lets one session at a time read a scale set's queue. Two boxes that serve the same repository and class are not supported, not even with one of them kept as a standby, so `sudo boxrunner doctor` fails on the box that waits. If it happens anyway, the box that opens the session first runs all of the jobs. The other box tries again every five minutes and takes over only after the first one stops, and `sudo boxrunner status` on it names the box that serves the repository and class. Such a takeover is no failover: when a box dies, the jobs it had acquired stay queued, as in [replacing a box](architecture.md#replacing-a-box).
+
+One label spread over several boxes, so that both run jobs from the same `runs-on`, is not supported yet. GitHub can give two scale sets the same label, but which one gets a job, and whether a job waits for a box that is down, is untested.
+
+The boxes share the box token's request budget of about 1,800 requests an hour ([api.md](api.md#conventions)). A box's heartbeat alone takes 120 of them.
+
+A class paused on the [dashboard](dashboard.md#pausing-a-class) is paused on every box. With [fallback](fallback.md) on, the Worker sends jobs to GitHub's runners only when no box has reported for `FALLBACK_MINUTES`, so while one box reports, the jobs of a box that is down wait for it.
+
 ## Docker inside jobs
 
 With `docker = true`, a class's jobs can use `services:`, `container:` jobs, Docker container actions and `docker build`. It needs Sysbox, which `sudo boxrunner install --docker` installs, as does any `install` while a class has `docker = true`. A new config written with `--docker` turns `docker` on for both classes.
