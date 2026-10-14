@@ -19,7 +19,15 @@ export type Repo = { name: RepoName; id: number; installationId: number };
 /** A scale set the Worker created or adopted, for one repository and class. */
 export type OwnedScaleSet = { repo: Repo; className: ClassName; id: ScaleSetId };
 
-export type App = { id: number; slug: string; key: AppKey; webhookSecret: string | null };
+export type App = {
+	id: number;
+	slug: string;
+	key: AppKey;
+	webhookSecret: string | null;
+	clientId: string | null;
+	clientSecret: string | null;
+	owner: string | null;
+};
 
 const repoPattern = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
 const classPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;

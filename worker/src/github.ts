@@ -124,7 +124,16 @@ export async function visibility(token: string, repo: RepoName): Promise<Visibil
 	);
 }
 
-export type ManifestApp = { id: number; slug: string; pem: string; webhookSecret: string | null };
+/** The App GitHub created; the OAuth client and owner are kept for signing in to the Worker later. */
+export type ManifestApp = {
+	id: number;
+	slug: string;
+	pem: string;
+	webhookSecret: string | null;
+	clientId: string | null;
+	clientSecret: string | null;
+	owner: string | null;
+};
 
 export async function convertManifest(code: string): Promise<ManifestApp> {
 	const response = await send({
@@ -138,7 +147,16 @@ export async function convertManifest(code: string): Promise<ManifestApp> {
 		const slug = text(body.slug);
 		const pem = text(body.pem);
 		if (id === undefined || slug === undefined || pem === undefined) return undefined;
-		return { id, slug, pem, webhookSecret: text(body.webhook_secret) ?? null };
+		const owner = typeof body.owner === 'object' && body.owner !== null ? text((body.owner as Record<string, unknown>).login) : undefined;
+		return {
+			id,
+			slug,
+			pem,
+			webhookSecret: text(body.webhook_secret) ?? null,
+			clientId: text(body.client_id) ?? null,
+			clientSecret: text(body.client_secret) ?? null,
+			owner: owner ?? null,
+		};
 	});
 }
 

@@ -99,7 +99,18 @@ async function callback(box: Box, request: Request, secret: string, origin: stri
 		const created = await convertManifest(code);
 		const key = await appKeyFromPem(created.pem);
 		const token = randomToken();
-		box.store.saveApp({ id: created.id, slug: created.slug, key, webhookSecret: created.webhookSecret }, await boxTokenHash(token));
+		box.store.saveApp(
+			{
+				id: created.id,
+				slug: created.slug,
+				key,
+				webhookSecret: created.webhookSecret,
+				clientId: created.clientId,
+				clientSecret: created.clientSecret,
+				owner: created.owner,
+			},
+			await boxTokenHash(token),
+		);
 		return tokenPage(200, 'boxrunner is ready', created.slug, origin, token, true);
 	} catch (error) {
 		const why = error instanceof GitHubError ? `${error.message}.` : 'GitHub sent a key the Worker cannot read.';

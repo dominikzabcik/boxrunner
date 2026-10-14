@@ -126,7 +126,7 @@ export class FakeGitHub {
 	private async rest(method: string, url: URL, body: unknown, auth: string): Promise<Response> {
 		const path = url.pathname;
 		if (method === 'POST' && path === `/app-manifests/${this.manifestCode}/conversions`) {
-			return json({ id: appId, slug: 'boxrunner-test', pem: this.pem, webhook_secret: 'hook-secret', client_secret: 'x' }, 201);
+			return json({ id: appId, slug: 'boxrunner-test', pem: this.pem, webhook_secret: 'hook-secret', client_id: 'Iv1.test', client_secret: 'client-secret', owner: { login: 'octo' } }, 201);
 		}
 		if (method === 'POST' && path.startsWith('/app-manifests/')) return json({ message: 'Not Found' }, 404);
 
