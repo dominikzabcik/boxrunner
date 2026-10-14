@@ -28,6 +28,8 @@ const (
 	LabelClass      = "boxrunner.class"
 	LabelScaleSetID = "boxrunner.scaleset-id"
 	LabelVersion    = "boxrunner.runner-version"
+	// LabelImage holds the job image's identity: runner version and build context.
+	LabelImage = "boxrunner.image"
 
 	// ExitConfig is the exit status for a problem a restart cannot fix (a wrong
 	// token, an agent too old for its Worker); the unit does not restart on it.

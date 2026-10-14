@@ -10,11 +10,13 @@ CREATE TABLE IF NOT EXISTS app (
 	webhook_secret TEXT,
 	box_token_sha256 TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS scale_sets (
+DROP TABLE IF EXISTS scale_sets;
+CREATE TABLE IF NOT EXISTS repo_scale_sets (
 	repo_id INTEGER NOT NULL,
 	class TEXT NOT NULL,
-	id INTEGER NOT NULL UNIQUE,
-	PRIMARY KEY (repo_id, class)
+	id INTEGER NOT NULL,
+	PRIMARY KEY (repo_id, class),
+	UNIQUE (repo_id, id)
 );
 CREATE TABLE IF NOT EXISTS cache (
 	key TEXT PRIMARY KEY,
@@ -55,7 +57,7 @@ export class Store {
 
 	/** Forgets the App, the box token, the scale sets and every cached token, so setup can run again. */
 	reset() {
-		this.sql.exec('DELETE FROM app; DELETE FROM scale_sets; DELETE FROM cache;');
+		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache;');
 	}
 
 	replaceBoxToken(boxTokenSha256: string) {
@@ -64,29 +66,29 @@ export class Store {
 
 	scaleSet(repoId: number, className: ClassName): ScaleSetId | undefined {
 		return this.sql
-			.exec<{ id: number }>('SELECT id FROM scale_sets WHERE repo_id = ? AND class = ?', repoId, className)
+			.exec<{ id: number }>('SELECT id FROM repo_scale_sets WHERE repo_id = ? AND class = ?', repoId, className)
 			.toArray()[0]?.id as ScaleSetId | undefined;
 	}
 
 	scaleSetClass(repoId: number, id: ScaleSetId): ClassName | undefined {
 		return this.sql
-			.exec<{ class: string }>('SELECT class FROM scale_sets WHERE repo_id = ? AND id = ?', repoId, id)
+			.exec<{ class: string }>('SELECT class FROM repo_scale_sets WHERE repo_id = ? AND id = ?', repoId, id)
 			.toArray()[0]?.class as ClassName | undefined;
 	}
 
 	scaleSetsOf(repoId: number): ScaleSetId[] {
 		return this.sql
-			.exec<{ id: number }>('SELECT id FROM scale_sets WHERE repo_id = ?', repoId)
+			.exec<{ id: number }>('SELECT id FROM repo_scale_sets WHERE repo_id = ?', repoId)
 			.toArray()
 			.map((row) => row.id as ScaleSetId);
 	}
 
 	saveScaleSet(repoId: number, className: ClassName, id: ScaleSetId) {
-		this.sql.exec('INSERT OR REPLACE INTO scale_sets (repo_id, class, id) VALUES (?, ?, ?)', repoId, className, id);
+		this.sql.exec('INSERT OR REPLACE INTO repo_scale_sets (repo_id, class, id) VALUES (?, ?, ?)', repoId, className, id);
 	}
 
-	forgetScaleSet(id: ScaleSetId) {
-		this.sql.exec('DELETE FROM scale_sets WHERE id = ?', id);
+	forgetScaleSet(repoId: number, id: ScaleSetId) {
+		this.sql.exec('DELETE FROM repo_scale_sets WHERE repo_id = ? AND id = ?', repoId, id);
 	}
 
 	cached(key: string, now: number): string | undefined {

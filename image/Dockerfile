@@ -12,6 +12,12 @@ RUN apt-get update -qq \
 		build-essential ca-certificates curl git jq python3 python3-pip python3-venv unzip zstd >/dev/null \
 	&& rm -rf /var/lib/apt/lists/*
 
+# GitHub's Ubuntu image has node on the PATH, and tools such as CodeQL's
+# JavaScript extractor call it without setup-node. The runner ships a current
+# Node LTS for JavaScript actions; this exposes that one.
+RUN for tool in node npm npx; do ln -sf /home/runner/externals/node24/bin/$tool /usr/local/bin/$tool; done \
+	&& node --version
+
 # setup-node, setup-python and friends install into the tool cache.
 RUN install -d -o runner -g runner /opt/hostedtoolcache
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache

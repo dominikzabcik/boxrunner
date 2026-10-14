@@ -86,13 +86,31 @@ func Tar() (*bytes.Buffer, error) {
 	return &buf, w.Close()
 }
 
-// Build builds the job image for a runner version.
-func Build(ctx context.Context, d *docker.Client, version string) error {
+// Identity names a job image by the runner version and the build context
+// embedded in this binary, such as 2.338.0+3f9a2c0b1d4e, so a new boxrunner
+// release with a changed Dockerfile rebuilds the image too.
+func Identity(runnerVersion string) string {
+	buf, err := Tar()
+	if err != nil {
+		panic(err) // the embedded context is part of the binary
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return runnerVersion + "+" + hex.EncodeToString(sum[:6])
+}
+
+// Build builds the job image for an identity from Identity.
+func Build(ctx context.Context, d *docker.Client, identity string) error {
 	buf, err := Tar()
 	if err != nil {
 		return err
 	}
-	return d.Build(ctx, buf, docker.BuildOptions{Tag: layout.Image, Args: map[string]string{"RUNNER_VERSION": version}, Pull: true})
+	version, _, _ := strings.Cut(identity, "+")
+	return d.Build(ctx, buf, docker.BuildOptions{
+		Tag:    layout.Image,
+		Args:   map[string]string{"RUNNER_VERSION": version},
+		Labels: map[string]string{layout.LabelImage: identity},
+		Pull:   true,
+	})
 }
 
 // Labels that tie a class image to what it was built from.
@@ -177,15 +195,12 @@ func EnsureClasses(ctx context.Context, d *docker.Client, classes []config.Class
 	return built, nil
 }
 
-// Built returns the runner version of the job image, or "" when there is none.
+// Built returns the identity of the job image, or "" when there is none or it
+// predates identities, so the agent builds it again.
 func Built(ctx context.Context, d *docker.Client) (string, error) {
 	labels, ok, err := d.ImageLabels(ctx, layout.Image)
 	if err != nil || !ok {
 		return "", err
 	}
-	v := labels[layout.LabelVersion]
-	if v == "" {
-		return "", errors.New("the job image has no runner version label")
-	}
-	return v, nil
+	return labels[layout.LabelImage], nil
 }

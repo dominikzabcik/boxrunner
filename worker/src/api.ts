@@ -89,7 +89,7 @@ async function owned(context: Context, name: RepoName, id: ScaleSetId): Promise<
 }
 
 function gone(context: Context, scaleSet: OwnedScaleSet): never {
-	context.box.store.forgetScaleSet(scaleSet.id);
+	context.box.store.forgetScaleSet(scaleSet.repo.id, scaleSet.id);
 	throw new ApiError('not_found', `Scale set ${scaleSet.id} no longer exists at GitHub; find or create it again.`);
 }
 

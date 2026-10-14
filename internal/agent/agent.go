@@ -410,7 +410,7 @@ func (a *Agent) checkImage(ctx context.Context) {
 			a.Log.Warn("checking the runner's latest release", "err", err)
 			wait = imageRetry
 		} else {
-			a.post(scheduler.LatestRunner{Version: latest})
+			a.post(scheduler.LatestRunner{Version: runnerimage.Identity(latest)})
 		}
 		select {
 		case <-ctx.Done():

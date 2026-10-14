@@ -167,7 +167,7 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		if err != nil {
 			return d, err
 		}
-		return d, runnerimage.Build(ctx, d, version)
+		return d, runnerimage.Build(ctx, d, runnerimage.Identity(version))
 	case EnableUnit:
 		return d, command("systemctl", "enable", "--now", layout.UnitName)
 	case RestartUnit:

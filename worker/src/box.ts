@@ -154,7 +154,7 @@ export class Box {
 		if (seen === 'public') {
 			for (const id of this.store.scaleSetsOf(repo.id)) {
 				await this.actions(app, repo, (connection) => github.deleteScaleSet(connection, id));
-				this.store.forgetScaleSet(id);
+				this.store.forgetScaleSet(repo.id, id);
 			}
 		}
 		const why = { public: 'is public', archived: 'is archived', gone: 'no longer has the App installed' }[seen];

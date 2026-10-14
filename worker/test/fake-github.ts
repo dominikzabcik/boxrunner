@@ -51,9 +51,11 @@ export class FakeGitHub {
 		{ full_name: 'octo/old', id: 125, private: true, archived: true, installed: true },
 		{ full_name: 'octo/open', id: 126, private: false, archived: false, installed: true },
 	];
-	scaleSets = new Map<number, { name: string; repoId: number }>();
-	sessions = new Map<number, string>();
-	runners = new Map<number, { scaleSetId: number; busy: boolean }>();
+	/** Keyed by `repoId/id`: GitHub numbers scale sets per repository, so two repositories both have a scale set 1. */
+	scaleSets = new Map<string, { name: string; repoId: number }>();
+	sessions = new Map<string, string>();
+	private scaleSetIds = new Map<number, number>();
+	runners = new Map<number, { scaleSetId: number; repoId: number; busy: boolean }>();
 	/** Answers to force for a path, checked before the fake's own logic. */
 	failures = new Map<string, { status: number; body?: unknown }>();
 	manifestCode = 'code-from-github';
@@ -174,29 +176,33 @@ export class FakeGitHub {
 	private actions(repoId: number, method: string, path: string, url: URL, body: unknown): Response {
 		if (method === 'GET' && path === '/_apis/runtime/runnerscalesets') {
 			const name = url.searchParams.get('name');
-			const found = [...this.scaleSets].filter(([, set]) => set.name === name && set.repoId === repoId).map(([id, set]) => ({ id, name: set.name }));
+			const found = [...this.scaleSets]
+				.filter(([, set]) => set.name === name && set.repoId === repoId)
+				.map(([key, set]) => ({ id: Number(key.split('/')[1]), name: set.name }));
 			return json({ count: found.length, value: found });
 		}
 		if (method === 'POST' && path === '/_apis/runtime/runnerscalesets') {
 			const request = body as { name: string; runnerGroupId: number; labels: { name: string }[] };
-			const id = this.nextId++;
-			this.scaleSets.set(id, { name: request.name, repoId });
+			const id = (this.scaleSetIds.get(repoId) ?? 0) + 1;
+			this.scaleSetIds.set(repoId, id);
+			this.scaleSets.set(scaleSetKey(repoId, id), { name: request.name, repoId });
 			return json({ id, name: request.name, labels: request.labels });
 		}
 		const scaleSet = /^\/_apis\/runtime\/runnerscalesets\/(\d+)(\/.*)?$/.exec(path);
 		if (scaleSet) {
 			const id = Number(scaleSet[1]);
+			const key = scaleSetKey(repoId, id);
 			const rest = scaleSet[2] ?? '';
-			if (this.scaleSets.get(id)?.repoId !== repoId) return json({ typeName: 'RunnerScaleSetNotFoundException' }, 404);
+			if (!this.scaleSets.has(key)) return json({ typeName: 'RunnerScaleSetNotFoundException' }, 404);
 			if (method === 'DELETE' && rest === '') {
-				this.scaleSets.delete(id);
-				this.sessions.delete(id);
+				this.scaleSets.delete(key);
+				this.sessions.delete(key);
 				return new Response(null, { status: 204 });
 			}
 			if (method === 'POST' && rest === '/sessions') {
-				if (this.sessions.has(id)) return json({ typeName: 'TaskAgentSessionConflictException' }, 409);
+				if (this.sessions.has(key)) return json({ typeName: 'TaskAgentSessionConflictException' }, 409);
 				const sessionId = crypto.randomUUID();
-				this.sessions.set(id, sessionId);
+				this.sessions.set(key, sessionId);
 				return json({
 					sessionId,
 					ownerName: (body as { ownerName: string }).ownerName,
@@ -207,9 +213,9 @@ export class FakeGitHub {
 			}
 			const session = /^\/sessions\/(.+)$/.exec(rest);
 			if (session) {
-				const open = this.sessions.get(id) === session[1];
+				const open = this.sessions.get(key) === session[1];
 				if (method === 'DELETE') {
-					if (open) this.sessions.delete(id);
+					if (open) this.sessions.delete(key);
 					return new Response(null, { status: open ? 204 : 404 });
 				}
 				if (method === 'PATCH') {
@@ -219,14 +225,14 @@ export class FakeGitHub {
 			}
 			if (method === 'POST' && rest === '/generatejitconfig') {
 				const runnerId = this.nextId++;
-				this.runners.set(runnerId, { scaleSetId: id, busy: false });
+				this.runners.set(runnerId, { scaleSetId: id, repoId, busy: false });
 				return json({ runner: { id: runnerId, name: (body as { name: string }).name }, encodedJITConfig: `jit-for-${runnerId}` });
 			}
 		}
 		const runner = /^\/_apis\/distributedtask\/pools\/0\/agents\/(\d+)$/.exec(path);
 		if (runner) {
 			const found = this.runners.get(Number(runner[1]));
-			if (!found) return json({ typeName: 'AgentNotFoundException' }, 404);
+			if (!found || found.repoId !== repoId) return json({ typeName: 'AgentNotFoundException' }, 404);
 			if (method === 'GET') return json({ id: Number(runner[1]), runnerScaleSetId: found.scaleSetId });
 			if (method === 'DELETE') {
 				if (found.busy) return json({ typeName: 'GitHub.DistributedTask.WebApi.JobStillRunningException', message: 'busy' }, 400);
@@ -238,3 +244,5 @@ export class FakeGitHub {
 	}
 }
 
+
+export const scaleSetKey = (repoId: number, id: number) => `${repoId}/${id}`;

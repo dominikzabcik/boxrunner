@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FakeGitHub } from './fake-github';
+import { scaleSetKey, type FakeGitHub } from './fake-github';
 import { agent, expectError, fakeGitHub, send, setUp, type Agent } from './harness';
 
 afterEach(() => {
@@ -114,7 +114,7 @@ describe('POST /v1/scalesets', () => {
 
 	it('adopts a scale set that already exists at GitHub under the class name', async () => {
 		const { github, call } = await ready();
-		github.scaleSets.set(77, { name: 'boxrunner-light', repoId: 123 });
+		github.scaleSets.set(scaleSetKey(123, 77), { name: 'boxrunner-light', repoId: 123 });
 		expect(await scaleSet(call, 'OCTO/Site', 'boxrunner-light')).toBe(77);
 		expect(github.count('POST', '/_apis/runtime/runnerscalesets')).toBe(0);
 	});
@@ -190,7 +190,7 @@ describe('sessions', () => {
 		expect(((await refreshed.json()) as { queueToken: string }).queueToken).toBe('queue-token-refreshed');
 		const close = `/v1/sessions/${opened.sessionId}?repo=octo/site&scaleSetId=${id}`;
 		expect((await call('DELETE', close)).status).toBe(204);
-		expect(github.sessions.has(id)).toBe(false);
+		expect(github.sessions.has(scaleSetKey(123, id))).toBe(false);
 		expect((await call('DELETE', close)).status).toBe(204);
 		await expectError(
 			await call('PATCH', `/v1/sessions/${opened.sessionId}`, { repo: 'octo/site', scaleSetId: id }),
@@ -204,7 +204,7 @@ describe('sessions', () => {
 	it('refuses scale sets the Worker did not make for that repository', async () => {
 		const { github, call } = await ready();
 		const docs = await scaleSet(call, 'octo/docs');
-		github.scaleSets.set(900, { name: 'boxrunner', repoId: 123 });
+		github.scaleSets.set(scaleSetKey(123, 900), { name: 'boxrunner', repoId: 123 });
 		for (const scaleSetId of [docs, 900]) {
 			await expectError(
 				await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId, owner: 'box-1' }),
@@ -219,7 +219,7 @@ describe('sessions', () => {
 	it('forgets a scale set GitHub deleted, so the agent can create it again', async () => {
 		const { github, call } = await ready();
 		const id = await scaleSet(call);
-		github.scaleSets.delete(id);
+		github.scaleSets.delete(scaleSetKey(123, id));
 		await expectError(
 			await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner: 'box-1' }),
 			404,
@@ -228,7 +228,7 @@ describe('sessions', () => {
 		);
 		const again = await scaleSet(call);
 		expect(again).not.toBe(id);
-		expect(github.scaleSets.get(again)).toEqual({ name: 'boxrunner', repoId: 123 });
+		expect(github.scaleSets.get(scaleSetKey(123, again))).toEqual({ name: 'boxrunner', repoId: 123 });
 	});
 });
 
@@ -239,7 +239,7 @@ describe('runners', () => {
 		const response = await mint(call, id);
 		const minted = (await response.json()) as { runnerId: number; jitConfig: string };
 		expect(minted).toEqual({ runnerId: minted.runnerId, jitConfig: `jit-for-${minted.runnerId}` });
-		expect(github.runners.get(minted.runnerId)).toEqual({ scaleSetId: id, busy: false });
+		expect(github.runners.get(minted.runnerId)).toEqual({ scaleSetId: id, repoId: 123, busy: false });
 		expect(github.calls.find((c) => c.path.endsWith('/generatejitconfig'))?.body).toEqual({
 			name: 'box-1-boxrunner-3f9a2c',
 			workFolder: '_work',
@@ -273,7 +273,7 @@ describe('runners', () => {
 		const { github, call } = await ready();
 		const id = await scaleSet(call);
 		const { runnerId } = (await (await mint(call, id)).json()) as { runnerId: number };
-		github.runners.set(runnerId, { scaleSetId: id, busy: true });
+		github.runners.set(runnerId, { scaleSetId: id, repoId: 123, busy: true });
 		await expectError(
 			await call('DELETE', `/v1/runners/${runnerId}?repo=octo/site&scaleSetId=${id}`),
 			409,
@@ -319,7 +319,7 @@ describe('repositories that stop being private', () => {
 
 		github.repos.find((repo) => repo.full_name === 'octo/site')!.private = false;
 		await expectError(await mint(call, id, 'runner-b'), 410, 'repo_ineligible', 'octo/site is public, so this Worker no longer serves it.');
-		expect([github.scaleSets.has(id), github.scaleSets.has(light)]).toEqual([false, false]);
+		expect([github.scaleSets.has(scaleSetKey(123, id)), github.scaleSets.has(scaleSetKey(123, light))]).toEqual([false, false]);
 		expect(github.count('POST', `/_apis/runtime/runnerscalesets/${id}/generatejitconfig`)).toBe(1);
 		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124 }]);
 		await expectError(
@@ -358,5 +358,19 @@ describe('derived tokens', () => {
 		expect(github.count('POST', '/actions/runner-registration') - before.registration).toBe(1);
 		expect(github.count('POST', '/repos/octo/site/actions/runners/registration-token')).toBe(2);
 		expect(github.count('GET', '/installation/repositories') - before.listing).toBe(1);
+	});
+});
+
+describe('scale sets of several repositories', () => {
+	it("keeps each repository's scale sets apart, though GitHub numbers them from 1 in each", async () => {
+		const { call } = await ready();
+		const site = await scaleSet(call);
+		const docsResponse = await call('POST', '/v1/scalesets', { repo: 'octo/docs', class: 'boxrunner' });
+		const docs = ((await docsResponse.json()) as { id: number }).id;
+		expect([site, docs]).toEqual([1, 1]);
+		for (const repo of ['octo/site', 'octo/docs']) {
+			const opened = await call('POST', '/v1/sessions', { repo, scaleSetId: 1, owner: 'box-1' });
+			expect(opened.status).toBe(200);
+		}
 	});
 });

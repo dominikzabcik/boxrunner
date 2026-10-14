@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"io"
 	"log/slog"
 	"net"
@@ -68,7 +69,7 @@ func (f *fakeDocker) serve(t *testing.T) string {
 		case path == "/networks/create":
 			f.network = true
 		case strings.HasPrefix(path, "/images/"):
-			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.runner-version":"2.338.0"}}}`)
+			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+runnerimage.Identity("2.338.0")+`"}}}`)
 		case path == "/containers/json":
 			var list []map[string]any
 			for _, c := range f.containers {
