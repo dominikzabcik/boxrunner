@@ -1,4 +1,4 @@
-import { boxTokenHash, randomToken, signAppJwt } from './crypto';
+import { boxTokenHash, randomToken, sameDigest, sha256, signAppJwt } from './crypto';
 import { variable, type Alarms } from './fallback';
 import * as github from './github';
 import { ApiError } from './http';
@@ -30,6 +30,12 @@ const repoListLifetime = minute;
  */
 export const budget = { burst: 120, refillMs: 2_000 };
 
+/** The form that made a new box token; only that form's page shows it. */
+export type TokenForm = 'setup' | 'dashboard';
+
+/** A new box token waiting for the one page view that shows it. */
+type NewToken = { idSha256: Uint8Array; form: TokenForm; token: string; until: number };
+
 /**
  * Everything the Worker derives from its stored state: GitHub credentials,
  * the served repositories and the scale sets. One Durable Object holds the
@@ -39,6 +45,8 @@ export class Box {
 	private readonly inflight = new Map<string, Promise<unknown>>();
 	private tokens = budget.burst;
 	private refilledAt = 0;
+	/** Only in memory: storage's point-in-time recovery would keep it for 30 days. */
+	private newToken: NewToken | undefined;
 	setupRunning = false;
 
 	constructor(
@@ -108,12 +116,28 @@ export class Box {
 		this.tokens = budget.burst;
 	}
 
-	/** Makes a new box token and returns it; the old one stops working at once. The Worker keeps only the hash. */
-	async replaceBoxToken(): Promise<string> {
+	/**
+	 * Makes a new box token; the old one stops working at once. The Worker
+	 * keeps its hash, and the token itself for a minute under the returned
+	 * random id, so a redirect can show it without a reload replacing it again.
+	 */
+	async replaceBoxToken(form: TokenForm, now: number): Promise<string> {
 		const token = randomToken();
-		this.store.replaceBoxToken(await boxTokenHash(token));
+		const id = randomToken();
+		const [tokenSha256, idSha256] = await Promise.all([boxTokenHash(token), sha256(id)]);
+		this.store.replaceBoxToken(tokenSha256);
 		this.resetBudget();
-		return token;
+		this.newToken = { idSha256, form, token, until: now + minute };
+		return id;
+	}
+
+	/** The new token for the first view of its id within the minute; later views get nothing. */
+	async takeNewToken(id: string, form: TokenForm, now: number): Promise<string | undefined> {
+		const presented = await sha256(id);
+		const waiting = this.newToken;
+		if (waiting?.form !== form || !sameDigest(presented, waiting.idSha256)) return undefined;
+		this.newToken = undefined;
+		return now < waiting.until ? waiting.token : undefined;
 	}
 
 	private once<T>(key: string, derive: () => Promise<T>): Promise<T> {

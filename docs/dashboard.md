@@ -44,13 +44,15 @@ The agent stops listening to the paused class's scale sets, which closes their s
 
 ### Replacing the box token
 
-**Replace the box token** makes a new token and shows it once, with the command that puts it on a box:
+**Replace the box token** makes a new token and sends the browser to a page that shows it once, with the command that puts it on a box:
 
 ```sh
 sudo boxrunner install --token <new token>
 ```
 
-It writes the token to `/etc/boxrunner/token` and restarts the agent; jobs that are running keep running. The old token stops working at once, so every box stops reaching the Worker until it has the new one: run the command on each. The Worker keeps only the token's hash, so no page can show it again. `POST /setup/token` does the same with the setup secret instead of a session.
+It writes the token to `/etc/boxrunner/token` and restarts the agent; jobs that are running keep running. The old token stops working at once, so every box stops reaching the Worker until it has the new one: run the command on each.
+
+The form's answer is a redirect (303) to `/box-token/{id}`, so a reload loads that page again instead of posting the form again and replacing the token a second time. The id is random and says nothing about the token. The Worker keeps the new token for one view of that page within a minute, in the Durable Object's memory and never in its storage, then keeps only the token's hash. A reload, a second visit or a visit after the minute answers 410 with a link back to the button, and replaces nothing. If the Worker restarts within that minute, the page cannot show the token either: replace it again. `POST /setup/token` does the same with the setup secret instead of a session, and shows the new token at `/setup/token/{id}`.
 
 ## Where the data comes from
 
@@ -84,4 +86,5 @@ Totals come from one row per day, so a refresh reads at most about 30 of them ho
 | `POST /logout` | Ends the session; needs the CSRF token |
 | `POST /classes/pause` | Pauses the class named by the form field `class`; needs a session and the CSRF token |
 | `POST /classes/resume` | Resumes the class named by `class`; needs a session and the CSRF token |
-| `POST /box-token` | Replaces the box token and shows the new one; needs a session and the CSRF token |
+| `POST /box-token` | Replaces the box token and redirects to `/box-token/{id}`; needs a session and the CSRF token |
+| `GET /box-token/{id}` | Shows the new box token on the first view within a minute, then answers 410; needs a session |

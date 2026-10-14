@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { agent, callback, fakeGitHub, origin, postForm, send, setUp, startSetup, tokenIn } from './harness';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { agent, callback, fakeGitHub, origin, postForm, send, setUp, startSetup, time, tokenIn } from './harness';
 import { setupSecret } from './secret';
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 describe('GET /setup before setup', () => {
 	it('shows the form with a random App name, under a strict CSP', async () => {
@@ -120,7 +124,7 @@ describe('after setup', () => {
 		expect(github.count('POST', `/app-manifests/${github.manifestCode}/conversions`)).toBe(1);
 	});
 
-	it('rotates the box token with the setup secret, and the old one stops working', async () => {
+	it('rotates the box token with the setup secret and sends the browser to a page that shows the new one once', async () => {
 		const github = await fakeGitHub();
 		const old = await setUp(github);
 		const refused = await postForm('/setup/token', { secret: 'wrong' });
@@ -128,11 +132,45 @@ describe('after setup', () => {
 		expect((await agent(old)('GET', '/v1/repos')).status).toBe(200);
 
 		const response = await postForm('/setup/token', { secret: setupSecret });
-		const fresh = tokenIn(await response.text())!;
-		expect(response.status).toBe(200);
-		expect(fresh).not.toBe(old);
+		const location = response.headers.get('location')!;
+		expect(response.status).toBe(303);
+		expect(response.headers.get('cache-control')).toBe('no-store');
+		expect(location).toMatch(/^\/setup\/token\/[A-Za-z0-9_-]{43}$/);
 		expect((await agent(old)('GET', '/v1/repos')).status).toBe(401);
+
+		const shown = await send(location);
+		const html = await shown.text();
+		const fresh = tokenIn(html)!;
+		expect(shown.status).toBe(200);
+		expect(shown.headers.get('cache-control')).toBe('no-store');
+		expect(html).toContain(
+			`<pre><code>curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh -s -- --worker ${origin} --token ${fresh}</code></pre>`,
+		);
 		expect((await agent(fresh)('GET', '/v1/repos')).status).toBe(200);
+
+		const reloaded = await send(location);
+		const again = await reloaded.text();
+		expect(reloaded.status).toBe(410);
+		expect(reloaded.headers.get('cache-control')).toBe('no-store');
+		expect(tokenIn(again)).toBeUndefined();
+		expect(again).toContain('<h1>This box token was already shown</h1>');
+		expect(again).toContain('<p><a href="/setup">Replace it on the setup page</a></p>');
+		expect((await agent(fresh)('GET', '/v1/repos')).status).toBe(200);
+	});
+
+	it('shows the rotated token only within a minute', async () => {
+		const github = await fakeGitHub();
+		time('2026-10-14T10:00:00Z');
+		await setUp(github);
+		const late = (await postForm('/setup/token', { secret: setupSecret })).headers.get('location')!;
+		time('2026-10-14T10:01:00Z');
+		const expired = await send(late);
+		expect(expired.status).toBe(410);
+		expect(await expired.text()).toContain('<h1>This box token was already shown</h1>');
+
+		const onTime = (await postForm('/setup/token', { secret: setupSecret })).headers.get('location')!;
+		time('2026-10-14T10:01:59Z');
+		expect((await send(onTime)).status).toBe(200);
 	});
 
 	it('has nothing to rotate before setup', async () => {

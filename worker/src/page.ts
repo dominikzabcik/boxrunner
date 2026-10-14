@@ -121,6 +121,19 @@ ${link ? `<p><a href="${escape(link.href)}">${escape(link.text)}</a></p>` : ''}`
 	});
 }
 
+/** Answers a form post with a page to load, so a reload loads the page instead of posting again. */
+export const seeOther = (location: string, headers: Record<string, string> = {}) =>
+	new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store', ...headers } });
+
+/** A new box token's page once it was shown, or after its minute. */
+export const tokenShownPage = (replace: { href: string; text: string }) =>
+	messagePage(
+		410,
+		'This box token was already shown',
+		'The Worker shows a new box token once, within a minute of making it, and then keeps only its hash. If you did not copy it, replace the token again.',
+		replace,
+	);
+
 export function readCookie(request: Request, name: string): string | undefined {
 	for (const part of (request.headers.get('cookie') ?? '').split(';')) {
 		const [key, ...value] = part.trim().split('=');
