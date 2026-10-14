@@ -69,6 +69,7 @@ function landingPage(box: Box, app: App, origin: string, status: number) {
 <li>Under <strong>Client secrets</strong>, generate a new client secret and copy it.</li>
 <li>Under <strong>Callback URL</strong>, add <code>${escape(origin)}/login/callback</code> and save the changes.</li>
 <li>In the Worker’s directory, run <code>npx wrangler secret put GITHUB_CLIENT_SECRET</code> and paste the secret.</li>
+<li>Run <code>npx wrangler deploy</code>: the Worker reads its secrets when it starts.</li>
 </ol>
 <p>Then reload this page.</p>`,
 	});

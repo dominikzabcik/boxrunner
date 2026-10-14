@@ -16,6 +16,7 @@ Its Worker shows how to sign in instead of the button:
 2. Under **Client secrets**, generate a new client secret and copy it.
 3. Under **Callback URL**, add `<worker>/login/callback` and save. Without it, GitHub answers that the `redirect_uri` is not associated with the application.
 4. In the Worker's directory, run `npx wrangler secret put GITHUB_CLIENT_SECRET` and paste the secret.
+5. Run `npx wrangler deploy`. The Worker reads its secrets when it starts, so a new secret takes effect with the next deployment.
 
 The Worker uses `GITHUB_CLIENT_SECRET` only when setup did not keep a secret. It reads the App's client id and owner from `GET /app` with the App's JWT the first time someone signs in, and keeps them.
 
