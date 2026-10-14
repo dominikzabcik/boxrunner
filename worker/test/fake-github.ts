@@ -56,6 +56,10 @@ export class FakeGitHub {
 	sessions = new Map<string, string>();
 	private scaleSetIds = new Map<number, number>();
 	runners = new Map<number, { scaleSetId: number; repoId: number; busy: boolean }>();
+	/** What the installation granted the App; GitHub refuses a token that asks for more. */
+	granted: Record<string, 'read' | 'write'> = { administration: 'write', metadata: 'read' };
+	/** Actions variables by repository id. */
+	variables = new Map<number, Map<string, string>>();
 	/** Answers to force for a path, checked before the fake's own logic. */
 	failures = new Map<string, { status: number; body?: unknown }>();
 	manifestCode = 'code-from-github';
@@ -162,6 +166,10 @@ export class FakeGitHub {
 		if (method === 'POST' && path === `/app/installations/${installationId}/access_tokens`) {
 			if (!(await this.validJwt(auth))) return json({ message: 'bad JWT' }, 401);
 			const request = body as { repository_ids?: number[]; permissions: Record<string, string> };
+			const exceeds = Object.entries(request.permissions).some(
+				([name, level]) => this.granted[name] === undefined || (level === 'write' && this.granted[name] !== 'write'),
+			);
+			if (exceeds) return json({ message: 'The permissions requested are not granted to this installation.' }, 422);
 			const token = `ghs_${this.nextId++}`;
 			this.tokens.set(token, { repositoryIds: request.repository_ids, permissions: request.permissions });
 			return json({ token }, 201);
@@ -187,6 +195,24 @@ export class FakeGitHub {
 			const token = `admin_${this.nextId++}`;
 			this.adminTokens.set(token, repo.id);
 			return json({ url: `${actionsBase}/`, token });
+		}
+		const variablePath = /^\/repos\/([^/]+\/[^/]+)\/actions\/variables(?:\/([^/]+))?$/.exec(path);
+		if (variablePath) {
+			const repo = this.repo(variablePath[1]!);
+			if (!repo || !this.allows(this.token(auth), repo, 'actions_variables', 'write')) return json({ message: 'Resource not accessible by integration' }, 403);
+			const variables = this.variables.get(repo.id) ?? new Map<string, string>();
+			this.variables.set(repo.id, variables);
+			const name = variablePath[2];
+			const request = body as { name: string; value: string };
+			if (method === 'POST' && name === undefined) {
+				if (variables.has(request.name)) return json({ message: 'Already exists' }, 409);
+				variables.set(request.name, request.value);
+				return json({}, 201);
+			}
+			if (name === undefined || !variables.has(name)) return json({ message: 'Not Found' }, 404);
+			if (method === 'PATCH') variables.set(name, request.value);
+			if (method === 'DELETE') variables.delete(name);
+			return new Response(null, { status: 204 });
 		}
 		const repoPath = /^\/repos\/([^/]+\/[^/]+)$/.exec(path);
 		if (method === 'GET' && repoPath) {

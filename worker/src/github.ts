@@ -82,7 +82,7 @@ export async function installationIds(jwt: string): Promise<number[]> {
 	}
 }
 
-export type Permissions = Partial<Record<'administration' | 'metadata', 'read' | 'write'>>;
+export type Permissions = Partial<Record<'administration' | 'metadata' | 'actions_variables', 'read' | 'write'>>;
 
 /** An installation token; with `repositoryId`, narrowed to that one repository. */
 export async function installationToken(
@@ -125,6 +125,16 @@ export async function visibility(token: string, repo: RepoName): Promise<Visibil
 	return read(response, `GET /repos/${repo}`, (body) =>
 		body.private === false ? 'public' : body.archived === true ? 'archived' : body.private === true ? 'private' : undefined,
 	);
+}
+
+/** Creates or updates an Actions variable of the repository. */
+export async function setVariable(token: string, repo: RepoName, name: string, value: string): Promise<void> {
+	const updated = await rest('PATCH', `/repos/${repo}/actions/variables/${name}`, `Bearer ${token}`, [204, 404], { name, value });
+	if (updated.status === 404) await rest('POST', `/repos/${repo}/actions/variables`, `Bearer ${token}`, [201], { name, value });
+}
+
+export async function deleteVariable(token: string, repo: RepoName, name: string): Promise<void> {
+	await rest('DELETE', `/repos/${repo}/actions/variables/${name}`, `Bearer ${token}`, [204, 404]);
 }
 
 /** The App GitHub created; the OAuth client and owner are kept for signing in to the Worker later. */

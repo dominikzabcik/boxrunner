@@ -1,4 +1,5 @@
-import { dayOf, type Classes, type Priority, type Repo, type RunnerState } from './model';
+import { variable } from './fallback';
+import { dayOf, type Classes, type FallbackConfig, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
 import { retentionDays, type Store } from './store';
 
@@ -46,6 +47,18 @@ export type Dashboard = {
 	classesProblem: string | null;
 	/** The Worker's classes paused on the dashboard: who paused each and when. */
 	paused: { class: string; by: string; since: string; seconds: number }[];
+	fallback: {
+		/** Minutes without a heartbeat before jobs go to GitHub's runners; null while fallback is off. */
+		minutes: number | null;
+		configProblem: string | null;
+		/** Whether jobs should go to GitHub's runners now, since when, and whether every served repository's variable says so. */
+		down: boolean;
+		since: string | null;
+		secondsSince: number | null;
+		written: boolean;
+		/** Why the last write of the variable failed. */
+		problem: string | null;
+	};
 };
 
 const iso = (time: number) => new Date(time).toISOString();
@@ -58,8 +71,9 @@ function totals(days: { jobs: number; minutes: number }[]): Totals {
 }
 
 /** Reads only the Durable Object: a page view never calls GitHub. */
-export function dashboardData(store: Store, classes: Classes, now: number): Dashboard {
+export function dashboardData(store: Store, classes: Classes, fallback: FallbackConfig, now: number): Dashboard {
 	const today = dayOf(now);
+	const watch = store.fallback();
 	const days = store.daysFrom(today - retentionDays + 1);
 	const repos = store.lastCached('repos');
 	const served = classes.ok ? classes.classes : [];
@@ -118,6 +132,15 @@ export function dashboardData(store: Store, classes: Classes, now: number): Dash
 		classes: [...served],
 		classesProblem: classes.ok ? null : classes.problem,
 		paused: pauses.map((pause) => ({ class: pause.className, by: pause.by, since: iso(pause.since), seconds: secondsBetween(pause.since, now) })),
+		fallback: {
+			minutes: fallback.ok && fallback.afterMs !== null ? fallback.afterMs / 60_000 : null,
+			configProblem: fallback.ok ? null : fallback.problem,
+			down: watch.down,
+			since: watch.since === 0 ? null : iso(watch.since),
+			secondsSince: watch.since === 0 ? null : secondsBetween(watch.since, now),
+			written: watch.written,
+			problem: watch.problem,
+		},
 	};
 }
 
@@ -226,6 +249,20 @@ ${table(
 </section>`;
 }
 
+function renderFallback({ fallback }: Dashboard) {
+	const name = `<code>${variable}</code>`;
+	const switched = fallback.since === null || fallback.secondsSince === null ? '' : ` The Worker switched ${time(fallback.since, ago(fallback.secondsSince))}.`;
+	const lines: string[] = [];
+	if (fallback.configProblem !== null) lines.push(`<p class="alert">The Worker’s ${escape(fallback.configProblem)}, so fallback is off.</p>`);
+	else if (fallback.minutes === null) lines.push('<p>Off: jobs wait for the box while it is down.</p>');
+	else if (fallback.down) lines.push(`<p class="alert">The box is down, so workflows that read ${name} run on GitHub’s runners.${switched}</p>`);
+	else lines.push(`<p>After ${plural(fallback.minutes, 'minute')} without a heartbeat, workflows that read ${name} run on GitHub’s runners.</p>`);
+	if (fallback.written !== fallback.down && fallback.problem !== null) {
+		lines.push(`<p class="alert">The Worker could not ${fallback.down ? 'set' : 'delete'} ${name}: ${escape(fallback.problem)}. It tries again.</p>`);
+	}
+	return `<h3>Fallback to GitHub’s runners</h3>\n${lines.join('\n')}`;
+}
+
 function classAction(csrf: string, name: string, paused: boolean) {
 	const [action, verb] = paused ? ['resume', 'Resume'] : ['pause', 'Pause'];
 	return `<form method="post" action="/classes/${action}">
@@ -260,6 +297,7 @@ ${
 }
 <h3 id="classes">Classes</h3>
 ${renderClasses(data, csrf)}
+${renderFallback(data)}
 </section>`;
 }
 

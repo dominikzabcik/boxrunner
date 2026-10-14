@@ -29,6 +29,9 @@
 			},
 			"ADMINS": {
 				"description": "Optional. GitHub logins (comma-separated) that may sign in to the dashboard besides the App's owner. Leave empty for the owner alone."
+			},
+			"FALLBACK_MINUTES": {
+				"description": "Optional. Minutes without a heartbeat from the box, from 2 to 1440, after which workflows that read the `BOXRUNNER_DOWN` variable run on GitHub's runners. Needs the App's Variables permission; see docs/fallback.md. Leave empty to turn fallback off."
 			}
 		}
 	}

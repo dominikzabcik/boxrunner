@@ -12,7 +12,10 @@ const keys = appKeyPair();
 // recreates its tables and forgets its in-memory caches and budget.
 afterEach(async () => {
 	vi.restoreAllMocks();
-	await runInDurableObject(env.BOX.getByName('box'), (_, state) => state.storage.deleteAll());
+	await runInDurableObject(env.BOX.getByName('box'), async (_, state) => {
+		await state.storage.deleteAlarm();
+		await state.storage.deleteAll();
+	});
 	await abortAllDurableObjects();
 });
 

@@ -1,13 +1,16 @@
 import { boxTokenHash, randomToken, signAppJwt } from './crypto';
+import { variable, type Alarms } from './fallback';
 import * as github from './github';
 import { ApiError } from './http';
 import {
 	mayOpenDashboard,
 	parseClasses,
+	parseFallback,
 	repoFilter,
 	type App,
 	type ClassName,
 	type Classes,
+	type FallbackConfig,
 	type Login,
 	type Repo,
 	type RepoName,
@@ -41,6 +44,7 @@ export class Box {
 	constructor(
 		readonly store: Store,
 		private readonly env: Env,
+		readonly alarms: Alarms,
 	) {}
 
 	get setupSecret(): string | undefined {
@@ -49,6 +53,16 @@ export class Box {
 
 	classes(): Classes {
 		return parseClasses(this.env.CLASSES);
+	}
+
+	fallback(): FallbackConfig {
+		return parseFallback(this.env.FALLBACK_MINUTES);
+	}
+
+	/** How long the box may stay silent before its jobs go to GitHub's runners; null when fallback is off or misconfigured. */
+	fallbackAfterMs(): number | null {
+		const config = this.fallback();
+		return config.ok ? config.afterMs : null;
 	}
 
 	/** Signs dashboard sessions and their CSRF tokens; made once and forgotten by a reset. */
@@ -194,6 +208,37 @@ export class Box {
 			if (error instanceof github.GitHubError && error.status === 401) this.store.forget(`admin:${repo.id}`);
 			throw error;
 		}
+	}
+
+	/**
+	 * Sets the fallback variable in every served repository, or deletes it.
+	 * Each repository is tried even when another fails; the answer says what
+	 * went wrong, or is null when every repository now agrees.
+	 */
+	async writeFallback(down: boolean, since: number): Promise<string | null> {
+		const app = this.store.app()?.app;
+		if (!app) return 'setup has not finished';
+		let repos: Repo[];
+		try {
+			repos = await this.repos(app);
+		} catch (error) {
+			if (error instanceof github.GitHubError) return error.message;
+			throw error;
+		}
+		const problems = new Set<string>();
+		for (const repo of repos) {
+			try {
+				const token = await this.narrowToken(app, repo, { actions_variables: 'write' });
+				if (down) await github.setVariable(token, repo.name, variable, new Date(since).toISOString());
+				else await github.deleteVariable(token, repo.name, variable);
+			} catch (error) {
+				if (!(error instanceof github.GitHubError)) throw error;
+				// GitHub refuses a token for a permission the installation has not granted.
+				const unpermitted = error.status === 422 && error.call.endsWith('/access_tokens');
+				problems.add(unpermitted ? 'the App lacks the Variables permission (read and write), or an installation has not approved it' : `${repo.name}: ${error.message}`);
+			}
+		}
+		return problems.size === 0 ? null : [...problems].join('; ');
 	}
 
 	ensureScaleSet(app: App, repo: Repo, className: ClassName): Promise<ScaleSetId> {

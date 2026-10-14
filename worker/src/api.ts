@@ -1,5 +1,6 @@
 import type { Box } from './box';
 import { matchesBoxToken } from './crypto';
+import { onHeartbeat } from './fallback';
 import * as github from './github';
 import { ApiError, errorResponse, json, noContent } from './http';
 import { parse, parseHeartbeat, semverPattern, splitPaused, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
@@ -137,7 +138,9 @@ function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 async function heartbeat(context: Context) {
 	const parsed = parseHeartbeat(await body(context.request));
 	if (!parsed.ok) throw new ApiError('bad_request', `"${parsed.field}" is missing or malformed.`);
-	context.box.store.saveHeartbeat(parsed.heartbeat, Date.now());
+	const now = Date.now();
+	await onHeartbeat(context.box, now);
+	context.box.store.saveHeartbeat(parsed.heartbeat, now);
 	return json({ paused: splitPaused(context.classes, context.box.store.pauses()).paused });
 }
 

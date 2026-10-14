@@ -16,7 +16,12 @@
 		"REPOS": "",
 		// Optional: GitHub logins (comma-separated) that may open the dashboard
 		// besides the App's owner.
-		"ADMINS": ""
+		"ADMINS": "",
+		// Optional: minutes without a heartbeat after which the Worker sets the
+		// BOXRUNNER_DOWN variable in every served repository, so workflows that
+		// read it run on GitHub's runners (docs/fallback.md). Needs the App's
+		// Variables permission. Empty turns fallback off.
+		"FALLBACK_MINUTES": ""
 	},
 	"secrets": {
 		"required": ["SETUP_SECRET"]
