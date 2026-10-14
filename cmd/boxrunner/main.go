@@ -235,6 +235,12 @@ func upgradeCmd(ctx context.Context, args []string) error {
 			}
 			return nil
 		},
+		Restart: func(ctx context.Context) error {
+			if out, err := exec.CommandContext(ctx, "systemctl", "try-restart", "boxrunner.service").CombinedOutput(); err != nil {
+				return fmt.Errorf("systemctl try-restart boxrunner.service: %s", strings.TrimSpace(string(out)))
+			}
+			return nil
+		},
 	})
 }
 

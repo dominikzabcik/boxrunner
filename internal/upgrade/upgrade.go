@@ -31,6 +31,9 @@ type Options struct {
 	Exec func(ctx context.Context, stdin, name string, args ...string) (string, error)
 	// Install runs the downloaded installer.
 	Install func(ctx context.Context, script string) error
+	// Restart restarts the agent if it runs, so it runs the binary the
+	// installer put in place.
+	Restart func(ctx context.Context) error
 	Out     io.Writer
 }
 
@@ -82,7 +85,13 @@ func Run(ctx context.Context, o Options) error {
 	} else {
 		fmt.Fprintln(o.Out, "==> the installer's build attestation ok")
 	}
-	return o.Install(ctx, script)
+	if err := o.Install(ctx, script); err != nil {
+		return err
+	}
+	// Installers before 0.3.0 leave the running agent on the old binary, so
+	// the upgrade restarts it whatever the target's installer did.
+	fmt.Fprintf(o.Out, "==> restart boxrunner.service on %s\n", target)
+	return o.Restart(ctx)
 }
 
 func download(ctx context.Context, client *http.Client, url string) (string, error) {

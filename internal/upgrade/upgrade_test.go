@@ -37,9 +37,11 @@ func releases(t *testing.T) *httptest.Server {
 }
 
 type run struct {
-	gh        [][]string
-	installed []string
-	out       strings.Builder
+	gh         [][]string
+	installed  []string
+	installErr error
+	restarts   int
+	out        strings.Builder
 }
 
 // options runs the upgrade from version with gh signed in when ghState is
@@ -60,7 +62,17 @@ func (r *run) options(srv *httptest.Server, version, target, ghState string) Opt
 		Install: func(_ context.Context, script string) error {
 			body, err := os.ReadFile(script)
 			r.installed = append(r.installed, string(body))
-			return err
+			if err != nil {
+				return err
+			}
+			return r.installErr
+		},
+		Restart: func(context.Context) error {
+			if len(r.installed) == 0 {
+				return errors.New("restarted before installing")
+			}
+			r.restarts++
+			return nil
 		},
 	}
 }
@@ -74,7 +86,10 @@ func TestUpgradeToTheLatestRelease(t *testing.T) {
 	if !reflect.DeepEqual(r.installed, []string{installer("0.2.2")}) {
 		t.Errorf("installed %q", r.installed)
 	}
-	want := "==> download the installer of boxrunner 0.2.2\n==> skipped the installer's build attestation check (needs gh, signed in)\n"
+	want := "==> download the installer of boxrunner 0.2.2\n==> skipped the installer's build attestation check (needs gh, signed in)\n==> restart boxrunner.service on 0.2.2\n"
+	if r.restarts != 1 {
+		t.Errorf("restarted %d times, want once", r.restarts)
+	}
 	if r.out.String() != want {
 		t.Errorf("output =\n%s\nwant\n%s", r.out.String(), want)
 	}
@@ -89,7 +104,7 @@ func TestUpgradeChecksTheAttestationWithGh(t *testing.T) {
 	if want := [][]string{{"gh", "auth", "status"}, {"gh", "attestation", "verify"}}; !reflect.DeepEqual(r.gh, want) {
 		t.Errorf("gh calls %q", r.gh)
 	}
-	if len(r.installed) != 1 || !strings.HasSuffix(r.out.String(), "==> the installer's build attestation ok\n") {
+	if len(r.installed) != 1 || !strings.HasSuffix(r.out.String(), "==> the installer's build attestation ok\n==> restart boxrunner.service on 0.2.2\n") {
 		t.Errorf("installed %d times, output:\n%s", len(r.installed), r.out.String())
 	}
 
@@ -127,16 +142,27 @@ func TestUpgradeDowngradesWhenAsked(t *testing.T) {
 	var r run
 	o := r.options(srv, "0.2.2", "0.2.1", "")
 	o.Downgrade = true
-	if err := Run(context.Background(), o); err != nil || !reflect.DeepEqual(r.installed, []string{installer("0.2.1")}) {
-		t.Errorf("Run = %v, installed %q", err, r.installed)
+	if err := Run(context.Background(), o); err != nil || !reflect.DeepEqual(r.installed, []string{installer("0.2.1")}) || r.restarts != 1 {
+		t.Errorf("Run = %v, installed %q, restarted %d times", err, r.installed, r.restarts)
+	}
+}
+
+// An installer from before 0.3.0 does not restart the agent, so the upgrade
+// does; a failed installer leaves the running agent alone.
+func TestUpgradeRestartsOnlyAfterTheInstallerSucceeds(t *testing.T) {
+	srv := releases(t)
+	var r run
+	r.installErr = errors.New("the installer failed: exit status 1")
+	if err := Run(context.Background(), r.options(srv, "0.2.1", "", "")); err == nil || r.restarts != 0 {
+		t.Errorf("Run = %v, restarted %d times; want the installer's error and no restart", err, r.restarts)
 	}
 }
 
 func TestUpgradeToTheInstalledReleaseDoesNothing(t *testing.T) {
 	srv := releases(t)
 	var r run
-	if err := Run(context.Background(), r.options(srv, "0.2.2", "", "")); err != nil || r.installed != nil {
-		t.Errorf("Run = %v, installed %q", err, r.installed)
+	if err := Run(context.Background(), r.options(srv, "0.2.2", "", "")); err != nil || r.installed != nil || r.restarts != 0 {
+		t.Errorf("Run = %v, installed %q, restarted %d times", err, r.installed, r.restarts)
 	}
 	if r.out.String() != "boxrunner 0.2.2 is already installed.\n" {
 		t.Errorf("output %q", r.out.String())
