@@ -165,10 +165,10 @@ func TestDecide(t *testing.T) {
 			name: "a new runner version builds while only idle jobs run",
 			state: func() State {
 				s := state(1, 2, map[Key]ScaleSet{}, Runner{Name: "r1", ScaleSet: siteLight, Phase: Running, TookJob: true})
-				s.Image = Image{Built: "2.328.0", Latest: "2.329.0"}
+				s.Image = Image{Built: "2.328.0", Latest: "2.329.0", LatestDigest: "sha256:4ffa"}
 				return s
 			}(),
-			want: []Action{Build{Version: "2.329.0"}},
+			want: []Action{Build{Version: "2.329.0", Digest: "sha256:4ffa"}},
 		},
 		{
 			name: "never while a normal-priority job runs",
@@ -220,10 +220,10 @@ func TestDecide(t *testing.T) {
 			state: func() State {
 				s := warm(state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7}},
 					Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(0)}), "octo/site")
-				s.Image = Image{Built: "2.328.0", Latest: "2.329.0"}
+				s.Image = Image{Built: "2.328.0", Latest: "2.329.0", LatestDigest: "sha256:4ffa"}
 				return s
 			}(),
-			want: []Action{Build{Version: "2.329.0"}},
+			want: []Action{Build{Version: "2.329.0", Digest: "sha256:4ffa"}},
 		},
 		{
 			name: "not while building or before the retry time",
@@ -420,17 +420,56 @@ func TestHeldBy(t *testing.T) {
 
 func TestImageEvents(t *testing.T) {
 	s := state(1, 2, map[Key]ScaleSet{})
-	s = Apply(s, LatestRunner{"2.329.0"}, at(0))
+	s = Apply(s, LatestRunner{Version: "2.329.0", Digest: "sha256:4ffa"}, at(0))
 	s = Apply(s, BuildDispatched{}, at(0))
 	s = Apply(s, BuildFailed{}, at(1))
-	if want := (Image{Latest: "2.329.0", RetryAt: at(61)}); s.Image != want {
+	if want := (Image{Latest: "2.329.0", LatestDigest: "sha256:4ffa", RetryAt: at(61)}); s.Image != want {
 		t.Errorf("after a failed build: %+v", s.Image)
 	}
-	if got := Decide(s, at(61)); !reflect.DeepEqual(got, []Action{Build{"2.329.0"}}) {
+	if got := Decide(s, at(61)); !reflect.DeepEqual(got, []Action{Build{Version: "2.329.0", Digest: "sha256:4ffa"}}) {
 		t.Errorf("Decide an hour later = %#v", got)
 	}
-	s = Apply(s, ImageBuilt{"2.329.0"}, at(62))
-	if want := (Image{Built: "2.329.0", Latest: "2.329.0", RetryAt: at(61)}); s.Image != want {
+	s = Apply(s, ImageBuilt{Version: "2.329.0", Digest: "sha256:4ffa"}, at(62))
+	if want := (Image{Built: "2.329.0", Digest: "sha256:4ffa", Latest: "2.329.0", LatestDigest: "sha256:4ffa", RetryAt: at(61)}); s.Image != want {
+		t.Errorf("after a build: %+v", s.Image)
+	}
+}
+
+// While the CI has not verified the runner's latest release, the agent builds
+// nothing newer than the release it did verify.
+func TestUnlistedRunner(t *testing.T) {
+	s := state(1, 2, map[Key]ScaleSet{})
+	s = Apply(s, ImageBuilt{Version: "2.329.0", Digest: "sha256:4ffa"}, at(0))
+	s = Apply(s, LatestRunner{Version: "2.329.0", Digest: "sha256:4ffa", Unlisted: "2.330.0"}, at(0))
+	if got := Decide(s, at(1)); got != nil {
+		t.Errorf("Decide with 2.330.0 unlisted = %#v", got)
+	}
+	s = Apply(s, LatestRunner{Version: "2.330.0", Digest: "sha256:e549"}, at(60))
+	if got := Decide(s, at(60)); !reflect.DeepEqual(got, []Action{Build{Version: "2.330.0", Digest: "sha256:e549"}}) {
+		t.Errorf("Decide once 2.330.0 is listed = %#v", got)
+	}
+	if s.Image.Unlisted != "" {
+		t.Errorf("Unlisted = %q once 2.330.0 is listed", s.Image.Unlisted)
+	}
+}
+
+// A refusal stays until a build succeeds, so a registry that is down at the
+// next attempt does not hide it.
+func TestRefusedImage(t *testing.T) {
+	refused := "ghcr.io/actions/actions-runner:2.330.0 points to sha256:0bad, not to sha256:e549 that boxrunner's CI verified"
+	s := state(1, 2, map[Key]ScaleSet{})
+	s = Apply(s, ImageBuilt{Version: "2.329.0", Digest: "sha256:4ffa"}, at(0))
+	s = Apply(s, LatestRunner{Version: "2.330.0", Digest: "sha256:e549"}, at(0))
+	s = Apply(s, BuildDispatched{}, at(0))
+	s = Apply(s, BuildFailed{Refused: refused}, at(1))
+	s = Apply(s, BuildDispatched{}, at(61))
+	s = Apply(s, BuildFailed{}, at(62))
+	want := Image{Built: "2.329.0", Digest: "sha256:4ffa", Latest: "2.330.0", LatestDigest: "sha256:e549", RetryAt: at(122), Refused: refused}
+	if s.Image != want {
+		t.Errorf("after a refusal and a failed attempt: %+v", s.Image)
+	}
+	s = Apply(s, ImageBuilt{Version: "2.330.0", Digest: "sha256:e549"}, at(123))
+	if want := (Image{Built: "2.330.0", Digest: "sha256:e549", Latest: "2.330.0", LatestDigest: "sha256:e549", RetryAt: at(122)}); s.Image != want {
 		t.Errorf("after a build: %+v", s.Image)
 	}
 }

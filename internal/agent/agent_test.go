@@ -1,11 +1,11 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"io"
 	"log/slog"
 	"net"
@@ -24,6 +24,8 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
+	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
@@ -53,6 +55,10 @@ type fakeDocker struct {
 	// images are what /images/json lists; removing one takes it out.
 	images        []docker.ImageSummary
 	removedImages []string
+	// built is the job image's identity label; 2.338.0's when empty.
+	built string
+	// builds are the pulls, tags and builds the agent asked for.
+	builds []string
 }
 
 // matches applies a containers/json label filter, key or key=value.
@@ -114,8 +120,10 @@ func (f *fakeDocker) serve(t *testing.T) string {
 			f.removedImages = append(f.removedImages, ref)
 			f.images = slices.DeleteFunc(f.images, func(img docker.ImageSummary) bool { return img.ID == ref || slices.Contains(img.RepoTags, ref) })
 			io.WriteString(w, `[]`)
+		case r.Method == http.MethodPost && (path == "/build" || path == "/images/create" || strings.HasSuffix(path, "/tag")):
+			f.builds = append(f.builds, r.Method+" "+path+"?"+r.URL.RawQuery)
 		case strings.HasPrefix(path, "/images/"):
-			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+runnerimage.Identity("2.338.0")+`"}}}`)
+			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+cmp.Or(f.built, runnerimage.Identity("2.338.0"))+`"}}}`)
 		case path == "/containers/json":
 			var list []map[string]any
 			for _, c := range f.containers {
@@ -181,7 +189,19 @@ type fakeGitHub struct {
 	paused []string
 	// heldBy, when set, is the other box whose session holds the scale set.
 	heldBy string
+	// runner is the runner's latest release, 2.338.0 when empty. list is
+	// runner-digests.json, which names digest338 for 2.338.0 when empty, and
+	// tags maps each tag to the digest the registry names, 2.338.0's to
+	// digest338 when nil.
+	runner string
+	list   string
+	tags   map[string]string
 }
+
+const (
+	digest338 = "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807"
+	digest339 = "sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4"
+)
 
 func (g *fakeGitHub) pause(classes ...string) {
 	g.mu.Lock()
@@ -240,7 +260,17 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 		case r.URL.Path == "/acquire":
 			fmt.Fprintf(w, `{"count":1,"value":%s}`, body)
 		case r.URL.Path == "/releases/latest":
-			http.Redirect(w, r, "/releases/tag/v2.338.0", http.StatusFound)
+			http.Redirect(w, r, "/releases/tag/v"+cmp.Or(g.runner, "2.338.0"), http.StatusFound)
+		case r.URL.Path == "/runner-digests.json":
+			io.WriteString(w, cmp.Or(g.list, `{"2.338.0":"`+digest338+`"}`))
+		case r.URL.Path == "/token":
+			io.WriteString(w, `{"token":"anonymous"}`)
+		case r.Method == http.MethodHead && strings.HasPrefix(r.URL.Path, "/v2/actions/actions-runner/manifests/"):
+			tags := g.tags
+			if tags == nil {
+				tags = map[string]string{"2.338.0": digest338}
+			}
+			w.Header().Set("Docker-Content-Digest", tags[strings.TrimPrefix(r.URL.Path, "/v2/actions/actions-runner/manifests/")])
 		case r.URL.Path == "/dominikzabcik/boxrunner/releases/latest":
 			http.Redirect(w, r, "/dominikzabcik/boxrunner/releases/tag/v0.2.2", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
@@ -332,7 +362,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			JobsLog:              h.jobs,
 			DrainFile:            h.drain,
 			Socket:               h.socket,
-			ReleasesURL:          srv.URL + "/releases/latest",
+			Runner:               runnerdigests.Source{Releases: srv.URL + "/releases/latest", List: srv.URL + "/runner-digests.json", Registry: srv.URL},
 			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
 			Tick:                 50 * time.Millisecond,
 			HeartbeatEvery:       50 * time.Millisecond,
@@ -896,6 +926,70 @@ func TestStartRemovesSupersededImages(t *testing.T) {
 	}
 	if snap.Image.Disk != 2_980_000_000 {
 		t.Errorf("image disk use = %d, want 2980000000", snap.Image.Disk)
+	}
+}
+
+// While boxrunner's CI has not verified the runner's latest release, the agent
+// builds the newest release it did verify, from the listed digest, and status
+// says why.
+func TestBuildsTheNewestListedRunner(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.docker.built = runnerimage.Identity("2.337.0")
+		h.github.runner = "2.339.0"
+	})
+	var snap status.Snapshot
+	waitFor(t, "the job image built in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Digest != ""
+	})
+	h.stop(t)
+	snap.Image.Disk = 0
+	want := status.ImageStatus{Built: runnerimage.Identity("2.338.0"), Digest: digest338, Latest: runnerimage.Identity("2.338.0"), Unlisted: "2.339.0"}
+	if snap.Image != want {
+		t.Errorf("image status = %+v, want %+v", snap.Image, want)
+	}
+	h.docker.mu.Lock()
+	defer h.docker.mu.Unlock()
+	build := "POST /build?buildargs=" + url.QueryEscape(`{"RUNNER_DIGEST":"`+digest338+`","RUNNER_VERSION":"2.338.0"}`) +
+		"&forcerm=1&labels=" + url.QueryEscape(`{"boxrunner.image":"`+runnerimage.Identity("2.338.0")+`","boxrunner.runner-digest":"`+digest338+`"}`) +
+		"&rm=1&t=" + url.QueryEscape("boxrunner/runner:local")
+	if want := []string{
+		"POST /images/create?fromImage=" + url.QueryEscape("ghcr.io/actions/actions-runner@"+digest338),
+		"POST /images/ghcr.io/actions/actions-runner@" + digest338 + "/tag?repo=" + url.QueryEscape("ghcr.io/actions/actions-runner") + "&tag=2.338.0",
+		build,
+	}; !reflect.DeepEqual(h.docker.builds, want) {
+		t.Errorf("Docker calls\n%q\nwant\n%q", h.docker.builds, want)
+	}
+}
+
+// The agent builds nothing when the tag points to another image than the one
+// boxrunner's CI verified: jobs keep the current image, and status says why.
+func TestRefusesARepointedTag(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.github.runner = "2.339.0"
+		h.github.list = `{"2.338.0":"` + digest338 + `","2.339.0":"` + digest339 + `"}`
+		h.github.tags = map[string]string{"2.338.0": digest338, "2.339.0": "sha256:" + strings.Repeat("e", 64)}
+	})
+	var snap status.Snapshot
+	waitFor(t, "the refusal in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Refused != ""
+	})
+	h.stop(t)
+	snap.Image.Disk = 0
+	want := status.ImageStatus{
+		Built: runnerimage.Identity("2.338.0"), Latest: runnerimage.Identity("2.339.0"),
+		Refused: "ghcr.io/actions/actions-runner:2.339.0 points to sha256:" + strings.Repeat("e", 64) + ", not to " + digest339 + " that boxrunner's CI verified",
+	}
+	if snap.Image != want {
+		t.Errorf("image status = %+v, want %+v", snap.Image, want)
+	}
+	h.docker.mu.Lock()
+	defer h.docker.mu.Unlock()
+	if len(h.docker.builds) != 0 {
+		t.Errorf("the agent pulled or built %q", h.docker.builds)
 	}
 }
 

@@ -96,6 +96,17 @@ Docker stops every container when its daemon stops, unless `live-restore` is on 
 
 Sysbox's documentation does not mention live-restore, and it was not tried on a box with boxrunner. `boxrunner drain` covers every case instead: no job runs when Docker or the box restarts. `doctor` shows whether live-restore is on, for a box whose owner turned it on.
 
+## The runner image's provenance is verified in CI, not on the box
+
+actions/runner publishes a Sigstore bundle with SLSA provenance for each `ghcr.io/actions/actions-runner` release from 2.323.0 on, signed by `https://github.com/actions/runner/.github/workflows/release.yml@refs/heads/releases/m<minor>` (`m327` for both 2.327.0 and 2.327.1) and naming the tag's multi-platform index digest. GitHub's attestation API serves them (`/repos/actions/runner/attestations/{digest}`); `ghcr.io` has none. 2.330.0 is the exception, checked on October 15, 2026: five days after the release, a manual run of `docker-publish.yml` on `main` built its image again and moved the tag, so the digest it points to has only that workflow's attestation. Two places to verify the bundles were weighed:
+
+- **On every box, with sigstore-go** ([#71](https://github.com/dominikzabcik/boxrunner/pull/71)). Each build verifies the image it pulls, and the box needs no other tool. But the agent, which runs as root, grew from 8.2 MB to 20.1 MB on amd64 (7.6 MB to 18.8 MB on arm64) and from 1 to 72 linked modules: go-openapi behind Rekor's generated models, gRPC, OpenTelemetry, protobuf and a TUF client among them. Every box would trust 71 more modules with root to guard against one thing, a moved runner tag.
+- **In CI, with gh (chosen).** A daily workflow on GitHub's runners verifies each release with `gh attestation verify` and publishes the verified digests. The agent builds only a listed digest, and only while the tag points to it. It gains no dependency and no size. The trust moves to this repository, which boxes already trust for the agent and its installer. The price is a moving part, the workflow and its branch, and an online dependency: a new runner release waits up to a day for the list, and a box cannot build an image, or be installed, while the list is unreachable.
+
+The agent does not check the list's own attestation, since that takes the same Sigstore verifier. The attestation is there for people: anyone can check a copy of the list with `gh attestation verify`, and the `digests` branch keeps every list it published, each commit naming the workflow run that made it. The list lives on a branch, read through raw.githubusercontent.com, rather than in a release: a release would show among boxrunner's releases and could become the latest one, which the agent reads to find boxrunner's own version, and replacing a release asset deletes it first, so a box could find none.
+
+The workflow publishes nothing when any release fails, so a brief failure, such as an outage of the attestation API, cannot drop a release a box builds and make it go back to an older one. A release that fails for a known reason is named in the script and left out, as 2.330.0 is. `--cert-identity` binds the release branch; `--signer-workflow` names only the workflow file. If actions/runner renames its release branches, the workflow fails, boxes keep building the newest listed release, and `doctor` warns that the latest one waits.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

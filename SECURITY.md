@@ -23,6 +23,7 @@ Defended, and in scope for reports:
 - **One job, one container.** A way for a job to reach a later job, read another job's files, or reach the agent, is a vulnerability.
 - **The firewall.** A way for a job to reach the host, private networks, a tailnet or the cloud metadata service through `boxrunner0` is a vulnerability.
 - **The setup page.** A way to complete setup without the setup secret, or to replace an existing App, is a vulnerability.
+- **The runner image.** The agent builds the job image only from a `ghcr.io/actions/actions-runner` digest that boxrunner's CI listed after verifying its Sigstore provenance attestation from actions/runner's release workflow for the same minor release, and only while the version's tag points to it ([docs/architecture.md](docs/architecture.md#image)). A way to make the agent build from another image is a vulnerability.
 
 Not defended:
 
@@ -31,3 +32,5 @@ Not defended:
 - **Kernel isolation.** Jobs share the host's kernel, as every container does. A kernel exploit escapes any container. Once Sysbox is installed (`install --sysbox` or `--docker`), every class runs under it unless it sets `isolation = "runc"`, and Sysbox maps a job's root to an unprivileged user on the host. That narrows the risk but does not remove it. Under `runc`, Docker's default runtime, a step that becomes root through the job image's `sudo` is root on the host, held back only by the container's namespaces and Docker's default capabilities.
 - **A job's own secrets.** A job can read its own `GITHUB_TOKEN`, workflow secrets and runner credentials, as on GitHub's runners.
 - **Root on the box.** Whoever is root on the box controls the box token and every job on it.
+- **The list's channel.** The agent trusts `runner-digests.json` as GitHub serves it over HTTPS from this repository's `digests` branch, and does not check the list's own attestation. Whoever can push to this repository can change the list, as they can change the agent.
+- **What the job image adds.** Its packages come from Ubuntu's and GitHub's package repositories, which apt checks against their signing keys, and the Docker Compose plugin is checked by its SHA-256. The provenance check covers only the runner image underneath.

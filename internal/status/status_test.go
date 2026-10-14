@@ -192,6 +192,31 @@ FINISHED      REPOSITORY  CLASS      JOB   RESULT     QUEUED FOR  TOOK
 	}
 }
 
+func TestPrintRunnerImage(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", DiskFloor: 10e9,
+		Image: ImageStatus{
+			Built: "2.337.0+3f9a2c0b1d4e", Digest: "sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4",
+			Latest: "2.338.0+3f9a2c0b1d4e", Unlisted: "2.339.0",
+			Refused: "ghcr.io/actions/actions-runner:2.338.0 points to sha256:0bad, not to sha256:4ffa that boxrunner's CI verified",
+		},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	want := `box-1  boxrunner 0.1.0  worker unknown  image 2.337.0+3f9a2c0b1d4e (latest 2.338.0+3f9a2c0b1d4e)  disk 0.0 GB free, floor 10.0 GB
+
+The job image is built from runner image sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4, which boxrunner's CI verified.
+
+Runner 2.339.0 is out, but boxrunner's CI has not verified its image yet, so the agent builds 2.338.0 until it does.
+
+The agent refused to build the job image, and jobs keep the current image: ghcr.io/actions/actions-runner:2.338.0 points to sha256:0bad, not to sha256:4ffa that boxrunner's CI verified
+
+CLASS`
+	if got := b.String(); !strings.HasPrefix(got, want) {
+		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
+	}
+}
+
 func TestPrintHeldClass(t *testing.T) {
 	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,

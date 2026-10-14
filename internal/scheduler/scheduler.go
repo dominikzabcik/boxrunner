@@ -121,10 +121,20 @@ func hold(failures int) time.Duration {
 }
 
 type Image struct {
-	Built    string
-	Latest   string
+	Built string
+	// Digest is the runner image's that Built is built from.
+	Digest string
+	// Latest is the newest job image the agent may build: the runner's latest
+	// release, or the newest one before it that boxrunner's CI verified.
+	// LatestDigest is its runner image's.
+	Latest, LatestDigest string
+	// Unlisted is the runner's latest release while the CI has not verified it.
+	Unlisted string
 	Building bool
 	RetryAt  time.Time
+	// Refused says why the agent last refused to build a runner image, until a
+	// build succeeds.
+	Refused string
 }
 
 type State struct {
@@ -179,8 +189,9 @@ type Remove struct {
 	Logs       bool
 }
 
-// Build rebuilds the job image for a runner version.
-type Build struct{ Version string }
+// Build rebuilds the job image for a runner version, from the runner image
+// with the digest boxrunner's CI verified.
+type Build struct{ Version, Digest string }
 
 func (Start) action()  {}
 func (Remove) action() {}
@@ -231,7 +242,7 @@ func Decide(s State, now time.Time) []Action {
 	}
 
 	if img := s.Image; img.Latest != "" && img.Latest != img.Built && !img.Building && !now.Before(img.RetryAt) && !normalBusy(s, warm) {
-		actions = append(actions, Build{Version: img.Latest})
+		actions = append(actions, Build{Version: img.Latest, Digest: img.LatestDigest})
 	}
 	return actions
 }
@@ -410,11 +421,16 @@ type Removed struct{ Runner string }
 // Busy means GitHub refused to remove the runner because it took a job.
 type Busy struct{ Runner string }
 
-type ImageBuilt struct{ Version string }
+// ImageBuilt names the job image the agent built or found, and the digest of
+// the runner image it is built from.
+type ImageBuilt struct{ Version, Digest string }
 
-type BuildFailed struct{}
+// BuildFailed reports a build that did not happen or failed. Refused says why
+// when the runner image is not the one boxrunner's CI verified.
+type BuildFailed struct{ Refused string }
 
-type LatestRunner struct{ Version string }
+// LatestRunner names the newest job image the agent may build, as in Image.
+type LatestRunner struct{ Version, Digest, Unlisted string }
 
 // Drain starts draining the box, or with On false stops.
 type Drain struct{ On bool }
@@ -526,11 +542,12 @@ func Apply(s State, e Event, now time.Time) State {
 	case Busy:
 		update(e.Runner, func(r *Runner) { r.Phase, r.Since, r.TookJob = Running, now, true })
 	case ImageBuilt:
-		s.Image.Built, s.Image.Building = e.Version, false
+		s.Image.Built, s.Image.Digest, s.Image.Building, s.Image.Refused = e.Version, e.Digest, false, ""
 	case BuildFailed:
 		s.Image.Building, s.Image.RetryAt = false, now.Add(BuildRetry)
+		s.Image.Refused = cmp.Or(e.Refused, s.Image.Refused)
 	case LatestRunner:
-		s.Image.Latest = e.Version
+		s.Image.Latest, s.Image.LatestDigest, s.Image.Unlisted = e.Version, e.Digest, e.Unlisted
 	case Drain:
 		s.Draining = e.On
 	default:

@@ -1,8 +1,9 @@
 # The job image: GitHub's official runner image plus what most workflows
 # expect from GitHub's hosted Ubuntu runners. The agent builds it on the box
-# with RUNNER_VERSION set to the runner's latest release.
-ARG RUNNER_VERSION
-FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
+# with RUNNER_VERSION set to the runner's latest release and RUNNER_DIGEST to
+# the digest of its image, which boxrunner's CI verified.
+ARG RUNNER_DIGEST
+FROM ghcr.io/actions/actions-runner@${RUNNER_DIGEST}
 ARG RUNNER_VERSION
 LABEL boxrunner.runner-version=${RUNNER_VERSION}
 

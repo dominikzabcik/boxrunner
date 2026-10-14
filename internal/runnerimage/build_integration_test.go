@@ -2,7 +2,6 @@ package runnerimage
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -10,7 +9,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
-	"github.com/dominikzabcik/boxrunner/internal/release"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 )
 
 // TestBuildAgainstDocker builds the real job image with the latest runner and
@@ -27,16 +26,20 @@ func TestBuildAgainstDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := release.Latest(ctx, http.DefaultClient, ReleasesLatest)
+	// BOXRUNNER_RUNNER_DIGESTS can name a list of your own, such as one
+	// scripts/runner-digests.sh wrote, served over HTTP.
+	runner := runnerdigests.Source{List: os.Getenv("BOXRUNNER_RUNNER_DIGESTS")}
+	choice, err := runner.Choose(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Build(ctx, d, version); err != nil {
+	identity := Identity(choice.Version)
+	if err := Build(ctx, d, runner, identity, choice.Digest); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.RemoveImage(context.Background(), layout.Image) })
-	if got, err := Built(ctx, d); err != nil || got != version {
-		t.Errorf("Built = %q, %v; want %q", got, err, version)
+	if got, err := Built(ctx, d); err != nil || got != (JobImage{identity, choice.Digest}) {
+		t.Errorf("Built = %+v, %v; want %s from %s", got, err, identity, choice.Digest)
 	}
 
 	script := `docker ps; echo "docker exit $?"

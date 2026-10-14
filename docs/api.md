@@ -192,7 +192,7 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 | `box` | The box name, as `owner` in `POST /v1/sessions` |
 | `version` | The agent's semver, at most 64 characters |
 | `latest` | Optional. boxrunner's latest release as the agent last found it, a semver; the dashboard compares the agent's and the Worker's release with it |
-| `image` | The job image's identity, 1 to 128 characters without control characters |
+| `image` | The job image's identity, with ` from ` and the digest of the runner image it is built from once the agent knows it, 1 to 128 characters without control characters |
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
 | `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more. Optional `heldUntil`: present while the class's runners fail before taking a job, so the box holds its starts until then and starts one at a time after |
 | `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state |
