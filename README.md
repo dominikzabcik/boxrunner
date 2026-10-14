@@ -41,7 +41,7 @@ For `services:`, `container:` jobs and `docker build`, add `--docker` to the ins
 - **One job, one container.** Each job starts in a clean container from the same image, and the container is removed when the job ends. Nothing one job leaves behind reaches the next.
 - **The key stays off the box.** The GitHub App can administer your repositories, so its key lives only in your Worker. The box holds a token that can ask the Worker for runners and nothing else, and a session token per queue that can read that queue and nothing else.
 - **Priority classes.** A `normal` class gets the box's full speed. An `idle` class runs only on cores nothing else wants (Linux's SCHED_IDLE), so CodeQL, deploys and link checks never slow your test suite.
-- **Starts in seconds, without an open port.** The agent long-polls GitHub's queue for runner scale sets, the same protocol GitHub's Kubernetes controller uses. A job starts 6 to 8 seconds after it is queued.
+- **Starts in seconds, without an open port.** The agent long-polls GitHub's queue for runner scale sets, the same protocol GitHub's Kubernetes controller uses. A job starts 6 to 12 seconds after it is queued, or 2 seconds in a repository that keeps a warm runner.
 - **Nothing extra to run.** No Kubernetes, no database, no cloud account beyond the Worker, which fits Cloudflare's free plan.
 - **Hardened by default.** Jobs run on their own bridge with traffic to the host, private ranges, tailnets and the metadata service dropped, under CPU, memory and process limits, and no runner starts when the disk runs low. The Worker refuses public repositories.
 

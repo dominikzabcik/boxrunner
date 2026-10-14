@@ -36,6 +36,8 @@ Deleting the scale set and creating it again would clear the block. But a job al
 
 Keeping one idle runner per repository and class does not fit a small box. Ten repositories and two classes would mean twenty idle runners, while the main class may allow one runner at a time. Runners start when GitHub assigns a job. One cold start took 8 seconds from queue to start on a laptop with the image already pulled (probe). A runner that has not taken a job within three minutes is removed; one minted and never started can be removed (probe).
 
+A class can keep one warm runner for each repository it names (`warm`). On a 4-core x86 box, three jobs in a row on a warm repository started 2 seconds after they were queued, each on a runner that refilled after the previous job; cold starts there take 8 to 12 seconds.
+
 ## Idle-priority class
 
 On a 4-core ARM box, four timed threads took 1,319 ms alone, 1,345 ms beside four busy threads in a top-level SCHED_IDLE slice, and 6,536 ms beside four busy threads at normal priority. A first attempt named the slice `runners-idle.slice`. systemd read the dash as nesting and put it inside `runners.slice`, where it was idle only against its siblings and still took half the CPU. The slice is therefore named `boxrunner_idle.slice`, and `doctor` checks `cpu.idle` on it.
