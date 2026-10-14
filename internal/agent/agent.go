@@ -507,7 +507,9 @@ func (a *Agent) supervise(ctx context.Context) error {
 				continue
 			}
 			for _, r := range repos.Repos {
-				want[scheduler.Key{Repo: r.Name, Class: c.Name}] = true
+				if c.Serves(r.Name) {
+					want[scheduler.Key{Repo: r.Name, Class: c.Name}] = true
+				}
 			}
 		}
 		for key, cancel := range running {

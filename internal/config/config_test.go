@@ -230,3 +230,23 @@ dockerfile = "/etc/boxrunner/images/web/../web/Dockerfile"
 		}
 	}
 }
+
+func TestParseRepos(t *testing.T) {
+	head := "worker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	got, err := Parse([]byte(head+`repos = ["octo/Site", "octo/docs"]`+"\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := got.Classes[0]
+	if !c.Serves("octo/site") || !c.Serves("OCTO/docs") || c.Serves("octo/api") {
+		t.Errorf("repos = %v", c.Repos)
+	}
+	all, _ := Parse([]byte(head), "")
+	if !all.Classes[0].Serves("octo/anything") {
+		t.Error("a class without repos serves every repository")
+	}
+	_, err = Parse([]byte(head+`repos = ["site"]`+"\n"), "")
+	if err == nil || err.Error() != "config:\nclass \"web\": repos: \"site\" must be owner/name" {
+		t.Errorf("error = %v", err)
+	}
+}

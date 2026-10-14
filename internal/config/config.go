@@ -91,6 +91,9 @@ type Class struct {
 	// Max is how many runners of this class may start or run at once.
 	Max   int
 	Image string
+	// Repos, when set, limits the class to these repositories (owner/name,
+	// lower case); otherwise it serves every repository the Worker lists.
+	Repos []string
 	// Dockerfile, when set, builds Image FROM the job image; the agent
 	// rebuilds it whenever the job image or the Dockerfile's directory changes.
 	Dockerfile string
@@ -131,15 +134,16 @@ type rawConfig struct {
 }
 
 type rawClass struct {
-	Name       string  `toml:"name"`
-	CPUs       float64 `toml:"cpus"`
-	Memory     string  `toml:"memory"`
-	Pids       int64   `toml:"pids"`
-	Shm        string  `toml:"shm"`
-	Priority   string  `toml:"priority"`
-	Max        int     `toml:"max"`
-	Image      string  `toml:"image"`
-	Dockerfile string  `toml:"dockerfile"`
+	Name       string   `toml:"name"`
+	CPUs       float64  `toml:"cpus"`
+	Memory     string   `toml:"memory"`
+	Pids       int64    `toml:"pids"`
+	Shm        string   `toml:"shm"`
+	Priority   string   `toml:"priority"`
+	Max        int      `toml:"max"`
+	Image      string   `toml:"image"`
+	Dockerfile string   `toml:"dockerfile"`
+	Repos      []string `toml:"repos"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -265,6 +269,13 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 	if rc.Max < 1 {
 		errs = append(errs, errors.New("max: must be at least 1; remove the class to turn it off"))
 	}
+	for _, r := range rc.Repos {
+		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			errs = append(errs, fmt.Errorf("repos: %q must be owner/name", r))
+			continue
+		}
+		c.Repos = append(c.Repos, strings.ToLower(r))
+	}
 	switch {
 	case rc.Dockerfile != "" && rc.Image != "":
 		errs = append(errs, errors.New("image and dockerfile: set one; a dockerfile names its own image"))
@@ -277,6 +288,11 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 		c.Image = layout.Image
 	}
 	return c, errs
+}
+
+// Serves reports whether the class runs jobs of a repository.
+func (c Class) Serves(repo string) bool {
+	return len(c.Repos) == 0 || slices.Contains(c.Repos, strings.ToLower(repo))
 }
 
 // ClassImage is the tag of the image a class's dockerfile builds.

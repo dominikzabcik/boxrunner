@@ -51,6 +51,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `max` | required | Runners of this class at once on this box. |
 | `image` | `boxrunner/runner:local` | Any image whose entrypoint runs the Actions runner. |
 | `dockerfile` | none | Builds the class's own image; see below. Set either this or `image`. |
+| `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. |
 
 Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
 
