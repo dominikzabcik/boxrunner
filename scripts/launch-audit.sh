@@ -57,6 +57,12 @@ fi
 vars=$(gh variable list -R "$repo" --json name -q '.[].name' | tr '\n' ' ')
 if [ -z "$vars" ]; then ok "no repository variables (no workflow points at a self-hosted runner)"; else bad "repository variables still set: $vars"; fi
 
+# Run logs become public with the repository and name the runner and its machine.
+selfhosted=$(gh run list -R "$repo" -L 500 --json databaseId -q '.[].databaseId' | while read -r id; do
+	gh api "repos/$repo/actions/runs/$id/jobs" -q '.jobs[] | select(.runner_group_name != "GitHub Actions" and .runner_name != null) | .runner_name'
+done | wc -l | tr -d ' ')
+if [ "$selfhosted" = 0 ]; then ok "no workflow run logs from self-hosted runners"; else bad "$selfhosted job logs from self-hosted runners; delete those runs"; fi
+
 if grep -rqE "runs-on: .*self-hosted" .github/workflows; then bad "a workflow names self-hosted runners"; else ok "workflows name no self-hosted runner"; fi
 
 visibility=$(gh api "repos/$repo" -q .visibility)
