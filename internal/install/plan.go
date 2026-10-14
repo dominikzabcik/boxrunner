@@ -213,6 +213,10 @@ const sliceUnit = `[Unit]
 Description=boxrunner jobs that run only on cores nothing else wants
 
 [Slice]
+# systemd 252 and newer read the second line and set cpu.idle. Older ones
+# ignore it and keep weight 1, which keeps the cpu controller on, and the
+# agent sets cpu.idle itself.
+CPUWeight=1
 CPUWeight=idle
 `
 

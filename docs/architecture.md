@@ -116,9 +116,13 @@ Before retiring a box on purpose, run `sudo boxrunner uninstall` on it. Stopping
 
 ## Priority classes
 
-A class with `priority = idle` runs in `boxrunner_idle.slice`, a top-level systemd slice with `CPUWeight=idle`. The kernel schedules its processes as SCHED_IDLE: they use any core nothing else wants and step aside at once otherwise. Normal classes run in Docker's default cgroup.
+A class with `priority = idle` runs in `boxrunner_idle.slice`, a top-level systemd slice whose `cpu.idle` is 1. The kernel schedules its processes as SCHED_IDLE: they use any core nothing else wants and step aside at once otherwise. Normal classes run in Docker's default cgroup.
 
 The slice must be top level. systemd reads a dash in a slice name as nesting, so `boxrunner-idle.slice` would sit inside `boxrunner.slice` and only be idle against its siblings. `boxrunner doctor` checks that `cpu.idle` reads 1 for the slice the containers actually run in.
+
+systemd sets `cpu.idle` for `CPUWeight=idle` only from version 252. Older ones, such as Ubuntu 22.04's 249 and Debian 11's 247, ignore that line, so the unit has `CPUWeight=1` before it, and the agent writes 1 to `cpu.idle` when it starts and before each idle job if it reads anything else. That covers a reboot and a restart of the slice, which make a new cgroup at 0. A daemon-reload keeps the value, since systemd before 252 never writes `cpu.idle`. The weight line keeps the cpu controller on for the slice: without a CPU setting, systemd 249 turns it off whenever no container in the slice has a CPU limit, and the next container finds `cpu.idle` back at 0. On systemd 252 and newer the second line wins. systemd 249 logs `Failed to set 'cpu.weight' attribute on '/boxrunner_idle.slice' to '1': Invalid argument` when it applies the unit, because the kernel takes no weight for an idle cgroup; the warning is harmless.
+
+`cpu.idle` came in Linux 5.15. On an older kernel, such as Debian 11's own 5.10, the idle class runs at weight 1 instead of SCHED_IDLE, and doctor fails its idle slice check and names the kernel.
 
 Measured on a 4-core ARM box, CPU only: four timed threads of a normal job took 1,319 ms alone, 1,345 ms beside four busy threads in the idle slice, and 6,536 ms beside four busy threads at normal priority. Memory and disk I/O are not prioritised; give each class a memory limit that fits beside the others.
 

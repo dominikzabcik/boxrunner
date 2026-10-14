@@ -272,6 +272,11 @@ type harness struct {
 	socket string
 	cancel context.CancelFunc
 	done   chan error
+	// cgroup holds the idle slice's cpu.idle, 0 at first.
+	cgroup string
+
+	mu        sync.Mutex
+	systemctl []string
 }
 
 // startAgent runs the agent with one class; change may adjust the class and
@@ -284,7 +289,10 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		drain:  filepath.Join(t.TempDir(), "draining"),
 		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
+		cgroup: t.TempDir(),
 	}
+	os.Mkdir(filepath.Join(h.cgroup, "boxrunner_idle.slice"), 0o755)
+	os.WriteFile(filepath.Join(h.cgroup, "boxrunner_idle.slice", "cpu.idle"), []byte("0\n"), 0o644)
 	cfg := config.Config{
 		Box: "box-1", DiskFloor: 1,
 		Classes: []config.Class{{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Max: 1, Image: "boxrunner/runner:local"}},
@@ -307,8 +315,15 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	go func() {
 		h.done <- Run(ctx, Options{
 			Config: cfg, Docker: d, Version: "0.1.0", Log: log,
-			Worker:               worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
-			Run:                  func(context.Context, string, string, ...string) (string, error) { return "", nil },
+			Worker: worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
+			Run: func(_ context.Context, _, name string, args ...string) (string, error) {
+				if name == "systemctl" {
+					h.mu.Lock()
+					h.systemctl = append(h.systemctl, strings.Join(args, " "))
+					h.mu.Unlock()
+				}
+				return "", nil
+			},
 			JobsLog:              h.jobs,
 			DrainFile:            h.drain,
 			Socket:               h.socket,
@@ -317,6 +332,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			Tick:                 50 * time.Millisecond,
 			HeartbeatEvery:       50 * time.Millisecond,
 			SysboxDir:            t.TempDir(),
+			CgroupDir:            h.cgroup,
 		})
 	}()
 	return h
@@ -608,6 +624,32 @@ func TestScaleSetHeldByAnotherBox(t *testing.T) {
 	}
 	if opened != 1 {
 		t.Errorf("%d session requests; want 1 until the next repository check", opened)
+	}
+}
+
+// systemd before 252 ignores CPUWeight=idle, so the agent sets the idle
+// slice's cpu.idle when it starts, and again before an idle job when a
+// restart of the slice has reset it.
+func TestIdleSlice(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *harness) { c.Priority = config.Idle })
+	file := filepath.Join(h.cgroup, "boxrunner_idle.slice", "cpu.idle")
+	idle := func() string {
+		b, _ := os.ReadFile(file)
+		return strings.TrimSpace(string(b))
+	}
+	waitFor(t, "cpu.idle 1 once the agent started", func() bool { return idle() == "1" })
+	os.WriteFile(file, []byte("0\n"), 0o644)
+
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501,"queueTime":"2026-10-13T21:00:00Z"}`)
+	waitFor(t, "a job container", func() bool { return len(h.docker.snapshot()) == 1 })
+	if got := idle(); got != "1" {
+		t.Errorf("cpu.idle when the idle job's container was created = %q, want 1", got)
+	}
+	h.stop(t)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if want := []string{"start boxrunner_idle.slice", "start boxrunner_idle.slice"}; !reflect.DeepEqual(h.systemctl, want) {
+		t.Errorf("systemctl calls = %q, want %q", h.systemctl, want)
 	}
 }
 

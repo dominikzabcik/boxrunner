@@ -25,7 +25,7 @@
 
 ## Quickstart
 
-You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; amd64 or arm64) and a free Cloudflare account.
+You need a Linux box with systemd and Linux 5.15 or newer (Ubuntu 22.04 or newer, Debian 12 or newer; amd64 or arm64) and a free Cloudflare account. Debian 11 works with a newer kernel than its own 5.10.
 
 1. **Deploy the Worker.** With one click, from the latest release, where Cloudflare asks for a setup secret (keep it, the setup page asks for it):
 

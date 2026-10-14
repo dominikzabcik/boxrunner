@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -269,8 +271,13 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	if pid, err := d.Pid(ctx, id); err != nil || pid == 0 {
 		add("idle slice", false, "could not find the container's process: %v", err)
 	} else {
-		slice, idle, err := idleOf(pid)
-		add("idle slice", err == nil && slice == "/"+layout.IdleSlice && idle == "1", "container runs in %s, cpu.idle %s %v", slice, idle, orEmpty(err))
+		cgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+		kernel, _ := os.ReadFile("/proc/sys/kernel/osrelease")
+		if err != nil {
+			add("idle slice", false, "could not read the container's cgroup: %v", err)
+		} else {
+			results = append(results, IdleSlice(layout.CgroupDir, CgroupPath(string(cgroup)), strings.TrimSpace(string(kernel))))
+		}
 	}
 
 	if _, err := d.Wait(ctx, id); err != nil {
@@ -474,15 +481,24 @@ func orEmpty(err error) string {
 	return "(" + err.Error() + ")"
 }
 
-// idleOf returns the slice a process's cgroup sits in and that slice's cpu.idle.
-func idleOf(pid int) (string, string, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return "", "", err
+// IdleSlice checks that a container's cgroup, as /proc/<pid>/cgroup names it,
+// sits in the idle slice and that the slice's cpu.idle under root is 1.
+func IdleSlice(root, cgroup, kernel string) Result {
+	slice := path.Dir(cgroup)
+	if slice != "/"+layout.IdleSlice {
+		return Result{"idle slice", false, fmt.Sprintf("container runs in %s, not /%s", slice, layout.IdleSlice)}
 	}
-	slice := path.Dir(CgroupPath(string(data)))
-	idle, err := os.ReadFile(path.Join("/sys/fs/cgroup", slice, "cpu.idle"))
-	return slice, strings.TrimSpace(string(idle)), err
+	data, err := os.ReadFile(path.Join(root, slice, "cpu.idle"))
+	idle := strings.TrimSpace(string(data))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return Result{"idle slice", false, fmt.Sprintf("this kernel (%s) has no cpu.idle, which Linux 5.15 added, so idle jobs do not run as SCHED_IDLE; install a newer kernel", kernel)}
+	case err != nil:
+		return Result{"idle slice", false, fmt.Sprintf("container runs in %s, cpu.idle unreadable (%v)", slice, err)}
+	case idle != "1":
+		return Result{"idle slice", false, fmt.Sprintf("container runs in %s, cpu.idle %s; restart boxrunner to set it", slice, idle)}
+	}
+	return Result{"idle slice", true, fmt.Sprintf("container runs in %s, cpu.idle 1", slice)}
 }
 
 // CgroupPath reads the cgroup v2 path from /proc/<pid>/cgroup.
