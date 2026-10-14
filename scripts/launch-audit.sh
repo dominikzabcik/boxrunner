@@ -37,6 +37,13 @@ else
 	bad "gitleaks: not installed"
 fi
 
+if command -v trufflehog >/dev/null; then
+	found=$(trufflehog git "file://$PWD" --no-update --json 2>/dev/null | grep -c '"DetectorName"')
+	if [ "$found" = 0 ]; then ok "trufflehog: no secrets in history"; else bad "trufflehog: $found findings in history"; fi
+else
+	bad "trufflehog: not installed"
+fi
+
 gh issue list -R "$repo" --state all -L 500 --json title,body,comments \
 	-q '.[] | .title, .body, (.comments[].body)' | scan "issues and their comments"
 gh pr list -R "$repo" --state all -L 500 --json title,body,comments \
