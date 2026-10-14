@@ -54,6 +54,7 @@ type Options struct {
 	Socket      string
 	ReleasesURL string
 	Tick        time.Duration
+	SysboxDir   string
 }
 
 type Agent struct {
@@ -87,6 +88,7 @@ func Run(ctx context.Context, o Options) error {
 	o.Socket = cmp.Or(o.Socket, layout.Socket)
 	o.ReleasesURL = cmp.Or(o.ReleasesURL, runnerimage.ReleasesLatest)
 	o.Tick = cmp.Or(o.Tick, decideEvery)
+	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
 	a := &Agent{
 		Options: o,
 		queue:   &queue.Client{HTTP: &http.Client{Timeout: 90 * time.Second}, UserAgent: "boxrunner/" + o.Version},
@@ -401,12 +403,20 @@ func (a *Agent) shutdown(s scheduler.State) {
 }
 
 func (a *Agent) observe(ctx context.Context) {
+	paths := []string{a.rootDir}
+	if a.sysbox {
+		paths = append(paths, a.SysboxDir)
+	}
 	for {
-		free, err := disk.Free(a.rootDir)
+		free, path, err := disk.Lowest(paths...)
 		if err != nil {
-			a.Log.Error("reading free disk", "path", a.rootDir, "err", err)
+			a.Log.Error("reading free disk", "path", path, "err", err)
 		}
-		list, err := a.Docker.List(ctx, layout.LabelBox+"="+a.Config.Box, free < int64(a.Config.DiskFloor)/2)
+		sizes := free < int64(a.Config.DiskFloor)/2
+		list, err := a.Docker.List(ctx, layout.LabelBox+"="+a.Config.Box, sizes)
+		if sizes && a.sysbox {
+			withInnerDocker(list, a.SysboxDir)
+		}
 		if err == nil {
 			a.post(scheduler.Observed{Containers: containers(list), DiskFree: free})
 		} else if ctx.Err() == nil {
@@ -416,6 +426,21 @@ func (a *Agent) observe(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(2 * a.Tick):
+		}
+	}
+}
+
+// withInnerDocker adds to what Docker says each container wrote what Sysbox
+// keeps for it under sysboxDir: the images and containers of a job's own
+// Docker, which Docker's count leaves out.
+func withInnerDocker(list []docker.Container, sysboxDir string) {
+	for i, c := range list {
+		if c.ID == "" {
+			continue
+		}
+		dirs, _ := filepath.Glob(filepath.Join(sysboxDir, "*", c.ID))
+		for _, dir := range dirs {
+			list[i].SizeRw += disk.Used(dir)
 		}
 	}
 }

@@ -26,6 +26,9 @@ const (
 	EnvDocker = "BOXRUNNER_DOCKER=1"
 	// EnvMirror gives that daemon the registry mirror's URL.
 	EnvMirror = "BOXRUNNER_MIRROR"
+	// SysboxDir holds what Sysbox keeps for each container, one directory per
+	// kind and container id; docker/<id> is the job's inner /var/lib/docker.
+	SysboxDir = "/var/lib/sysbox"
 	// Mirror names the registry mirror's container and its cache volume. It
 	// listens on the bridge's gateway address only.
 	Mirror     = "boxrunner-mirror"

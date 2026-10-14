@@ -67,8 +67,12 @@ func (c Checks) All(ctx context.Context) []Result {
 		add("cgroup v2", info.CgroupVersion == "2", "cgroup version %s", info.CgroupVersion)
 		add("cgroup driver", info.CgroupDriver == "systemd", "%s (boxrunner needs systemd)", info.CgroupDriver)
 		if c.ConfigErr == nil {
-			free, err := disk.Free(info.RootDir)
-			add("disk", err == nil && free >= int64(c.Config.DiskFloor), "%.1f GB free on %s, floor %.1f GB", float64(free)/1e9, info.RootDir, float64(c.Config.DiskFloor)/1e9)
+			paths := []string{info.RootDir}
+			if _, ok := info.Runtimes[layout.SysboxRuntime]; ok {
+				paths = append(paths, layout.SysboxDir)
+			}
+			free, path, err := disk.Lowest(paths...)
+			add("disk", err == nil && free >= int64(c.Config.DiskFloor), "%.1f GB free on %s, floor %.1f GB %s", float64(free)/1e9, path, float64(c.Config.DiskFloor)/1e9, orEmpty(err))
 		}
 	}
 

@@ -268,6 +268,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			Socket:      h.socket,
 			ReleasesURL: srv.URL + "/releases/latest",
 			Tick:        50 * time.Millisecond,
+			SysboxDir:   t.TempDir(),
 		})
 	}()
 	return h
@@ -497,6 +498,20 @@ func TestDockerClassNeedsSysbox(t *testing.T) {
 		string(mirrorHost) != `{"Mounts":[{"Source":"boxrunner-mirror","Target":"/var/lib/registry","Type":"volume"}],"NetworkMode":"host","RestartPolicy":{"Name":"unless-stopped"}}` ||
 		!volume {
 		t.Errorf("mirror %s with env %v and host config %s; volume %v", m.State, m.Body["Env"], mirrorHost, volume)
+	}
+}
+
+func TestWithInnerDockerCountsSysboxData(t *testing.T) {
+	sysbox := t.TempDir()
+	job, other := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for path, size := range map[string]int{"docker/" + job + "/overlay2/layer": 3000, "buildkit/" + job + "/cache": 96, "docker/" + other + "/overlay2/layer": 7} {
+		os.MkdirAll(filepath.Join(sysbox, filepath.Dir(path)), 0o755)
+		os.WriteFile(filepath.Join(sysbox, path), make([]byte, size), 0o644)
+	}
+	list := []docker.Container{{ID: job, SizeRw: 1000}, {ID: strings.Repeat("c", 64), SizeRw: 5}, {SizeRw: 1}}
+	withInnerDocker(list, sysbox)
+	if got := []int64{list[0].SizeRw, list[1].SizeRw, list[2].SizeRw}; !reflect.DeepEqual(got, []int64{4096, 5, 1}) {
+		t.Errorf("sizes = %v", got)
 	}
 }
 
