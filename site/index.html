@@ -43,7 +43,6 @@ nav.top a:hover { color: var(--ink); }
 
 /* hero */
 .hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; overflow: hidden; isolation: isolate; }
-#field { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; pointer-events: none; }
 header.hero, main, footer { position: relative; z-index: 1; }
 
 .hero::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -162,11 +161,12 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: var(--night); padding: 10px 14px; border-radius: 8px; font: 500 13px var(--f-mono); transition: .25s; pointer-events: none; z-index: 9; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { .reveal, .race .fill { transition: none; } .eyebrow .live, .term .caret { animation: none; } }
-/* Each chapter pairs its words with a stage; the one particle box flies from stage to stage as you scroll. */
+/* Each chapter pairs its words with a stage that holds its own particle scene. */
 .split, .intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); gap: clamp(24px, 4vw, 64px); align-items: center; }
 .intro { margin-bottom: clamp(28px, 4vw, 48px); }
 .intro .head { margin-bottom: 0; }
-.stage { min-height: clamp(300px, 32vw, 440px); }
+.stage { min-height: clamp(300px, 32vw, 440px); position: relative; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hero .stage { min-height: clamp(380px, 44vw, 600px); }
 .foot { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
 @media (max-width: 900px) {
@@ -188,7 +188,6 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   </div>
 </nav>
 
-<canvas id="field" aria-hidden="true"></canvas>
 <header class="hero gutter" id="top" data-scene="hero">
   <div class="copy measure split">
     <div class="copytext">
@@ -348,15 +347,10 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   const rgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
   const RGB = { normal: rgb(C.normal), idle: rgb(C.idle), ink: rgb(C.ink) };
 
-  // ---------------- The box: one particle field behind the whole page ----------------
-  // Every section names a scene. Each scene places every particle; scrolling
-  // between two sections blends their scenes, so the box rebuilds itself into
-  // what each section explains.
-  const cv = document.getElementById('field'), ctx = cv.getContext('2d');
-  let W = 0, H = 0, dpr = 1;
-  function size() { dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
-  size(); addEventListener('resize', size);
-
+  // ---------------- The box: particle scenes, one per chapter ----------------
+  // Every scene places every particle at a moment in time. Each chapter's stage
+  // draws its own scene, which assembles from scattered particles the first
+  // time the chapter scrolls into view and runs while it stays on screen.
   let seed = 20261013;
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const unit = () => { const u = rand() * 2 - 1, th = rand() * Math.PI * 2, s = Math.sqrt(1 - u * u); return [s * Math.cos(th), u, s * Math.sin(th)]; };
@@ -377,8 +371,7 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   for (let i = 0; i < SHELL; i++) parts.push({ kind: 'shell', i, s: unit(), r: rand() });
   for (let j = 0; j < 4; j++) for (let m = 0; m < SLOT; m++) parts.push({ kind: 'slot', j, m, g: j * SLOT + m, s: unit(), r: rand() });
   for (let d = 0; d < DUST; d++) parts.push({ kind: 'dust', i: d, s: unit(), r: 1.4 + rand() * 1.4, ph: rand() * 6.28 });
-  for (const p of parts) { p.p = [p.s[0] * 3, p.s[1] * 3, p.s[2] * 3]; p.d = [0, 0]; }
-
+  
   const COL = { ink: RGB.ink, normal: RGB.normal, idle: RGB.idle, key: rgb(C.key) };
   const tmp = [0, 0, 0];
   const SLOT_CENTERS = [[-.48, .48, -.48], [.48, .48, -.48], [-.48, .48, .48], [.48, .48, .48]];
@@ -454,68 +447,52 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   const SPIN = { hero: 1, cores: .45, key: .2, install: .8 };
   const PITCH = { hero: -.42, cores: -.12, key: -.18, install: -.38 };
 
-  const sections = [...document.querySelectorAll('[data-scene]')], hero = document.getElementById('top');
-  const stages = sections.map((sec) => sec.querySelector('.stage'));
-  function sceneAt() {
-    const vh = H; let i = 0;
-    for (let k = 0; k < sections.length; k++) if (sections[k].getBoundingClientRect().top <= vh * .7) i = k;
-    const top = sections[i].getBoundingClientRect().top;
-    const k = i === 0 ? 1 : ease((vh * .7 - top) / (vh * .45));
-    const a = Math.max(0, i - 1);
-    return { from: sections[a].dataset.scene, to: sections[i].dataset.scene, k, ra: stages[a].getBoundingClientRect(), rb: stages[i].getBoundingClientRect() };
-  }
-
-  const pointer = { x: -1e4, y: -1e4, tx: 0, ty: 0, active: false };
-  addEventListener('pointermove', (e) => { pointer.x = e.clientX; pointer.y = e.clientY; pointer.tx = e.clientX / W - .5; pointer.ty = e.clientY / H - .5; pointer.active = e.pointerType === 'mouse'; });
-  document.addEventListener('pointerleave', () => { pointer.active = false; });
-  let lastScroll = scrollY, scrollVel = 0;
-
-  let rotY = .6, rotX = -.42, tiltX = 0, tiltY = 0, elapsed = 0, lastT = performance.now(), born = 0, prevPh = [0, 0, 0, 0];
-  const A = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 }, B = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 };
-  function project(x, cx, cy, scale) {
-    const cyR = Math.cos(rotY + tiltY), syR = Math.sin(rotY + tiltY), cxR = Math.cos(rotX + tiltX), sxR = Math.sin(rotX + tiltX);
-    const X = x[0] * cyR - x[2] * syR; let Z = x[0] * syR + x[2] * cyR; const Y = x[1] * cxR - Z * sxR; Z = x[1] * sxR + Z * cxR;
-    const f = 4.5 / (4.5 + Z);
-    return [cx + X * scale * f, cy + Y * scale * f, f];
-  }
-  function frame(now) {
-    const dt = Math.min(.05, (now - lastT) / 1000); lastT = now; elapsed += dt;
-    const sv = scrollY - lastScroll; lastScroll = scrollY; scrollVel += (sv - scrollVel) * .15;
-    const { from, to, k, ra, rb } = sceneAt();
-    // The box flies from the last chapter's stage to this one's and travels with it.
-    const lerp = (x, y) => x + (y - x) * k;
-    const cx = lerp(ra.left + ra.width / 2, rb.left + rb.width / 2), cy = lerp(ra.top + ra.height / 2, rb.top + rb.height / 2);
-    const scale = lerp(Math.min(ra.width, ra.height) * .4, Math.min(rb.width, rb.height) * .4);
-    const spin = SPIN[from] * (1 - k) + SPIN[to] * k;
-    if (!reduce) rotY += dt * .16 * spin + scrollVel * .0018;
-    rotX += ((PITCH[from] * (1 - k) + PITCH[to] * k) - rotX) * Math.min(1, dt * 2);
-    tiltX += ((pointer.active ? pointer.ty * .5 : 0) - tiltX) * .05;
-    tiltY += ((pointer.active ? pointer.tx * .6 : 0) - tiltY) * .05;
-    ctx.clearRect(0, 0, W, H);
-    ctx.globalCompositeOperation = 'lighter';
-    const fade = 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
-    for (const p of parts) {
-      SCENES[from](p, elapsed, A); SCENES[to](p, elapsed, B);
-      for (let q = 0; q < 3; q++) { const target = A.x[q] + (B.x[q] - A.x[q]) * k; p.p[q] += (target - p.p[q]) * settle; }
-      const a = (A.a + (B.a - A.a) * k) * fade;
-      if (a <= .01) continue;
-      const c = k < .5 ? A.c : B.c, size = A.size + (B.size - A.size) * k;
-      const [x, y, f] = project(p.p, cx, cy, scale);
-      if (f <= 0) continue;
-      if (pointer.active) { const dx = x - pointer.x, dy = y - pointer.y, d2 = dx * dx + dy * dy; if (d2 < 12100) { const d = Math.sqrt(d2) || 1, push = (1 - d / 110) * 2.6; p.d[0] += dx / d * push; p.d[1] += dy / d * push; } }
-      p.d[0] *= .9; p.d[1] *= .9;
-      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, a * (.55 + .45 * f))})`;
-      ctx.beginPath(); ctx.arc(x + p.d[0], y + p.d[1], size * f, 0, 6.2832); ctx.fill();
-    }
-    ctx.globalCompositeOperation = 'source-over';
-    // Count containers the hero scene forms, for the ticker.
-    for (let j = 0; j < 4; j++) { const per = j === 0 ? 8.5 : 4.6 + j * .9, ph = (elapsed + j * 1.7) % per; if (ph < prevPh[j]) born++; prevPh[j] = ph; }
-    tkBorn.textContent = born + 4;
-    if (!reduce) requestAnimationFrame(frame);
-  }
   const tkBorn = document.getElementById('tk-born');
-  if (reduce) { elapsed = 3; for (const p of parts) { SCENES.hero(p, elapsed, A); p.p = A.x.slice(); } frame(performance.now()); addEventListener('scroll', () => frame(performance.now()), { passive: true }); addEventListener('resize', () => frame(performance.now())); }
-  else requestAnimationFrame(frame);
+  let born = 0;
+  function makeStage(el, scene) {
+    const cv = document.createElement('canvas'); cv.setAttribute('aria-hidden', 'true'); el.appendChild(cv);
+    const ctx = cv.getContext('2d');
+    let w = 0, h = 0;
+    const size = () => { const d = Math.min(2, devicePixelRatio || 1); w = el.clientWidth; h = el.clientHeight; cv.width = w * d; cv.height = h * d; ctx.setTransform(d, 0, 0, d, 0, 0); };
+    size(); addEventListener('resize', size);
+    const pos = parts.map((p) => [p.s[0] * 3, p.s[1] * 3, p.s[2] * 3]), push = parts.map(() => [0, 0]);
+    const ptr = { x: -1e4, y: -1e4, tx: 0, ty: 0, on: false };
+    el.addEventListener('pointermove', (e) => { const r = cv.getBoundingClientRect(); ptr.x = e.clientX - r.left; ptr.y = e.clientY - r.top; ptr.tx = ptr.x / w - .5; ptr.ty = ptr.y / h - .5; ptr.on = e.pointerType === 'mouse'; });
+    el.addEventListener('pointerleave', () => { ptr.on = false; });
+    let rotY = .6, tiltX = 0, tiltY = 0, t = 0, last = 0, visible = false, started = false;
+    const prevPh = [0, 0, 0, 0], A = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 };
+    function draw(now) {
+      const dt = last ? Math.min(.05, (now - last) / 1000) : 0; last = now; t += dt;
+      if (!reduce) rotY += dt * .16 * SPIN[scene];
+      tiltX += ((ptr.on ? ptr.ty * .5 : 0) - tiltX) * .05; tiltY += ((ptr.on ? ptr.tx * .6 : 0) - tiltY) * .05;
+      const cx = w / 2, cy = h / 2, scale = Math.min(w, h) * .4, pitch = PITCH[scene] + tiltX, yaw = rotY + tiltY;
+      const cyR = Math.cos(yaw), syR = Math.sin(yaw), cxR = Math.cos(pitch), sxR = Math.sin(pitch);
+      const settle = reduce ? 1 : Math.min(1, dt * 3.2);
+      ctx.clearRect(0, 0, w, h); ctx.globalCompositeOperation = 'lighter';
+      for (let n = 0; n < parts.length; n++) {
+        const q = pos[n];
+        SCENES[scene](parts[n], t, A);
+        for (let k = 0; k < 3; k++) q[k] += (A.x[k] - q[k]) * settle;
+        if (A.a <= .01) continue;
+        const X = q[0] * cyR - q[2] * syR; let Z = q[0] * syR + q[2] * cyR; const Y = q[1] * cxR - Z * sxR; Z = q[1] * sxR + Z * cxR;
+        const f = 4.5 / (4.5 + Z); if (f <= 0) continue;
+        const x = cx + X * scale * f, y = cy + Y * scale * f, d = push[n];
+        if (ptr.on) { const dx = x - ptr.x, dy = y - ptr.y, d2 = dx * dx + dy * dy; if (d2 < 12100) { const r = Math.sqrt(d2) || 1, f2 = (1 - r / 110) * 2.6; d[0] += dx / r * f2; d[1] += dy / r * f2; } }
+        d[0] *= .9; d[1] *= .9;
+        const c = A.c; ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, A.a * (.55 + .45 * f))})`;
+        ctx.beginPath(); ctx.arc(x + d[0], y + d[1], A.size * f, 0, 6.2832); ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      if (scene === 'hero' && tkBorn) { for (let j = 0; j < 4; j++) { const per = j === 0 ? 8.5 : 4.6 + j * .9, ph = (t + j * 1.7) % per; if (ph < prevPh[j]) born++; prevPh[j] = ph; } tkBorn.textContent = born + 4; }
+      if (visible && !reduce) requestAnimationFrame(draw);
+    }
+    if (reduce) { t = 3; draw(0); addEventListener('resize', () => draw(0)); return; }
+    new IntersectionObserver(([e]) => {
+      const was = visible; visible = e.isIntersecting;
+      if (visible && !was) { if (!started) { started = true; t = 0; } last = 0; requestAnimationFrame(draw); }
+    }, { threshold: .15 }).observe(el);
+  }
+  document.querySelectorAll('[data-scene] .stage').forEach((el) => makeStage(el, el.closest('[data-scene]').dataset.scene));
 
   // ---------------- Cores: four lanes ----------------
   const lc = document.getElementById('lanes'), lx = lc.getContext('2d');
