@@ -1,9 +1,10 @@
 import type { Box } from './box';
 import { matchesBoxToken } from './crypto';
+import { offlineAfterSeconds } from './dashboard';
 import { onHeartbeat } from './fallback';
 import * as github from './github';
 import { ApiError, errorResponse, json, noContent } from './http';
-import { parse, parseHeartbeat, semverPattern, splitPaused, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
+import { parse, parseHeartbeat, semverPattern, splitPaused, type App, type BoxName, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
 import type { ApiRoute } from './routes';
 
 /** Agent major versions this Worker speaks protocol 1 with. */
@@ -169,7 +170,16 @@ async function openSession(context: Context) {
 	const scaleSet = await owned(context, name, id);
 	await context.box.assertEligible(context.app, scaleSet.repo);
 	const result = await context.box.actions(context.app, scaleSet.repo, (c) => github.openSession(c, id, owner));
+	if (result.kind === 'conflict') throw sessionExists(context, scaleSet, owner);
+	if (result.kind === 'open') context.box.store.holdSession(scaleSet.repo.id, id, result.session.sessionId, owner);
 	return sessionResponse(context, scaleSet, result, false);
+}
+
+/** Names the box whose session holds the scale set when another box that still reports opened it. */
+function sessionExists(context: Context, { repo, className, id }: OwnedScaleSet, asker: BoxName) {
+	const holder = context.box.store.sessionHolder(repo.id, id, asker, Date.now() - offlineAfterSeconds * 1000);
+	if (holder === undefined) return new ApiError('session_exists', `Another session holds scale set ${id}.`);
+	return new ApiError('session_exists', `${holder} holds the session of scale set ${id}, so it serves ${repo.name} ${className}.`, {}, { heldBy: holder });
 }
 
 async function refreshSession(context: Context, routeId: string) {
@@ -177,9 +187,12 @@ async function refreshSession(context: Context, routeId: string) {
 	const input = await body(context.request);
 	const name = field(parse.repo(input.repo), 'repo');
 	const id = field(parse.scaleSetId(input.scaleSetId), 'scaleSetId');
+	// Older agents send no owner. A session opened before the Worker kept holders gets one here.
+	const owner = input.owner === undefined ? undefined : field(parse.boxName(input.owner), 'owner');
 	const scaleSet = await owned(context, name, id);
 	await context.box.assertEligible(context.app, scaleSet.repo);
 	const result = await context.box.actions(context.app, scaleSet.repo, (c) => github.refreshSession(c, id, sessionId));
+	if (result.kind === 'open' && owner !== undefined) context.box.store.holdSession(scaleSet.repo.id, id, result.session.sessionId, owner);
 	return sessionResponse(context, scaleSet, result, true);
 }
 
@@ -188,6 +201,7 @@ async function closeSession(context: Context, routeId: string) {
 	const { repo, scaleSetId } = query(context.request);
 	const scaleSet = await owned(context, repo, scaleSetId);
 	await context.box.actions(context.app, scaleSet.repo, (c) => github.closeSession(c, scaleSetId, sessionId));
+	context.box.store.releaseSession(scaleSet.repo.id, scaleSetId, sessionId);
 	return noContent();
 }
 

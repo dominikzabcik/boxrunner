@@ -546,6 +546,12 @@ func (a *Agent) publish(s scheduler.State) {
 	for key, ss := range s.ScaleSets {
 		snap.ScaleSets = append(snap.ScaleSets, status.ScaleSet{Repo: key.Repo, Class: key.Class, Assigned: len(ss.Jobs)})
 	}
+	for key, box := range s.HeldBy {
+		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box})
+	}
+	slices.SortFunc(snap.Elsewhere, func(x, y status.Elsewhere) int {
+		return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Class, y.Class))
+	})
 	slices.SortFunc(snap.Runners, func(x, y status.Runner) int { return cmp.Compare(x.Name, y.Name) })
 	slices.SortFunc(snap.ScaleSets, func(x, y status.ScaleSet) int {
 		return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Class, y.Class))
@@ -577,6 +583,8 @@ func (a *Agent) supervise(ctx context.Context) error {
 		err error
 	}
 	running := map[scheduler.Key]context.CancelFunc{}
+	// held are the stopped listeners whose scale set another box's session holds.
+	held := map[scheduler.Key]bool{}
 	exits := make(chan exit)
 	paused := map[string]bool{}
 	sync := func() error {
@@ -625,6 +633,12 @@ func (a *Agent) supervise(ctx context.Context) error {
 				cancel()
 			}
 		}
+		for key := range held {
+			if !want[key] {
+				delete(held, key)
+				a.post(scheduler.ScaleSetGone{ScaleSet: key})
+			}
+		}
 		for key := range want {
 			if _, ok := running[key]; ok {
 				continue
@@ -646,6 +660,11 @@ func (a *Agent) supervise(ctx context.Context) error {
 		case <-a.resync:
 			err = sync()
 		case e := <-exits:
+			if worker.HeldBy(e.err) != "" {
+				held[e.key] = true
+			} else {
+				delete(held, e.key)
+			}
 			err = a.listenerExited(ctx, running, e.key, e.err)
 		case <-ctx.Done():
 		}
@@ -663,12 +682,15 @@ func (a *Agent) supervise(ctx context.Context) error {
 func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]context.CancelFunc, key scheduler.Key, err error) error {
 	running[key]()
 	delete(running, key)
+	heldBy := worker.HeldBy(err)
 	select {
-	case a.events <- scheduler.ScaleSetGone{ScaleSet: key}:
+	case a.events <- scheduler.ScaleSetGone{ScaleSet: key, HeldBy: heldBy}:
 	case <-ctx.Done():
 	}
 	switch {
 	case err == nil:
+	case heldBy != "":
+		a.Log.Info("another box's session holds the scale set; trying again within five minutes", "repo", key.Repo, "class", key.Class, "box", heldBy)
 	case worker.Fatal(err):
 		return err
 	case worker.Is(err, worker.RepoIneligible):

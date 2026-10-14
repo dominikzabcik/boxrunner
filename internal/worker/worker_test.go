@@ -113,7 +113,7 @@ func TestRequestShapes(t *testing.T) {
 	if err != nil || s != wantSession {
 		t.Errorf("OpenSession = %+v, %v", s, err)
 	}
-	if s, err := c.RefreshSession(ctx, "octo/site", 7, "5d6e"); err != nil || s != wantSession {
+	if s, err := c.RefreshSession(ctx, "octo/site", 7, "5d6e", "box-1"); err != nil || s != wantSession {
 		t.Errorf("RefreshSession = %+v, %v", s, err)
 	}
 	if err := c.CloseSession(ctx, "octo/site", 7, "5d6e"); err != nil {
@@ -129,7 +129,7 @@ func TestRequestShapes(t *testing.T) {
 	want := []request{
 		{"POST", "/v1/scalesets", "Bearer box-token", "0.1.0", `{"class":"boxrunner","repo":"octo/site"}`},
 		{"POST", "/v1/sessions", "Bearer box-token", "0.1.0", `{"owner":"box-1","repo":"octo/site","scaleSetId":7}`},
-		{"PATCH", "/v1/sessions/5d6e", "Bearer box-token", "0.1.0", `{"repo":"octo/site","scaleSetId":7}`},
+		{"PATCH", "/v1/sessions/5d6e", "Bearer box-token", "0.1.0", `{"owner":"box-1","repo":"octo/site","scaleSetId":7}`},
 		{"DELETE", "/v1/sessions/5d6e?repo=octo%2Fsite&scaleSetId=7", "Bearer box-token", "0.1.0", ""},
 		{"POST", "/v1/runners", "Bearer box-token", "0.1.0", `{"name":"box-1-boxrunner-3f9a2c","repo":"octo/site","scaleSetId":7}`},
 		{"DELETE", "/v1/runners/41?repo=octo%2Fsite&scaleSetId=7", "Bearer box-token", "0.1.0", ""},
@@ -186,6 +186,16 @@ func TestErrorCodes(t *testing.T) {
 				t.Errorf("err = %v (fatal %v); want %s (fatal %v)", err, Fatal(err), want, c.fatal)
 			}
 		})
+	}
+}
+
+// A session another box holds comes back at once, naming that box, and is not
+// a session this box left open.
+func TestSessionHeldByAnotherBox(t *testing.T) {
+	client, seen, _ := fake(t, reply{409, `{"error":"session_exists","message":"box-2 holds it","heldBy":"box-2"}`})
+	_, err := client.OpenSession(context.Background(), "octo/site", 7, "box-1")
+	if len(*seen) != 1 || HeldBy(err) != "box-2" || !Is(err, SessionExists) || client.SessionBlocked() {
+		t.Errorf("%d requests, err %v, held by %q, blocked %v", len(*seen), err, HeldBy(err), client.SessionBlocked())
 	}
 }
 

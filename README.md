@@ -152,7 +152,7 @@ Checked against each project's README on October 14, 2026. Corrections are welco
 
 - **Public repositories.** Anyone who can open a pull request could run code on your box. The Worker refuses them.
 - **macOS or Windows jobs.** boxrunner runs Linux containers.
-- **Many machines or autoscaling across hosts.** One Worker serves one box today. [GARM](https://github.com/cloudbase/garm) and [Actions Runner Controller](https://github.com/actions/actions-runner-controller) manage fleets.
+- **Many machines or autoscaling across hosts.** Several boxes can share a Worker only by splitting classes or repositories ([config](docs/config.md#several-boxes)). [GARM](https://github.com/cloudbase/garm) and [Actions Runner Controller](https://github.com/actions/actions-runner-controller) manage fleets.
 - **Untrusted code.** Jobs share the host's kernel, like all containers.
 
 ## Uninstall

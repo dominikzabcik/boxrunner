@@ -25,6 +25,7 @@ type Snapshot struct {
 	Version   string      `json:"version"`
 	Classes   []Class     `json:"classes"`
 	ScaleSets []ScaleSet  `json:"scaleSets"`
+	Elsewhere []Elsewhere `json:"elsewhere,omitempty"`
 	Runners   []Runner    `json:"runners"`
 	Image     ImageStatus `json:"image"`
 	DiskFree  int64       `json:"diskFree"`
@@ -53,6 +54,19 @@ type ScaleSet struct {
 	Repo     string `json:"repo"`
 	Class    string `json:"class"`
 	Assigned int    `json:"assigned"`
+}
+
+// Elsewhere is a repository and class this box is configured for that
+// another box serves, because that box's session holds the scale set.
+type Elsewhere struct {
+	Repo  string `json:"repo"`
+	Class string `json:"class"`
+	Box   string `json:"box"`
+}
+
+// Sentence says which box serves the repository and class, and how to fix it.
+func (e Elsewhere) Sentence() string {
+	return fmt.Sprintf("%s serves %s %s; this box takes its jobs only after %s stops. Give each box its own classes or repos (docs/config.md#several-boxes).", e.Box, e.Repo, e.Class, e.Box)
 }
 
 type Runner struct {
@@ -238,6 +252,12 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 		fmt.Fprintf(t, "%s\t%s\t%d\n", ss.Repo, ss.Class, ss.Assigned)
 	}
 	t.Flush()
+	if len(s.Elsewhere) > 0 {
+		fmt.Fprintln(w)
+	}
+	for _, e := range s.Elsewhere {
+		fmt.Fprintln(w, e.Sentence())
+	}
 
 	fmt.Fprintln(w)
 	if len(s.Runners) == 0 {

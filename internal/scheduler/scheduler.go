@@ -99,6 +99,9 @@ type Image struct {
 type State struct {
 	Classes   map[string]Class
 	ScaleSets map[Key]ScaleSet
+	// HeldBy names the other box whose session holds each scale set this box
+	// could not open.
+	HeldBy    map[Key]string
 	Runners   map[string]Runner
 	DiskFloor int64
 	DiskFree  int64
@@ -111,6 +114,7 @@ func New(cfg config.Config) State {
 	s := State{
 		Classes:   map[string]Class{},
 		ScaleSets: map[Key]ScaleSet{},
+		HeldBy:    map[Key]string{},
 		Runners:   map[string]Runner{},
 		DiskFloor: int64(cfg.DiskFloor),
 	}
@@ -297,8 +301,12 @@ type Update struct {
 	Completed []queue.JobCompleted
 }
 
-// ScaleSetGone means the agent stopped listening to a scale set.
-type ScaleSetGone struct{ ScaleSet Key }
+// ScaleSetGone means the agent stopped listening to a scale set, with HeldBy
+// set when another box's session holds it.
+type ScaleSetGone struct {
+	ScaleSet Key
+	HeldBy   string
+}
 
 // Container is one labelled container as Docker lists it.
 type Container struct {
@@ -365,6 +373,7 @@ func Apply(s State, e Event, now time.Time) State {
 	warm := Warm(s)
 	s.Runners = maps.Clone(s.Runners)
 	s.ScaleSets = maps.Clone(s.ScaleSets)
+	s.HeldBy = maps.Clone(s.HeldBy)
 	update := func(name string, f func(*Runner)) {
 		if r, ok := s.Runners[name]; ok {
 			f(&r)
@@ -393,8 +402,13 @@ func Apply(s State, e Event, now time.Time) State {
 			})
 		}
 		s.ScaleSets[e.ScaleSet] = ScaleSet{ID: e.ID, Jobs: e.Jobs}
+		delete(s.HeldBy, e.ScaleSet)
 	case ScaleSetGone:
 		delete(s.ScaleSets, e.ScaleSet)
+		delete(s.HeldBy, e.ScaleSet)
+		if e.HeldBy != "" {
+			s.HeldBy[e.ScaleSet] = e.HeldBy
+		}
 	case Observed:
 		s.Observed = true
 		s.DiskFree = e.DiskFree

@@ -29,6 +29,7 @@ func state(maxMain, maxLight int, sets map[Key]ScaleSet, runners ...Runner) Stat
 			"boxrunner-light": {Max: maxLight, Priority: config.Idle},
 		},
 		ScaleSets: sets,
+		HeldBy:    map[Key]string{},
 		Runners:   map[string]Runner{},
 		DiskFloor: 10 * gb,
 		DiskFree:  50 * gb,
@@ -398,9 +399,21 @@ func TestWarmRunnerIsReplaced(t *testing.T) {
 func TestApplyLeavesItsInputAlone(t *testing.T) {
 	before := state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7}}, Runner{Name: "r1", Phase: Starting})
 	after := Apply(before, Removed{"r1"}, at(10))
-	after = Apply(after, ScaleSetGone{siteMain}, at(10))
+	after = Apply(after, ScaleSetGone{ScaleSet: siteMain}, at(10))
 	if len(before.Runners) != 1 || len(before.ScaleSets) != 1 || len(after.Runners) != 0 || len(after.ScaleSets) != 0 {
 		t.Errorf("before %+v, after %+v", before, after)
+	}
+}
+
+// Another box's session names the scale set until this box's own opens.
+func TestHeldBy(t *testing.T) {
+	held := Apply(state(1, 2, map[Key]ScaleSet{}), ScaleSetGone{ScaleSet: siteMain, HeldBy: "box-2"}, at(1))
+	if want := map[Key]string{siteMain: "box-2"}; !reflect.DeepEqual(held.HeldBy, want) {
+		t.Errorf("HeldBy = %v; want %v", held.HeldBy, want)
+	}
+	opened := Apply(held, Update{ScaleSet: siteMain, ID: 7}, at(2))
+	if len(opened.HeldBy) != 0 || held.HeldBy[siteMain] != "box-2" {
+		t.Errorf("after the session opened HeldBy = %v, before it %v", opened.HeldBy, held.HeldBy)
 	}
 }
 

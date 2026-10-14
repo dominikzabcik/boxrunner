@@ -90,6 +90,6 @@ The Worker wakes itself with a Durable Object alarm rather than a cron trigger. 
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.
-- **Several boxes per Worker.** How GitHub spreads jobs across two scale sets with one label is untested.
+- **One label over several boxes.** Boxes can share a Worker by splitting classes or repositories. How GitHub spreads jobs across two scale sets with one label, and whether it assigns a job to a scale set whose box is down, is untested.
 - **A published image.** The box builds its image from GitHub's official runner image, so the first release depends on no image of ours.
 - **A heartbeat, a status page and fallback to GitHub's runners.** These are planned next.

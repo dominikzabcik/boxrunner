@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { scaleSetKey, type FakeGitHub } from './fake-github';
-import { agent, expectError, fakeGitHub, send, setUp, type Agent } from './harness';
+import { agent, expectError, fakeGitHub, heartbeatBody, postForm, send, setUp, time, type Agent } from './harness';
+import { setupSecret } from './secret';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -181,6 +182,75 @@ describe('sessions', () => {
 			'session_exists',
 			`Another session holds scale set ${id}.`,
 		);
+	});
+
+	it('names the other box that holds the session while that box reports, and forgets it when the session closes', async () => {
+		time('2026-10-14T10:00:00Z');
+		const { github, call } = await ready();
+		const id = await scaleSet(call);
+		const open = (owner: string) => call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner });
+		const answer = async (response: Response) => ({ status: response.status, body: await response.json() });
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		const opened = (await (await open('box-2')).json()) as { sessionId: string };
+
+		expect(await answer(await open('box-1'))).toEqual({
+			status: 409,
+			body: { error: 'session_exists', message: `box-2 holds the session of scale set ${id}, so it serves octo/site boxrunner.`, heldBy: 'box-2' },
+		});
+		const orphaned = { status: 409, body: { error: 'session_exists', message: `Another session holds scale set ${id}.` } };
+		expect(await answer(await open('box-2'))).toEqual(orphaned);
+
+		time('2026-10-14T10:02:01Z');
+		expect(await answer(await open('box-1'))).toEqual(orphaned);
+
+		time('2026-10-14T10:02:30Z');
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		expect((await call('DELETE', `/v1/sessions/${opened.sessionId}?repo=octo/site&scaleSetId=${id}`)).status).toBe(204);
+		github.sessions.set(scaleSetKey(123, id), crypto.randomUUID());
+		expect(await answer(await open('box-1'))).toEqual(orphaned);
+	});
+
+	it('learns who holds a session from a refresh that names its owner, as after a Worker upgrade', async () => {
+		time('2026-10-14T10:00:00Z');
+		const { github, call } = await ready();
+		const id = await scaleSet(call);
+		const sessionId = crypto.randomUUID();
+		github.sessions.set(scaleSetKey(123, id), sessionId);
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		const refresh = (body: Record<string, unknown>) => call('PATCH', `/v1/sessions/${sessionId}`, { repo: 'octo/site', scaleSetId: id, ...body });
+		const open = async () => {
+			const response = await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner: 'box-1' });
+			return { status: response.status, body: await response.json() };
+		};
+
+		expect((await refresh({})).status).toBe(200);
+		expect(await open()).toEqual({ status: 409, body: { error: 'session_exists', message: `Another session holds scale set ${id}.` } });
+
+		expect((await refresh({ owner: 'box-2' })).status).toBe(200);
+		expect(await open()).toEqual({
+			status: 409,
+			body: { error: 'session_exists', message: `box-2 holds the session of scale set ${id}, so it serves octo/site boxrunner.`, heldBy: 'box-2' },
+		});
+		await expectError(await refresh({ owner: 'not a box' }), 400, 'bad_request', '"owner" is missing or malformed.');
+	});
+
+	it('forgets who holds a session when setup starts over', async () => {
+		time('2026-10-14T10:00:00Z');
+		const { github, call } = await ready();
+		const id = await scaleSet(call);
+		const open = (call: Agent, owner: string) => call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner });
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		expect((await open(call, 'box-2')).status).toBe(200);
+
+		expect((await postForm('/setup/reset', { secret: setupSecret })).status).toBe(200);
+		const again = agent(await setUp(github));
+		expect((await again('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		expect(await scaleSet(again)).toBe(id);
+		const refused = await open(again, 'box-1');
+		expect({ status: refused.status, body: await refused.json() }).toEqual({
+			status: 409,
+			body: { error: 'session_exists', message: `Another session holds scale set ${id}.` },
+		});
 	});
 
 	it('refreshes and closes a session, and closing twice still answers 204', async () => {

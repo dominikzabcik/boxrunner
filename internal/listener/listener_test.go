@@ -46,8 +46,8 @@ func (w *fakeWorker) OpenSession(_ context.Context, repo string, id int64, owner
 	return w.session("s1", "t1", 1), nil
 }
 
-func (w *fakeWorker) RefreshSession(_ context.Context, repo string, id int64, session string) (worker.Session, error) {
-	w.record(fmt.Sprintf("refresh %s %d %s", repo, id, session))
+func (w *fakeWorker) RefreshSession(_ context.Context, repo string, id int64, session, owner string) (worker.Session, error) {
+	w.record(fmt.Sprintf("refresh %s %d %s %s", repo, id, session, owner))
 	if w.refreshErr != nil {
 		return worker.Session{}, w.refreshErr
 	}
@@ -144,7 +144,7 @@ func TestListenRefreshAcquireAck(t *testing.T) {
 	if want := (scheduler.Update{ScaleSet: key, ID: 7, Jobs: []time.Time{t0, t0.Add(time.Minute)}}); !reflect.DeepEqual(second, want) {
 		t.Errorf("second event = %#v", second)
 	}
-	wantCalls := []string{"open octo/site 7 box-1", "refresh octo/site 7 s1", "close octo/site 7 s1"}
+	wantCalls := []string{"open octo/site 7 box-1", "refresh octo/site 7 s1 box-1", "close octo/site 7 s1"}
 	if !reflect.DeepEqual(w.calls, wantCalls) {
 		t.Errorf("worker calls = %q", w.calls)
 	}
@@ -178,7 +178,7 @@ func TestRefreshBeforeExpiry(t *testing.T) {
 	if got := seen()[0]; got != "GET /queue/7 Bearer t2  cap=2" {
 		t.Errorf("first poll = %q; want it after a refresh", got)
 	}
-	if !reflect.DeepEqual(w.calls[:2], []string{"open octo/site 7 box-1", "refresh octo/site 7 s1"}) {
+	if !reflect.DeepEqual(w.calls[:2], []string{"open octo/site 7 box-1", "refresh octo/site 7 s1 box-1"}) {
 		t.Errorf("worker calls = %q", w.calls)
 	}
 }
@@ -192,7 +192,7 @@ func TestIneligibleRepoStops(t *testing.T) {
 	if err := <-done; err != gone {
 		t.Errorf("Run = %v; want %v", err, gone)
 	}
-	if want := []string{"open octo/site 7 box-1", "refresh octo/site 7 s1", "close octo/site 7 s1"}; !reflect.DeepEqual(w.calls, want) {
+	if want := []string{"open octo/site 7 box-1", "refresh octo/site 7 s1 box-1", "close octo/site 7 s1"}; !reflect.DeepEqual(w.calls, want) {
 		t.Errorf("worker calls = %q", w.calls)
 	}
 }
