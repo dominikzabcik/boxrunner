@@ -26,6 +26,13 @@ jobs:
           cache: false
       - run: go test ./...
       - run: scripts/build-release.sh "$GITHUB_REF_NAME"
+      # Checks what ships: a binary built with a Go release that has a known
+      # vulnerability in code it contains does not get published.
+      - name: Known vulnerabilities in the binaries
+        run: |
+          for bin in dist/boxrunner-linux-*; do
+            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary "$bin"
+          done
 
       # Sigstore attestations for private repositories need GitHub Enterprise,
       # so they start once the repository is public.
