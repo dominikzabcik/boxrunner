@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/status"
@@ -17,8 +18,11 @@ const (
 )
 
 // heartbeat reports the box's state to the Worker's dashboard until ctx ends.
+// When the classes paused on the dashboard change, it asks supervise to list
+// the repositories again, so a pause takes effect within one heartbeat.
 func (a *Agent) heartbeat(ctx context.Context) {
 	failing := false
+	var paused []string
 	for {
 		jobs, err := status.Recent(a.JobsLog, heartbeatJobs)
 		if err != nil {
@@ -31,7 +35,15 @@ func (a *Agent) heartbeat(ctx context.Context) {
 			// The scheduler has not published its first look yet.
 			err = nil
 		} else {
-			err = a.Worker.SendHeartbeat(ctx, fitHeartbeat(heartbeatBody(snap, jobs), heartbeatLimit))
+			var reply worker.HeartbeatReply
+			reply, err = a.Worker.SendHeartbeat(ctx, fitHeartbeat(heartbeatBody(snap, jobs), heartbeatLimit))
+			if err == nil && !slices.Equal(reply.Paused, paused) {
+				paused = reply.Paused
+				select {
+				case a.resync <- struct{}{}:
+				default:
+				}
+			}
 		}
 		switch {
 		case err != nil && !failing && ctx.Err() == nil:
@@ -44,7 +56,7 @@ func (a *Agent) heartbeat(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(heartbeatEvery):
+		case <-time.After(a.HeartbeatEvery):
 		}
 	}
 }

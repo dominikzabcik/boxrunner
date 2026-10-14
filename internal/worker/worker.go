@@ -109,8 +109,11 @@ type Repo struct {
 }
 
 type Repos struct {
-	Repos   []Repo   `json:"repos"`
+	Repos []Repo `json:"repos"`
+	// Classes are the classes to serve now: the Worker's classes without the paused ones.
 	Classes []string `json:"classes"`
+	// Paused are the classes paused on the dashboard. A Worker from before pausing sends none.
+	Paused []string `json:"paused"`
 }
 
 type ScaleSet struct {
@@ -201,13 +204,21 @@ type HeartbeatJob struct {
 	Finished time.Time  `json:"finished"`
 }
 
+// HeartbeatReply is the Worker's answer to a heartbeat. A Worker from before
+// pausing answers 204, which leaves it empty.
+type HeartbeatReply struct {
+	Paused []string `json:"paused"`
+}
+
 // SendHeartbeat makes one attempt: the next heartbeat follows anyway.
-func (c *Client) SendHeartbeat(ctx context.Context, hb Heartbeat) error {
+func (c *Client) SendHeartbeat(ctx context.Context, hb Heartbeat) (HeartbeatReply, error) {
+	var out HeartbeatReply
 	body, err := json.Marshal(hb)
 	if err != nil {
-		return err
+		return out, err
 	}
-	return c.once(ctx, "heartbeat", http.MethodPost, c.base.JoinPath("/v1/heartbeat").String(), body, nil)
+	err = c.once(ctx, "heartbeat", http.MethodPost, c.base.JoinPath("/v1/heartbeat").String(), body, &out)
+	return out, err
 }
 
 func (c *Client) Repos(ctx context.Context) (Repos, error) {
@@ -362,7 +373,7 @@ func (c *Client) once(ctx context.Context, call, method, u string, body []byte, 
 		}
 		return e
 	}
-	if out == nil {
+	if out == nil || resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
 	if err := json.Unmarshal(data, out); err != nil {

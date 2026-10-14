@@ -52,17 +52,40 @@ func fake(t *testing.T, replies ...reply) (*Client, *[]request, *[]time.Duration
 }
 
 func TestRepos(t *testing.T) {
-	c, seen, _ := fake(t, reply{200, `{"repos":[{"name":"octo/site","id":123}],"classes":["boxrunner","boxrunner-light"]}`})
+	c, seen, _ := fake(t, reply{200, `{"repos":[{"name":"octo/site","id":123}],"classes":["boxrunner"],"paused":["boxrunner-light"]}`})
 	got, err := c.Repos(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Repos{Repos: []Repo{{Name: "octo/site", ID: 123}}, Classes: []string{"boxrunner", "boxrunner-light"}}
+	want := Repos{Repos: []Repo{{Name: "octo/site", ID: 123}}, Classes: []string{"boxrunner"}, Paused: []string{"boxrunner-light"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %+v", got)
 	}
 	if r := (*seen)[0]; r != (request{"GET", "/v1/repos", "Bearer box-token", "0.1.0", ""}) {
 		t.Errorf("request = %+v", r)
+	}
+}
+
+func TestHeartbeatReply(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply reply
+		want  HeartbeatReply
+	}{
+		{"paused classes", reply{200, `{"paused":["boxrunner-light"]}`}, HeartbeatReply{Paused: []string{"boxrunner-light"}}},
+		{"a Worker from before pausing", reply{204, ""}, HeartbeatReply{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			client, seen, _ := fake(t, c.reply)
+			got, err := client.SendHeartbeat(context.Background(), Heartbeat{Box: "box-1"})
+			if err != nil || !reflect.DeepEqual(got, c.want) {
+				t.Errorf("SendHeartbeat = %+v, %v; want %+v", got, err, c.want)
+			}
+			if r := (*seen)[0]; r.method != "POST" || r.uri != "/v1/heartbeat" {
+				t.Errorf("request = %+v", r)
+			}
+		})
 	}
 }
 

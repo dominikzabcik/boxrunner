@@ -50,11 +50,12 @@ type Options struct {
 	Log     *slog.Logger
 
 	// Tests replace these; zero means the real paths and timings.
-	JobsLog     string
-	Socket      string
-	ReleasesURL string
-	Tick        time.Duration
-	SysboxDir   string
+	JobsLog        string
+	Socket         string
+	ReleasesURL    string
+	Tick           time.Duration
+	HeartbeatEvery time.Duration
+	SysboxDir      string
 }
 
 type Agent struct {
@@ -70,6 +71,8 @@ type Agent struct {
 	stopped chan struct{}
 	fatal   chan error
 	work    sync.WaitGroup
+	// resync asks supervise to list the repositories now, not at its next tick.
+	resync chan struct{}
 
 	// started and adoptedNone belong to the scheduler goroutine.
 	started     time.Time
@@ -92,6 +95,7 @@ func Run(ctx context.Context, o Options) error {
 	o.Socket = cmp.Or(o.Socket, layout.Socket)
 	o.ReleasesURL = cmp.Or(o.ReleasesURL, runnerimage.ReleasesLatest)
 	o.Tick = cmp.Or(o.Tick, decideEvery)
+	o.HeartbeatEvery = cmp.Or(o.HeartbeatEvery, heartbeatEvery)
 	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
 	a := &Agent{
 		Options: o,
@@ -100,6 +104,7 @@ func Run(ctx context.Context, o Options) error {
 		started: time.Now(),
 		stopped: make(chan struct{}),
 		fatal:   make(chan error, 1),
+		resync:  make(chan struct{}, 1),
 	}
 	info, err := a.Docker.Info(ctx)
 	if err != nil {
@@ -558,7 +563,9 @@ func (a *Agent) status() status.Snapshot {
 }
 
 // supervise keeps one listener per served repository and class, re-reading
-// the Worker's repositories every five minutes.
+// the Worker's repositories every five minutes and whenever a heartbeat says
+// the paused classes changed. A paused class keeps no listener, so it starts
+// no runner; its running jobs finish and new ones wait at GitHub.
 func (a *Agent) supervise(ctx context.Context) error {
 	type exit struct {
 		key scheduler.Key
@@ -566,6 +573,7 @@ func (a *Agent) supervise(ctx context.Context) error {
 	}
 	running := map[scheduler.Key]context.CancelFunc{}
 	exits := make(chan exit)
+	paused := map[string]bool{}
 	sync := func() error {
 		repos, err := a.Worker.Repos(ctx)
 		if err != nil {
@@ -579,6 +587,17 @@ func (a *Agent) supervise(ctx context.Context) error {
 		}
 		want := map[scheduler.Key]bool{}
 		for _, c := range a.Config.Classes {
+			now := slices.Contains(repos.Paused, c.Name)
+			switch {
+			case now && !paused[c.Name]:
+				a.Log.Info("class paused on the dashboard; starting no new runners for it", "class", c.Name)
+			case !now && paused[c.Name]:
+				a.Log.Info("class resumed on the dashboard", "class", c.Name)
+			}
+			paused[c.Name] = now
+			if now {
+				continue
+			}
 			if !slices.Contains(repos.Classes, c.Name) {
 				a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
 				continue
@@ -595,7 +614,9 @@ func (a *Agent) supervise(ctx context.Context) error {
 		}
 		for key, cancel := range running {
 			if !want[key] {
-				a.Log.Info("repository left the Worker's list; stopping", "repo", key.Repo, "class", key.Class)
+				if !paused[key.Class] {
+					a.Log.Info("repository left the Worker's list; stopping", "repo", key.Repo, "class", key.Class)
+				}
 				cancel()
 			}
 		}
@@ -616,6 +637,8 @@ func (a *Agent) supervise(ctx context.Context) error {
 	for err == nil && ctx.Err() == nil {
 		select {
 		case <-tick.C:
+			err = sync()
+		case <-a.resync:
 			err = sync()
 		case e := <-exits:
 			err = a.listenerExited(ctx, running, e.key, e.err)
