@@ -73,6 +73,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		add("cgroup v2", info.CgroupVersion == "2", "cgroup version %s", info.CgroupVersion)
 		add("cgroup driver", info.CgroupDriver == "systemd", "%s (boxrunner needs systemd)", info.CgroupDriver)
 		_, sysbox = info.Runtimes[layout.SysboxRuntime]
+		results = append(results, LiveRestore(info.LiveRestore, sysbox))
 		if c.ConfigErr == nil {
 			paths := []string{info.RootDir}
 			if sysbox {
@@ -139,6 +140,20 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, Elsewhere(s)...)
 	}
 	return results
+}
+
+// LiveRestore says what restarting Docker does to running jobs. It never
+// fails: install leaves live-restore off, because under Sysbox it breaks DNS
+// in the jobs that survive a restart (docs/decisions.md).
+func LiveRestore(enabled, sysbox bool) Result {
+	switch {
+	case enabled && sysbox:
+		return Result{"live-restore", true, "on; jobs under Sysbox keep running through a Docker restart but lose DNS, so drain first (docs/upgrading.md#rebooting-the-box)"}
+	case enabled:
+		return Result{"live-restore", true, "on; running jobs keep running through a Docker restart"}
+	default:
+		return Result{"live-restore", true, "off; restarting Docker stops running jobs, so drain first (docs/upgrading.md#rebooting-the-box)"}
+	}
 }
 
 // Draining fails while `boxrunner drain` keeps the agent from serving.

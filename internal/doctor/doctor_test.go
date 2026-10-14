@@ -197,6 +197,22 @@ func TestVersions(t *testing.T) {
 	}
 }
 
+func TestLiveRestore(t *testing.T) {
+	cases := []struct {
+		enabled, sysbox bool
+		want            Result
+	}{
+		{false, true, Result{"live-restore", true, "off; restarting Docker stops running jobs, so drain first (docs/upgrading.md#rebooting-the-box)"}},
+		{true, true, Result{"live-restore", true, "on; jobs under Sysbox keep running through a Docker restart but lose DNS, so drain first (docs/upgrading.md#rebooting-the-box)"}},
+		{true, false, Result{"live-restore", true, "on; running jobs keep running through a Docker restart"}},
+	}
+	for _, c := range cases {
+		if got := LiveRestore(c.enabled, c.sysbox); got != c.want {
+			t.Errorf("LiveRestore(%v, %v) = %+v, want %+v", c.enabled, c.sysbox, got, c.want)
+		}
+	}
+}
+
 func TestDraining(t *testing.T) {
 	if got := Draining(status.Snapshot{}); got != nil {
 		t.Errorf("Draining of a serving agent = %+v", got)
