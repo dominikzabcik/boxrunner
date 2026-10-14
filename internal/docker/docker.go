@@ -394,6 +394,11 @@ func (c *Client) Pull(ctx context.Context, ref string) error {
 	return streamError(resp.Body, "docker pull")
 }
 
+// Tag gives the image ref, such as name@sha256:…, the tag repo:tag.
+func (c *Client) Tag(ctx context.Context, ref, repo, tag string) error {
+	return c.call(ctx, http.MethodPost, "/images/"+ref+"/tag?"+url.Values{"repo": {repo}, "tag": {tag}}.Encode(), "", nil, nil)
+}
+
 // ImageLabels returns an image's labels, or false when the image is missing.
 func (c *Client) ImageLabels(ctx context.Context, ref string) (map[string]string, bool, error) {
 	img, ok, err := c.Image(ctx, ref)

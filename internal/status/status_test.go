@@ -169,6 +169,28 @@ FINISHED      REPOSITORY  CLASS      JOB   RESULT     QUEUED FOR  TOOK
 	}
 }
 
+func TestPrintRunnerImage(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", DiskFloor: 10e9,
+		Image: ImageStatus{
+			Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807", Latest: "2.339.0+3f9a2c0b1d4e",
+			Refused: "ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4: actions/runner published no attestation for it",
+		},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	want := `box-1  boxrunner 0.1.0  worker unknown  image 2.338.0+3f9a2c0b1d4e (latest 2.339.0+3f9a2c0b1d4e)  disk 0.0 GB free, floor 10.0 GB
+
+The job image is built from runner image sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807, whose provenance the agent verified.
+
+The agent refused a runner image whose provenance does not hold, and jobs keep the current image: ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4: actions/runner published no attestation for it
+
+CLASS`
+	if got := b.String(); !strings.HasPrefix(got, want) {
+		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
+	}
+}
+
 func TestPrintHeldClass(t *testing.T) {
 	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,

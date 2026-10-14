@@ -121,10 +121,15 @@ func hold(failures int) time.Duration {
 }
 
 type Image struct {
-	Built    string
+	Built string
+	// Digest is the runner image's that Built is built from.
+	Digest   string
 	Latest   string
 	Building bool
 	RetryAt  time.Time
+	// Refused says why the agent last refused a runner image, until a build
+	// succeeds.
+	Refused string
 }
 
 type State struct {
@@ -410,9 +415,13 @@ type Removed struct{ Runner string }
 // Busy means GitHub refused to remove the runner because it took a job.
 type Busy struct{ Runner string }
 
-type ImageBuilt struct{ Version string }
+// ImageBuilt names the job image the agent built or found, and the digest
+// of the runner image it is built from.
+type ImageBuilt struct{ Version, Digest string }
 
-type BuildFailed struct{}
+// BuildFailed reports a build that did not happen or failed. Refused says
+// why when the runner image's provenance did not hold.
+type BuildFailed struct{ Refused string }
 
 type LatestRunner struct{ Version string }
 
@@ -526,9 +535,10 @@ func Apply(s State, e Event, now time.Time) State {
 	case Busy:
 		update(e.Runner, func(r *Runner) { r.Phase, r.Since, r.TookJob = Running, now, true })
 	case ImageBuilt:
-		s.Image.Built, s.Image.Building = e.Version, false
+		s.Image.Built, s.Image.Digest, s.Image.Building, s.Image.Refused = e.Version, e.Digest, false, ""
 	case BuildFailed:
 		s.Image.Building, s.Image.RetryAt = false, now.Add(BuildRetry)
+		s.Image.Refused = cmp.Or(e.Refused, s.Image.Refused)
 	case LatestRunner:
 		s.Image.Latest = e.Version
 	case Drain:

@@ -125,6 +125,18 @@ func TestPullByDigestReportsError(t *testing.T) {
 	}
 }
 
+func TestTagByDigest(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	if err := c.Tag(context.Background(), "ghcr.io/actions/actions-runner@sha256:4ffa", "ghcr.io/actions/actions-runner", "2.338.0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*requests)[0]; got.method != "POST" || got.uri != "/v1.47/images/ghcr.io/actions/actions-runner@sha256:4ffa/tag?repo=ghcr.io%2Factions%2Factions-runner&tag=2.338.0" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
 func TestNetworkGateway(t *testing.T) {
 	c, _ := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"Name":"boxrunner","IPAM":{"Config":[{"Subnet":"fd00:1::/64","Gateway":"fd00:1::1"},{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}`)

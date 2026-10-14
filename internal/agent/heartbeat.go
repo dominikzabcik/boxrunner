@@ -69,8 +69,13 @@ func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 		Runners: []worker.HeartbeatRunner{},
 		Jobs:    []worker.HeartbeatJob{},
 	}
-	if hb.Image == "" {
+	switch {
+	case hb.Image == "":
 		hb.Image = "not built"
+	case snap.Image.Digest != "":
+		// The Worker shows the image as text of up to 128 characters, so the
+		// digest rides along without a new field.
+		hb.Image += " from " + snap.Image.Digest
 	}
 	for _, c := range snap.Classes {
 		hb.Classes = append(hb.Classes, worker.HeartbeatClass{Name: c.Name, Priority: c.Priority, Max: c.Max})

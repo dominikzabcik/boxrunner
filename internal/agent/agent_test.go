@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
+	"github.com/dominikzabcik/boxrunner/internal/provenance"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
@@ -51,6 +53,8 @@ type fakeDocker struct {
 	// images are what /images/json lists; removing one takes it out.
 	images        []docker.ImageSummary
 	removedImages []string
+	// builds are the pulls and builds the agent asked for.
+	builds []string
 }
 
 // matches applies a containers/json label filter, key or key=value.
@@ -105,6 +109,8 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				return
 			}
 			io.WriteString(w, `{}`)
+		case r.Method == http.MethodPost && (path == "/build" || path == "/images/create"):
+			f.builds = append(f.builds, r.URL.RequestURI())
 		case path == "/images/json":
 			json.NewEncoder(w).Encode(f.images)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/images/"):
@@ -179,6 +185,9 @@ type fakeGitHub struct {
 	paused []string
 	// heldBy, when set, is the other box whose session holds the scale set.
 	heldBy string
+	// runner is the runner's latest release; 2.338.0 when empty. Its image
+	// has no attestation.
+	runner string
 }
 
 func (g *fakeGitHub) pause(classes ...string) {
@@ -238,7 +247,13 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 		case r.URL.Path == "/acquire":
 			fmt.Fprintf(w, `{"count":1,"value":%s}`, body)
 		case r.URL.Path == "/releases/latest":
-			http.Redirect(w, r, "/releases/tag/v2.338.0", http.StatusFound)
+			http.Redirect(w, r, "/releases/tag/v"+cmp.Or(g.runner, "2.338.0"), http.StatusFound)
+		case r.URL.Path == "/token":
+			io.WriteString(w, `{"token":"anonymous"}`)
+		case r.Method == http.MethodHead && strings.HasPrefix(r.URL.Path, "/v2/actions/actions-runner/manifests/"):
+			w.Header().Set("Docker-Content-Digest", "sha256:"+strings.Repeat("e", 64))
+		case strings.HasPrefix(r.URL.Path, "/repos/actions/runner/attestations/"):
+			http.NotFound(w, r)
 		case r.URL.Path == "/dominikzabcik/boxrunner/releases/latest":
 			http.Redirect(w, r, "/dominikzabcik/boxrunner/releases/tag/v0.2.2", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
@@ -313,6 +328,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			DrainFile:            h.drain,
 			Socket:               h.socket,
 			ReleasesURL:          srv.URL + "/releases/latest",
+			Provenance:           provenance.Checker{Registry: srv.URL, API: srv.URL},
 			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
 			Tick:                 50 * time.Millisecond,
 			HeartbeatEvery:       50 * time.Millisecond,
@@ -837,6 +853,32 @@ func TestStartRemovesSupersededImages(t *testing.T) {
 	}
 	if snap.Image.Disk != 2_980_000_000 {
 		t.Errorf("image disk use = %d, want 2980000000", snap.Image.Disk)
+	}
+}
+
+// The agent refuses a runner image without provenance: it pulls and builds
+// nothing, jobs keep the current image, and status says why.
+func TestRefusesUnattestedImage(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.github.runner = "2.339.0" })
+	var snap status.Snapshot
+	waitFor(t, "the refusal in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Refused != ""
+	})
+	h.stop(t)
+	snap.Image.Disk = 0
+	want := status.ImageStatus{
+		Built: runnerimage.Identity("2.338.0"), Latest: runnerimage.Identity("2.339.0"),
+		Refused: "ghcr.io/actions/actions-runner@sha256:" + strings.Repeat("e", 64) + ": actions/runner published no attestation for it",
+	}
+	if snap.Image != want {
+		t.Errorf("image status = %+v, want %+v", snap.Image, want)
+	}
+	h.docker.mu.Lock()
+	defer h.docker.mu.Unlock()
+	if len(h.docker.builds) != 0 {
+		t.Errorf("the agent pulled or built %q", h.docker.builds)
 	}
 }
 

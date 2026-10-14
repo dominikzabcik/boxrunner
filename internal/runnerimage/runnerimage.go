@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/dominikzabcik/boxrunner/internal/config"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,8 +18,10 @@ import (
 	"strings"
 
 	"github.com/dominikzabcik/boxrunner/image"
+	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/provenance"
 )
 
 // ReleasesLatest is the runner's latest-release page, for release.Latest.
@@ -66,19 +67,37 @@ func Identity(runnerVersion string) string {
 	return runnerVersion + "+" + hex.EncodeToString(sum[:6])
 }
 
-// Build builds the job image for an identity from Identity.
-func Build(ctx context.Context, d *docker.Client, identity string) error {
+// Build builds the job image for an identity from Identity, from the runner
+// image whose provenance check verifies, and returns that image's digest. It
+// builds nothing when the check fails, so the current job image stays.
+func Build(ctx context.Context, d *docker.Client, check provenance.Checker, identity string) (string, error) {
+	version, _, _ := strings.Cut(identity, "+")
+	digest, err := check.Check(ctx, version)
+	if err != nil {
+		return "", err
+	}
+	base := provenance.Image + "@" + digest
+	if err := d.Pull(ctx, base); err != nil {
+		return "", err
+	}
+	// A pull by digest sets no tag, and Superseded and DiskUse find runner
+	// images by their version's tag.
+	if err := d.Tag(ctx, base, provenance.Image, version); err != nil {
+		return "", err
+	}
 	buf, err := Tar()
 	if err != nil {
-		return err
+		return "", err
 	}
-	version, _, _ := strings.Cut(identity, "+")
-	return d.Build(ctx, buf, docker.BuildOptions{
+	err = d.Build(ctx, buf, docker.BuildOptions{
 		Tag:    layout.Image,
-		Args:   map[string]string{"RUNNER_VERSION": version},
-		Labels: map[string]string{layout.LabelImage: identity},
-		Pull:   true,
+		Args:   map[string]string{"RUNNER_VERSION": version, "RUNNER_DIGEST": digest},
+		Labels: map[string]string{layout.LabelImage: identity, layout.LabelDigest: digest},
 	})
+	if err != nil {
+		return "", err
+	}
+	return digest, nil
 }
 
 // Labels that tie a class image to what it was built from.
@@ -163,12 +182,9 @@ func EnsureClasses(ctx context.Context, d *docker.Client, classes []config.Class
 	return built, nil
 }
 
-// BaseRepo is the official runner image the job image is built from.
-const BaseRepo = "ghcr.io/actions/actions-runner"
-
-// baseTag matches the tags the job image's build pulls, one per runner
-// version; a tag like latest is someone else's.
-var baseTag = regexp.MustCompile(`^` + regexp.QuoteMeta(BaseRepo) + `:[0-9]+\.[0-9]+\.[0-9]+$`)
+// baseTag matches the tags Build gives the runner images it pulls, one per
+// runner version; a tag like latest is someone else's.
+var baseTag = regexp.MustCompile(`^` + regexp.QuoteMeta(provenance.Image) + `:[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func tagged(img docker.ImageSummary) bool {
 	return slices.ContainsFunc(img.RepoTags, func(t string) bool { return t != "<none>:<none>" })
@@ -194,7 +210,7 @@ func Superseded(images []docker.ImageSummary, containers []docker.Container, run
 			dangling = append(dangling, img.ID)
 		}
 		for _, tag := range img.RepoTags {
-			if baseTag.MatchString(tag) && tag != BaseRepo+":"+runnerVersion {
+			if baseTag.MatchString(tag) && tag != provenance.Image+":"+runnerVersion {
 				versions = append(versions, tag)
 			}
 		}
@@ -228,7 +244,7 @@ func DiskUse(images []docker.ImageSummary) int64 {
 		version, _, _ := strings.Cut(identity, "+")
 		if base, ok := byID[img.Labels[LabelBase]]; ok {
 			total -= base.Size
-		} else if base, ok := byTag[BaseRepo+":"+version]; ok && identity != "" {
+		} else if base, ok := byTag[provenance.Image+":"+version]; ok && identity != "" {
 			total -= base.Size
 		}
 	}
@@ -239,8 +255,8 @@ func DiskUse(images []docker.ImageSummary) int64 {
 // removed and the disk boxrunner's images use afterwards. It goes on past an
 // image Docker refuses to remove.
 func Prune(ctx context.Context, d *docker.Client) ([]string, int64, error) {
-	identity, err := Built(ctx, d)
-	if err != nil || identity == "" {
+	built, err := Built(ctx, d)
+	if err != nil || built.Identity == "" {
 		return nil, 0, cmp.Or(err, errors.New("the job image is not built yet"))
 	}
 	images, err := d.Images(ctx)
@@ -251,7 +267,7 @@ func Prune(ctx context.Context, d *docker.Client) ([]string, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	version, _, _ := strings.Cut(identity, "+")
+	version, _, _ := strings.Cut(built.Identity, "+")
 	var removed []string
 	var errs []error
 	for _, ref := range Superseded(images, containers, version) {
@@ -269,12 +285,21 @@ func Prune(ctx context.Context, d *docker.Client) ([]string, int64, error) {
 	return removed, DiskUse(images), errors.Join(errs...)
 }
 
-// Built returns the identity of the job image, or "" when there is none or it
-// predates identities, so the agent builds it again.
-func Built(ctx context.Context, d *docker.Client) (string, error) {
+// JobImage is what the job image's labels say it was built from.
+type JobImage struct {
+	// Identity is from Identity, "" when there is no job image or it predates
+	// identities, so the agent builds it again.
+	Identity string
+	// Digest is the runner image's, "" for a job image built before the
+	// agent verified the runner image's provenance.
+	Digest string
+}
+
+// Built reads the job image's labels.
+func Built(ctx context.Context, d *docker.Client) (JobImage, error) {
 	labels, ok, err := d.ImageLabels(ctx, layout.Image)
 	if err != nil || !ok {
-		return "", err
+		return JobImage{}, err
 	}
-	return labels[layout.LabelImage], nil
+	return JobImage{Identity: labels[layout.LabelImage], Digest: labels[layout.LabelDigest]}, nil
 }

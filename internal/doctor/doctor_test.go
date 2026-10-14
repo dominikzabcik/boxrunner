@@ -159,6 +159,37 @@ func TestHeld(t *testing.T) {
 	}
 }
 
+func TestRunnerImage(t *testing.T) {
+	refused := "ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4: actions/runner published no attestation for it"
+	cases := []struct {
+		name string
+		img  status.ImageStatus
+		want []Result
+	}{
+		{"no job image yet", status.ImageStatus{}, nil},
+		{
+			"verified", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807"},
+			[]Result{{"runner image", true, "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807, built by actions/runner's release workflow"}},
+		},
+		{
+			"built before the check", status.ImageStatus{Built: "2.338.0+5be01c7d2a9e"},
+			[]Result{{"runner image", false, "the job image was built before boxrunner verified the runner image's provenance; the agent rebuilds it while no normal-priority job runs"}},
+		},
+		{
+			"a newer image refused", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807", Refused: refused},
+			[]Result{
+				{"runner image", true, "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807, built by actions/runner's release workflow"},
+				{"runner image", false, "refused " + refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"},
+			},
+		},
+	}
+	for _, c := range cases {
+		if got := RunnerImage(c.img); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: RunnerImage = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestVersions(t *testing.T) {
 	upgrade := Result{"release", false, "boxrunner 0.2.2 is out and this agent is 0.2.1; upgrade with: sudo boxrunner upgrade"}
 	cases := []struct {

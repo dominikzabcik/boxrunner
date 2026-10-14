@@ -29,7 +29,7 @@ func TestTarHoldsTheContext(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r)
 		got = append(got, h.Name+" "+map[bool]string{true: "exec", false: "file"}[h.Mode == 0o755])
-		if h.Name == "Dockerfile" && !strings.Contains(string(body), "FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}") {
+		if h.Name == "Dockerfile" && !strings.Contains(string(body), "FROM ghcr.io/actions/actions-runner@${RUNNER_DIGEST}") {
 			t.Errorf("Dockerfile does not build from the official runner image")
 		}
 	}

@@ -429,8 +429,28 @@ func TestImageEvents(t *testing.T) {
 	if got := Decide(s, at(61)); !reflect.DeepEqual(got, []Action{Build{"2.329.0"}}) {
 		t.Errorf("Decide an hour later = %#v", got)
 	}
-	s = Apply(s, ImageBuilt{"2.329.0"}, at(62))
-	if want := (Image{Built: "2.329.0", Latest: "2.329.0", RetryAt: at(61)}); s.Image != want {
+	s = Apply(s, ImageBuilt{Version: "2.329.0", Digest: "sha256:4ffa"}, at(62))
+	if want := (Image{Built: "2.329.0", Digest: "sha256:4ffa", Latest: "2.329.0", RetryAt: at(61)}); s.Image != want {
+		t.Errorf("after a build: %+v", s.Image)
+	}
+}
+
+// A refusal stays until a build succeeds, so a registry that is down at the
+// next attempt does not hide it.
+func TestRefusedImage(t *testing.T) {
+	s := state(1, 2, map[Key]ScaleSet{})
+	s = Apply(s, ImageBuilt{Version: "2.329.0", Digest: "sha256:4ffa"}, at(0))
+	s = Apply(s, LatestRunner{"2.330.0"}, at(0))
+	s = Apply(s, BuildDispatched{}, at(0))
+	s = Apply(s, BuildFailed{Refused: "ghcr.io/actions/actions-runner@sha256:e549: actions/runner published no attestation for it"}, at(1))
+	s = Apply(s, BuildDispatched{}, at(61))
+	s = Apply(s, BuildFailed{}, at(62))
+	want := Image{Built: "2.329.0", Digest: "sha256:4ffa", Latest: "2.330.0", RetryAt: at(122), Refused: "ghcr.io/actions/actions-runner@sha256:e549: actions/runner published no attestation for it"}
+	if s.Image != want {
+		t.Errorf("after a refusal and a failed attempt: %+v", s.Image)
+	}
+	s = Apply(s, ImageBuilt{Version: "2.330.0", Digest: "sha256:e549"}, at(123))
+	if want := (Image{Built: "2.330.0", Digest: "sha256:e549", Latest: "2.330.0", RetryAt: at(122)}); s.Image != want {
 		t.Errorf("after a build: %+v", s.Image)
 	}
 }

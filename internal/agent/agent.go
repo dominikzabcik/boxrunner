@@ -28,6 +28,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/listener"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/provenance"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
 	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
@@ -58,6 +59,7 @@ type Options struct {
 	DrainFile      string
 	Socket         string
 	ReleasesURL    string
+	Provenance     provenance.Checker
 	Tick           time.Duration
 	HeartbeatEvery time.Duration
 	SysboxDir      string
@@ -443,13 +445,21 @@ func (a *Agent) build(ctx context.Context, version string) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	a.Log.Info("building the job image", "runner", version)
-	if err := runnerimage.Build(ctx, a.Docker, version); err != nil {
+	digest, err := runnerimage.Build(ctx, a.Docker, a.Provenance, version)
+	var refused *provenance.Refused
+	switch {
+	case errors.As(err, &refused):
+		a.Log.Error("refused the runner image because its provenance does not hold; jobs keep the current image", "runner", version, "image", refused.Ref, "reason", refused.Reason)
+		a.post(scheduler.BuildFailed{Refused: refused.Error()})
+		return
+	case err != nil:
 		a.Log.Error("building the job image failed", "runner", version, "err", err)
 		a.post(scheduler.BuildFailed{})
 		return
 	}
+	a.Log.Info("built the job image", "runner", version, "digest", digest)
 	a.ensureClasses(ctx)
-	a.post(scheduler.ImageBuilt{Version: version})
+	a.post(scheduler.ImageBuilt{Version: version, Digest: digest})
 }
 
 // ensureClasses rebuilds the class images whose job image or files changed,
@@ -551,10 +561,10 @@ func (a *Agent) checkImage(ctx context.Context) {
 	if built, err := runnerimage.Built(ctx, a.Docker); err != nil {
 		a.Log.Error("reading the job image", "err", err)
 	} else {
-		if built != "" {
+		if built.Identity != "" {
 			a.ensureClasses(ctx)
 		}
-		a.post(scheduler.ImageBuilt{Version: built})
+		a.post(scheduler.ImageBuilt{Version: built.Identity, Digest: built.Digest})
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	for {
@@ -598,7 +608,10 @@ func (a *Agent) publish(s scheduler.State) {
 	workerVersion, _ := a.Worker.WorkerVersion()
 	snap := status.Snapshot{
 		Box: a.Config.Box, Version: a.Version, Worker: workerVersion,
-		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
+		Image: status.ImageStatus{
+			Built: s.Image.Built, Digest: s.Image.Digest, Latest: s.Image.Latest, Refused: s.Image.Refused,
+			Disk: a.imageDisk.Load(),
+		},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
 		Draining: s.Draining,

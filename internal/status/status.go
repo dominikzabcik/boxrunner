@@ -125,8 +125,14 @@ type Runner struct {
 }
 
 type ImageStatus struct {
-	Built  string `json:"built"`
+	Built string `json:"built"`
+	// Digest is the runner image's that Built is built from, empty for a job
+	// image built before the agent verified the runner image's provenance.
+	Digest string `json:"digest,omitempty"`
 	Latest string `json:"latest"`
+	// Refused says why the agent last refused a runner image, until a build
+	// succeeds.
+	Refused string `json:"refused,omitempty"`
 	// Disk is what the job, class and runner images take, 0 when unknown.
 	Disk int64 `json:"disk,omitempty"`
 }
@@ -325,6 +331,12 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	}
 	if s.Draining {
 		fmt.Fprint(w, "Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n")
+	}
+	if s.Image.Digest != "" {
+		fmt.Fprintf(w, "The job image is built from runner image %s, whose provenance the agent verified.\n\n", s.Image.Digest)
+	}
+	if s.Image.Refused != "" {
+		fmt.Fprintf(w, "The agent refused a runner image whose provenance does not hold, and jobs keep the current image: %s\n\n", s.Image.Refused)
 	}
 	if s.FreshStart && now.Sub(s.Started) < strandedHint {
 		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")

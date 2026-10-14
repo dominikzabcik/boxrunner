@@ -21,6 +21,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/provenance"
 	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 )
@@ -244,7 +245,8 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		if err != nil {
 			return d, err
 		}
-		return d, runnerimage.Build(ctx, d, runnerimage.Identity(version))
+		_, err = runnerimage.Build(ctx, d, provenance.Checker{}, runnerimage.Identity(version))
+		return d, err
 	case EnableUnit:
 		return d, command("systemctl", "enable", "--now", layout.UnitName)
 	case RestartUnit:

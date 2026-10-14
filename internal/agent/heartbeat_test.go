@@ -12,14 +12,14 @@ import (
 func TestHeartbeatBody(t *testing.T) {
 	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	snap := status.Snapshot{
-		Box: "box-1", Version: "0.2.0", Latest: "0.2.2", Image: status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e"},
+		Box: "box-1", Version: "0.2.0", Latest: "0.2.2", Image: status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807"},
 		DiskFree: 26e9, DiskFloor: 10e9,
 		Classes: []status.Class{{Name: "boxrunner", Priority: "normal", Max: 1, Active: 1}},
 		Runners: []status.Runner{{Name: "box-1-boxrunner-3f9a2c", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0}},
 	}
 	jobs := []status.Job{{Runner: "box-1-boxrunner-000001", Repo: "octo/site", Class: "boxrunner", Name: "test", Result: "canceled", Finished: t0}}
 	body, _ := json.Marshal(heartbeatBody(snap, jobs))
-	want := `{"box":"box-1","version":"0.2.0","image":"2.338.0+3f9a2c0b1d4e","disk":{"free":26000000000,"floor":10000000000},` +
+	want := `{"box":"box-1","version":"0.2.0","image":"2.338.0+3f9a2c0b1d4e from sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807","disk":{"free":26000000000,"floor":10000000000},` +
 		`"classes":[{"name":"boxrunner","priority":"normal","max":1}],` +
 		`"runners":[{"name":"box-1-boxrunner-3f9a2c","repo":"octo/site","class":"boxrunner","state":"running","since":"2026-10-14T09:00:00Z"}],` +
 		`"jobs":[{"runner":"box-1-boxrunner-000001","repo":"octo/site","class":"boxrunner","name":"test","result":"canceled","queued":null,"started":null,"finished":"2026-10-14T09:00:00Z"}],"latest":"0.2.2"}`

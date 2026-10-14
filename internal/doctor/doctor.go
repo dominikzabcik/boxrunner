@@ -138,6 +138,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, Draining(s)...)
 		results = append(results, Held(s, time.Now())...)
 		results = append(results, Elsewhere(s)...)
+		results = append(results, RunnerImage(s.Image)...)
 	}
 	return results
 }
@@ -170,6 +171,23 @@ func Elsewhere(s status.Snapshot) []Result {
 	var results []Result
 	for _, e := range s.Elsewhere {
 		results = append(results, Result{"other box", false, e.Sentence()})
+	}
+	return results
+}
+
+// RunnerImage says whether the agent verified the provenance of the runner
+// image the job image is built from, and fails while it refuses a newer one.
+func RunnerImage(img status.ImageStatus) []Result {
+	var results []Result
+	switch {
+	case img.Built == "":
+	case img.Digest == "":
+		results = append(results, Result{"runner image", false, "the job image was built before boxrunner verified the runner image's provenance; the agent rebuilds it while no normal-priority job runs"})
+	default:
+		results = append(results, Result{"runner image", true, img.Digest + ", built by actions/runner's release workflow"})
+	}
+	if img.Refused != "" {
+		results = append(results, Result{"runner image", false, "refused " + img.Refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"})
 	}
 	return results
 }
