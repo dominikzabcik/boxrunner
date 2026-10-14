@@ -377,17 +377,15 @@ def flow():
     body.append(step(5, ["run exactly one job,", "then it is removed"], right, 470, anchor="end"))
 
     pulses = []
-    loop = 10
-    for i, (eid, _, color) in enumerate(edges):
-        start, end = i * 2 / loop, (i * 2 + 1.4) / loop
-        pulses.append(
-            f'<circle r="6" fill="{color}" opacity="0">'
-            f'<animateMotion dur="{loop}s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;{start:.3f};{end:.3f};1" calcMode="linear"><mpath href="#{eid}"/></animateMotion>'
-            f'<animate attributeName="opacity" dur="{loop}s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;{start:.3f};{start + 0.01:.3f};{end - 0.01:.3f};{end:.3f};1"/>'
-            f"</circle>"
-        )
+    for i, (eid, d, color) in enumerate(edges):
+        pulses.append(f'<circle class="p" r="6" fill="{color}" style="offset-path:path(\'{d}\');animation-delay:{i * 2}s"/>')
     body.append("".join(pulses))
-    svg("flow.svg", W, H, "How boxrunner gets a job onto your box", "".join(body))
+    style = (
+        ".p{opacity:0;animation:pulse 10s linear infinite}"
+        "@keyframes pulse{0%{offset-distance:0%;opacity:0}1%{opacity:1}14%{offset-distance:100%;opacity:1}15%,100%{offset-distance:100%;opacity:0}}"
+        "@media (prefers-reduced-motion:reduce){.p{animation:none}}"
+    )
+    svg("flow.svg", W, H, "How boxrunner gets a job onto your box", "".join(body), style)
 
 
 ICONS = {
@@ -406,7 +404,21 @@ def icons():
         (ART / f"icon-{name}.svg").write_text(doc)
 
 
+def terminal():
+    """Recolors svg-term's render of install.cast in the site's palette.
+
+    npx svg-term-cli@2.1.1 --in docs/art/install.cast --out docs/art/install.svg --window --width 92 --height 29 --padding 12
+    """
+    file = ART / "install.svg"
+    doc = file.read_text()
+    for theirs, ours in {"#282d35": C["night"], "#b9c0cb": C["ink"], "#a8cc8c": C["ok"], "#6f7683": C["faint"]}.items():
+        doc = doc.replace(theirs, ours)
+    doc = doc.replace('rx="5" ry="5"', 'rx="18" ry="18"')
+    file.write_text(doc)
+
+
 hero()
 bench()
 flow()
 icons()
+terminal()
