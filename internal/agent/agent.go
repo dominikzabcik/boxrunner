@@ -61,7 +61,8 @@ type Options struct {
 type Agent struct {
 	Options
 	rootDir string
-	// sysbox is whether Docker can run the jobs of classes with docker = true.
+	// sysbox is whether Docker has Sysbox's runtime, which classes with
+	// docker = true or isolation = "sysbox" need.
 	sysbox bool
 	// mirror is the registry mirror's URL for those jobs, "" when no class has Docker.
 	mirror string
@@ -112,6 +113,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 	a.rootDir = info.RootDir
 	_, a.sysbox = info.Runtimes[layout.SysboxRuntime]
+	a.Config = a.Config.ResolveIsolation(a.sysbox)
 	if err := a.converge(ctx); err != nil {
 		return err
 	}
@@ -277,8 +279,9 @@ func runnerName(box, class string) string {
 
 // Spec is the container for one runner: the class's limits, the bridge
 // network, no mounts and no Docker socket. The runner config travels in the
-// environment, never on a command line. A class with Docker runs under Sysbox
-// and starts its own daemon, which pulls through mirror when one is given.
+// environment, never on a command line. A class isolated by Sysbox runs under
+// sysbox-runc. A class with Docker also starts its own daemon, which pulls
+// through mirror when one is given.
 func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror string) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  r.Name,
@@ -301,8 +304,10 @@ func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror 
 	if class.Priority == config.Idle {
 		spec.CgroupParent = layout.IdleSlice
 	}
-	if class.Docker {
+	if class.Isolation == config.Sysbox {
 		spec.Runtime = layout.SysboxRuntime
+	}
+	if class.Docker {
 		spec.Env = append(spec.Env, layout.EnvDocker)
 		if mirror != "" {
 			spec.Env = append(spec.Env, layout.EnvMirror+"="+mirror)
@@ -602,8 +607,8 @@ func (a *Agent) supervise(ctx context.Context) error {
 				a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
 				continue
 			}
-			if c.Docker && !a.sysbox {
-				a.Log.Error("class has docker = true but Docker has no "+layout.SysboxRuntime+" runtime; run `sudo boxrunner install --docker`; not serving it", "class", c.Name)
+			if c.Isolation == config.Sysbox && !a.sysbox {
+				a.Log.Error("class needs Sysbox, for docker = true or isolation = \"sysbox\", but Docker has no "+layout.SysboxRuntime+" runtime; run `sudo boxrunner install`; not serving it", "class", c.Name)
 				continue
 			}
 			for _, r := range repos.Repos {

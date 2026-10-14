@@ -489,7 +489,7 @@ func TestSpecIdleClass(t *testing.T) {
 }
 
 func TestSpecDockerClass(t *testing.T) {
-	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true}
+	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true, Isolation: config.Sysbox}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
 	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
 	want := docker.ContainerSpec{
@@ -505,8 +505,56 @@ func TestSpecDockerClass(t *testing.T) {
 	}
 }
 
+func TestSpecSysboxClass(t *testing.T) {
+	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Isolation: config.Sysbox}
+	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
+	if got.Runtime != "sysbox-runc" || !reflect.DeepEqual(got.Env, []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}) {
+		t.Errorf("Spec runtime %q, env %q; want sysbox-runc and no Docker of the job's own", got.Runtime, got.Env)
+	}
+}
+
+// TestRuntimeFollowsIsolation starts a job of a class on boxes with and
+// without Sysbox and reads the runtime its container was created with.
+func TestRuntimeFollowsIsolation(t *testing.T) {
+	cases := []struct {
+		isolation config.Isolation
+		sysbox    bool
+		want      string
+	}{
+		{config.AutoIsolation, false, ""},
+		{config.AutoIsolation, true, "sysbox-runc"},
+		{config.Runc, true, ""},
+		{config.Sysbox, true, "sysbox-runc"},
+	}
+	// Not subtests: their longer temporary paths overflow a Unix socket's name.
+	for _, c := range cases {
+		h := startAgent(t, map[string]*container{}, nil, func(k *config.Class, d *fakeDocker) {
+			k.Isolation = c.isolation
+			if c.sysbox {
+				d.runtimes = []string{"sysbox-runc"}
+			}
+		})
+		h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
+		var host map[string]any
+		waitFor(t, "a running job container", func() bool {
+			for _, k := range h.docker.snapshot() {
+				if k.Labels["boxrunner.box"] == "box-1" && k.State == "running" {
+					host = k.Body["HostConfig"].(map[string]any)
+					return true
+				}
+			}
+			return false
+		})
+		h.stop(t)
+		if got, _ := host["Runtime"].(string); got != c.want {
+			t.Errorf("isolation %s, Sysbox installed %v: runtime = %q, want %q", c.isolation, c.sysbox, got, c.want)
+		}
+	}
+}
+
 func TestDockerClassNeedsSysbox(t *testing.T) {
-	without := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) { c.Docker = true })
+	without := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) { c.Docker, c.Isolation = true, config.Sysbox })
 	waitFor(t, "the repository list", func() bool { return len(without.github.workerCalls()) > 0 })
 	time.Sleep(300 * time.Millisecond)
 	without.stop(t)
@@ -515,7 +563,7 @@ func TestDockerClassNeedsSysbox(t *testing.T) {
 	}
 
 	with := startAgent(t, map[string]*container{}, nil, func(c *config.Class, d *fakeDocker) {
-		c.Docker = true
+		c.Docker, c.Isolation = true, config.Sysbox
 		d.runtimes = []string{"sysbox-runc"}
 	})
 	with.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)

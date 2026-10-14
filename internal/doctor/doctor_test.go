@@ -1,9 +1,12 @@
 package doctor
 
 import (
+	"errors"
 	"net/netip"
 	"reflect"
 	"testing"
+
+	"github.com/dominikzabcik/boxrunner/internal/config"
 )
 
 func TestParseProbes(t *testing.T) {
@@ -76,5 +79,60 @@ func TestDefaultGateway(t *testing.T) {
 	}
 	if _, err := DefaultGateway("Iface\tDestination\n"); err == nil || err.Error() != "no default route" {
 		t.Errorf("DefaultGateway without a default route = %v", err)
+	}
+}
+
+func TestIsolation(t *testing.T) {
+	classes := []config.Class{{Name: "boxrunner"}, {Name: "boxrunner-light", Isolation: config.Runc}, {Name: "docker", Docker: true, Isolation: config.Sysbox}}
+	cases := []struct {
+		name   string
+		sysbox bool
+		uidMap string
+		err    error
+		want   []Result
+	}{
+		{
+			name:   "root maps to an unprivileged user",
+			sysbox: true,
+			uidMap: "         0     165536      65536\r\n",
+			want: []Result{
+				{"isolation boxrunner", true, "sysbox: a job's root is uid 165536 on the host"},
+				{"isolation boxrunner-light", true, "runc, as the class asks: a job's root is root on the host"},
+				{"isolation docker", true, "sysbox: a job's root is uid 165536 on the host"},
+			},
+		},
+		{
+			name:   "root maps to root",
+			sysbox: true,
+			uidMap: "0 0 4294967295\n",
+			want: []Result{
+				{"isolation boxrunner", false, `sysbox: a job's root is not mapped to an unprivileged user on the host (uid_map "0 0 4294967295")`},
+				{"isolation boxrunner-light", true, "runc, as the class asks: a job's root is root on the host"},
+				{"isolation docker", false, `sysbox: a job's root is not mapped to an unprivileged user on the host (uid_map "0 0 4294967295")`},
+			},
+		},
+		{
+			name:   "the probe container failed",
+			sysbox: true,
+			err:    errors.New("image not found"),
+			want: []Result{
+				{"isolation boxrunner", false, "sysbox: a job container could not start under sysbox-runc: image not found"},
+				{"isolation boxrunner-light", true, "runc, as the class asks: a job's root is root on the host"},
+				{"isolation docker", false, "sysbox: a job container could not start under sysbox-runc: image not found"},
+			},
+		},
+		{
+			name: "no Sysbox on the box",
+			want: []Result{
+				{"isolation boxrunner", true, "runc: a job's root is root on the host; sudo boxrunner install --sysbox maps it to an unprivileged user"},
+				{"isolation boxrunner-light", true, "runc, as the class asks: a job's root is root on the host"},
+				{"isolation docker", false, "the class needs Sysbox, but Docker has no sysbox-runc runtime, so it gets no jobs; run sudo boxrunner install"},
+			},
+		},
+	}
+	for _, c := range cases {
+		if got := Isolation(classes, c.sysbox, c.uidMap, c.err); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: Isolation =\n%+v\nwant\n%+v", c.name, got, c.want)
+		}
 	}
 }

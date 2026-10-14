@@ -27,6 +27,6 @@ Defended, and in scope for reports:
 Not defended:
 
 - **Public repositories.** Anyone who can open a pull request can run code on a self-hosted runner. The Worker refuses public repositories; there is no switch.
-- **Kernel isolation.** Jobs share the host's kernel, as every container does. A kernel exploit escapes any container. With Docker inside jobs, Sysbox maps a job's root to an unprivileged user on the host, which narrows this but does not remove it.
+- **Kernel isolation.** Jobs share the host's kernel, as every container does. A kernel exploit escapes any container. Once Sysbox is installed (`install --sysbox` or `--docker`), every class runs under it unless it sets `isolation = "runc"`, and Sysbox maps a job's root to an unprivileged user on the host. That narrows the risk but does not remove it. Under `runc`, Docker's default runtime, a step that becomes root through the job image's `sudo` is root on the host, held back only by the container's namespaces and Docker's default capabilities.
 - **A job's own secrets.** A job can read its own `GITHUB_TOKEN`, workflow secrets and runner credentials, as on GitHub's runners.
 - **Root on the box.** Whoever is root on the box controls the box token and every job on it.

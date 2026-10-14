@@ -34,6 +34,31 @@ func (p Priority) String() string {
 	return "normal"
 }
 
+// Isolation is how a class's jobs are kept from the host.
+type Isolation int
+
+const (
+	// AutoIsolation is the class's choice when it makes none: Sysbox on a box
+	// that has it, runc otherwise. Config.ResolveIsolation settles it.
+	AutoIsolation Isolation = iota
+	// Sysbox runs jobs under sysbox-runc, where a job's root is an
+	// unprivileged user on the host.
+	Sysbox
+	// Runc runs jobs under Docker's default runtime, where a job's root is
+	// root on the host.
+	Runc
+)
+
+func (i Isolation) String() string {
+	switch i {
+	case Sysbox:
+		return "sysbox"
+	case Runc:
+		return "runc"
+	}
+	return "auto"
+}
+
 // Bytes is a size in bytes.
 type Bytes int64
 
@@ -103,8 +128,10 @@ type Class struct {
 	// Dockerfile, when set, builds Image FROM the job image; the agent
 	// rebuilds it whenever the job image or the Dockerfile's directory changes.
 	Dockerfile string
-	// Docker runs the class's jobs under Sysbox, each with its own Docker daemon.
-	Docker bool
+	// Docker gives each job its own Docker daemon. Such a class's Isolation
+	// is always Sysbox.
+	Docker    bool
+	Isolation Isolation
 }
 
 type Config struct {
@@ -155,6 +182,7 @@ type rawClass struct {
 	Warm       []string `toml:"warm"`
 	KeepFailed string   `toml:"keep_failed"`
 	Docker     bool     `toml:"docker"`
+	Isolation  string   `toml:"isolation"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -278,6 +306,21 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 	default:
 		errs = append(errs, fmt.Errorf("priority: %q must be \"normal\" or \"idle\"", rc.Priority))
 	}
+	switch rc.Isolation {
+	case "":
+		if c.Docker {
+			c.Isolation = Sysbox
+		}
+	case "sysbox":
+		c.Isolation = Sysbox
+	case "runc":
+		c.Isolation = Runc
+		if c.Docker {
+			errs = append(errs, errors.New(`isolation: "runc" cannot give jobs their own Docker; docker = true needs "sysbox"`))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("isolation: %q must be \"sysbox\" or \"runc\"", rc.Isolation))
+	}
 	if rc.Max < 1 {
 		errs = append(errs, errors.New("max: must be at least 1; remove the class to turn it off"))
 	}
@@ -331,6 +374,22 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 		c.Image = layout.Image
 	}
 	return c, errs
+}
+
+// ResolveIsolation settles the isolation of the classes that leave it unset:
+// Sysbox when the box has Sysbox's runtime, runc otherwise.
+func (c Config) ResolveIsolation(sysbox bool) Config {
+	c.Classes = slices.Clone(c.Classes)
+	for i := range c.Classes {
+		if c.Classes[i].Isolation != AutoIsolation {
+			continue
+		}
+		c.Classes[i].Isolation = Runc
+		if sysbox {
+			c.Classes[i].Isolation = Sysbox
+		}
+	}
+	return c
 }
 
 // Serves reports whether the class runs jobs of a repository.
