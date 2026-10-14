@@ -61,6 +61,12 @@ else
 	ok "release assets: none yet"
 fi
 
+# GitHub writes a test merge commit for every open pull request under the opener's
+# account email, and anyone can fetch it from refs/pull/N/merge.
+git ls-remote "https://github.com/$repo" 'refs/pull/*/merge' | while read -r _ ref; do
+	git fetch -q "https://github.com/$repo" "$ref" && git log -1 --format='%an <%ae>%n%cn <%ce>' FETCH_HEAD
+done | scan "pull request merge commits' authors"
+
 vars=$(gh variable list -R "$repo" --json name -q '.[].name' | tr '\n' ' ')
 if [ -z "$vars" ]; then ok "no repository variables (no workflow points at a self-hosted runner)"; else bad "repository variables still set: $vars"; fi
 
