@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.0
+
+**Security**
+- Two build-time dependencies with advisories are pinned to their fixed releases: sharp 0.35.5 and katex 0.18.2.
+- Every class runs under Sysbox when the box has it, so a job's root is an unprivileged user on the host instead of root (#45). `isolation = "runc"` keeps a class on Docker's default runtime, and `install --sysbox` installs Sysbox without turning on Docker in jobs. `doctor` shows the uid a job's root maps to. **Behavior change:** on a box that already has Sysbox from `install --docker`, classes without `docker = true` move to Sysbox when the agent restarts.
+- `boxrunner shell` opens a failed job's copy under the runtime the job ran under (#60).
+- Releases carry the build attestation as `boxrunner.sigstore.json`, and Dependabot keeps Go modules, Bun packages and actions current.
+
+**Upgrading**
+- `boxrunner upgrade [VERSION]` downloads a release's installer, verifies it, runs it and restarts the agent; it refuses a downgrade unless asked. Re-running the installer by hand now also restarts the agent when its binary changed, which it did not before.
+- The agent checks for a newer release once a day, and `status`, `doctor` and the dashboard say when the agent or the Worker is behind. The Worker reports its version. docs/upgrading.md covers the agent, a Deploy-button Worker and a Wrangler one.
+
+**Running unattended**
+- Opt-in fallback to GitHub's runners while the box is silent: the Worker sets the repository variable `BOXRUNNER_DOWN`, which a workflow reads in `runs-on`, and deletes it once the box has reported for two minutes (#25). It needs the App's Variables permission; docs/fallback.md.
+- A class whose runners exit before taking a job is held with exponential backoff (1 minute up to 30) instead of starting runners in a loop; `status` and `doctor` say so. Optional `max_duration` stops a job container that runs too long.
+- Superseded job, class and runner base images are removed after a rebuild and when the agent starts; `status` shows the disk boxrunner's images use.
+
+**Several boxes**
+- When two boxes serve the same repository and class, the second one says which box holds the session instead of pointing to a dead box's jobs, and `doctor` fails until each box has its own classes or repositories (#27, docs/config.md#several-boxes).
+
 ## v0.2.2
 
 **Security**
