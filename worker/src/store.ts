@@ -141,6 +141,14 @@ export class Store {
 			.toArray()[0]?.class as ClassName | undefined;
 	}
 
+	/** Repositories the Worker holds scale sets for. */
+	scaleSetRepos(): number[] {
+		return this.sql
+			.exec<{ repo_id: number }>('SELECT DISTINCT repo_id FROM repo_scale_sets')
+			.toArray()
+			.map((row) => row.repo_id);
+	}
+
 	scaleSetsOf(repoId: number): ScaleSetId[] {
 		return this.sql
 			.exec<{ id: number }>('SELECT id FROM repo_scale_sets WHERE repo_id = ?', repoId)

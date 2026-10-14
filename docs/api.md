@@ -181,6 +181,7 @@ The box token, compared in constant time. Then, on every call but `POST /v1/hear
 - The class is in `CLASSES`.
 - The scale set id belongs to that repository and was created for one of the Worker's classes.
 - Before a session opens, is refreshed or a runner is minted: the repository is still private, read fresh from GitHub. If it turned public, the Worker deletes every scale set it made for the repository and answers `410 repo_ineligible`; if deleting fails, it answers `502 github_error` and deletes on the next call. An archived repository or one the App left also gets `410 repo_ineligible`.
+- When `GET /v1/repos` reads the list fresh (at most once a minute), the Worker deletes the scale sets of every repository it holds them for and no longer serves. Where the App was removed it cannot delete them and only forgets them; any other failure waits for the next listing.
 - Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners.
 
 ## Talking to the queue

@@ -121,16 +121,44 @@ export class Box {
 		return this.memo('repos', repoListLifetime, async () => {
 			const jwt = await this.jwt(app);
 			const listed = repoFilter(this.env.REPOS);
+			const installed: Repo[] = [];
 			const served: Repo[] = [];
 			for (const installationId of await github.installationIds(jwt)) {
 				// Listing needs a token for the whole installation, so it gets metadata and nothing else.
 				const token = await github.installationToken(jwt, installationId, { metadata: 'read' });
 				for (const repo of await github.installationRepos(token)) {
-					if (repo.private && !repo.archived && listed(repo.name)) served.push({ name: repo.name, id: repo.id, installationId });
+					const found = { name: repo.name, id: repo.id, installationId };
+					installed.push(found);
+					if (repo.private && !repo.archived && listed(repo.name)) served.push(found);
 				}
 			}
+			await this.dropUnserved(app, installed, served);
 			return served;
 		});
+	}
+
+	/**
+	 * Deletes the scale sets of repositories the Worker no longer serves (public,
+	 * archived or left out of `REPOS`), so they leave the repository's runner
+	 * settings. Where the App is gone there is nothing to delete with, and a
+	 * failure waits for the next listing.
+	 */
+	private async dropUnserved(app: App, installed: Repo[], served: Repo[]) {
+		const servedIds = new Set(served.map((repo) => repo.id));
+		for (const repoId of this.store.scaleSetRepos()) {
+			if (servedIds.has(repoId)) continue;
+			const repo = installed.find((candidate) => candidate.id === repoId);
+			for (const id of this.store.scaleSetsOf(repoId)) {
+				if (repo) {
+					try {
+						await this.actions(app, repo, (connection) => github.deleteScaleSet(connection, id));
+					} catch (error) {
+						if (!(error instanceof github.GitHubError && [403, 404, 422].includes(error.status))) continue;
+					}
+				}
+				this.store.forgetScaleSet(repoId, id);
+			}
+		}
 	}
 
 	async servedRepo(app: App, name: RepoName): Promise<Repo> {

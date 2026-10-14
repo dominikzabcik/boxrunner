@@ -174,7 +174,7 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 | `POST /v1/runners` | Mint a one-job runner config for a scale set |
 | `DELETE /v1/runners/:id` | Remove a runner that has not taken a job |
 
-The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours.
+The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
 
 ## Agent commands
 
