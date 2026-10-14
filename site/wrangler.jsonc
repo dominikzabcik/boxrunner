@@ -1,0 +1,11 @@
+{
+	// Assets only: no Worker script. Not deployed yet, and no route or custom domain is set here.
+	"name": "boxrunner-site",
+	"compatibility_date": "2026-10-01",
+	"assets": {
+		"directory": "./dist",
+		// /docs/config redirects to /docs/config/, which serves docs/config/index.html.
+		"html_handling": "auto-trailing-slash",
+		"not_found_handling": "404-page"
+	}
+}

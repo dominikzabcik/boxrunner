@@ -1,0 +1,15 @@
+{
+  "name": "boxrunner-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "check": "bun check.ts",
+    "serve": "bun serve.ts"
+  },
+  "devDependencies": {
+    "marked": "18.0.14",
+    "mermaid": "11.17.2",
+    "playwright-core": "1.63.0"
+  }
+}

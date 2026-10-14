@@ -1,9 +1,33 @@
-<title>boxrunner Landing</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boxrunner · CI on the box you already pay for</title>
+<meta name="description" content="Self-hosted GitHub Actions runners on the Linux box you already pay for. Every job gets a fresh container that is gone when the job ends, and your GitHub App key never touches the box.">
+<link rel="canonical" href="https://boxrunner.zabcik.me/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="boxrunner">
+<meta property="og:title" content="boxrunner · CI on the box you already pay for">
+<meta property="og:description" content="Self-hosted GitHub Actions runners on the Linux box you already pay for. Every job gets a fresh container that is gone when the job ends, and your GitHub App key never touches the box.">
+<meta property="og:url" content="https://boxrunner.zabcik.me/">
+<meta property="og:image" content="https://boxrunner.zabcik.me/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="CI on the box you already pay for. A box drawn in particles holds four job containers.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#070a10">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 /* Layout: one dark instrument. A full-bleed particle box in the hero, then four chapters that each animate one claim, then the install line. */
+/* Each fallback face is a local font scaled to its web font's width and line metrics (measured in Chromium), so swapping fonts barely moves the text. */
+@font-face { font-family: "Bricolage Grotesque"; src: url(/fonts/bricolage-grotesque.woff2) format("woff2"); font-weight: 500 800; font-display: swap; }
+@font-face { font-family: "Geist"; src: url(/fonts/geist.woff2) format("woff2"); font-weight: 400 600; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url(/fonts/geist-mono.woff2) format("woff2"); font-weight: 400 500; font-display: swap; }
+@font-face { font-family: "Bricolage Fallback"; src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"); font-weight: 500 800; size-adjust: 91.89%; ascent-override: 101.21%; descent-override: 29.38%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Fallback"; src: local("Arial"), local("ArialMT"), local("Liberation Sans"); font-weight: 400 600; size-adjust: 101.78%; ascent-override: 98.74%; descent-override: 28.98%; line-gap-override: 0%; }
+@font-face { font-family: "Geist Mono Fallback"; src: local("Menlo"), local("Courier New"), local("Liberation Mono"); font-weight: 400 500; size-adjust: 99.66%; ascent-override: 100.84%; descent-override: 29.6%; line-gap-override: 0%; }
 :root {
   --night: #070a10;
   --deep: #0c1119;
@@ -16,9 +40,9 @@
   --idle: #f5b54a;
   --key: #ff6a3d;
   --ok: #45d48a;
-  --f-display: "Bricolage Grotesque", "Geist", system-ui, sans-serif;
-  --f-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --f-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --f-display: "Bricolage Grotesque", "Bricolage Fallback", system-ui, sans-serif;
+  --f-ui: "Geist", "Geist Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, "SFMono-Regular", Menlo, monospace;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -39,7 +63,8 @@ nav.top .row { display: flex; align-items: center; justify-content: space-betwee
 nav.top ul { display: flex; gap: clamp(12px, 3vw, 28px); list-style: none; margin: 0; padding: 0; font-size: 14px; color: var(--dim); }
 nav.top a { text-decoration: none; }
 nav.top a:hover { color: var(--ink); }
-@media (max-width: 560px) { nav.top ul li:not(:last-child) { display: none; } }
+@media (max-width: 560px) { nav.top ul li.in-page { display: none; } }
+/* Everything above this line is shared with the docs and 404 pages: build.ts cuts the stylesheet here. */
 
 /* hero */
 .hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; overflow: hidden; isolation: isolate; }
@@ -145,6 +170,7 @@ section.ch { padding-block: clamp(72px, 11vw, 140px); border-top: 1px solid var(
 .track { height: 14px; background: var(--deep); border-radius: 999px; overflow: hidden; border: 1px solid var(--rule); }
 .fill { height: 100%; width: var(--w); border-radius: 999px; background: var(--c); transform-origin: left; }
 .race .fill { transform-origin: left; }
+.fill.hosted { --w: 100%; --c: var(--faint); } .fill.proto { --w: 83%; --c: var(--idle); } .fill.ours { --w: 77%; --c: var(--normal); }
 .lane .t { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .lane .who { color: var(--dim); }
 
@@ -192,9 +218,10 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   <div class="row measure">
     <a class="mark" href="#top"><i aria-hidden="true"></i>boxrunner</a>
     <ul>
-      <li><a href="#cores">Priorities</a></li>
-      <li><a href="#key">Security</a></li>
-      <li><a href="#install">Install</a></li>
+      <li class="in-page"><a href="#cores">Priorities</a></li>
+      <li class="in-page"><a href="#key">Security</a></li>
+      <li class="in-page"><a href="#install">Install</a></li>
+      <li><a href="/docs/">Docs</a></li>
       <li><a href="https://github.com/dominikzabcik/boxrunner">GitHub</a></li>
     </ul>
   </div>
@@ -301,9 +328,9 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
         <p class="sub">Lighthouse, Playwright and CodeQL on every pull request. A 4-core ARM VPS that was already paid for now runs all of it, faster.</p>
       </div>
       <div class="race pending" id="race">
-        <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill" style="--w:100%;--c:var(--faint)"></div></div><span class="t">~15 min</span></div>
-        <div class="lane"><span class="who">first prototype</span><div class="track"><div class="fill" style="--w:83%;--c:var(--idle)"></div></div><span class="t">12.4 min</span></div>
-        <div class="lane"><span class="who">boxrunner</span><div class="track"><div class="fill" style="--w:77%;--c:var(--normal)"></div></div><span class="t">11.6 min</span></div>
+        <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill hosted"></div></div><span class="t">~15 min</span></div>
+        <div class="lane"><span class="who">first prototype</span><div class="track"><div class="fill proto"></div></div><span class="t">12.4 min</span></div>
+        <div class="lane"><span class="who">boxrunner</span><div class="track"><div class="fill ours"></div></div><span class="t">11.6 min</span></div>
       </div>
     </div>
   </section>

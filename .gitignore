@@ -7,3 +7,4 @@
 /dist/
 coverage.out
 node_modules/
+/site/dist/
