@@ -229,25 +229,25 @@ func TestPlanDocker(t *testing.T) {
 			name:    "Ubuntu 20.04",
 			desired: withDocker,
 			observe: func(o *Observed) { o.DistroVersion = "20.04" },
-			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which supports ubuntu 22.04 or newer; this box runs 20.04"},
+			want:    []string{"cannot continue: Sysbox supports ubuntu 22.04 or newer; this box runs 20.04"},
 		},
 		{
 			name:    "Debian 12 on an old kernel",
 			desired: withDocker,
 			observe: func(o *Observed) { o.Distro, o.DistroVersion, o.Kernel = "debian", "12", "5.10.0-28-amd64" },
-			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which needs Linux 5.15 or newer; this box runs 5.10.0-28-amd64"},
+			want:    []string{"cannot continue: Sysbox needs Linux 5.15 or newer; this box runs 5.10.0-28-amd64"},
 		},
 		{
 			name:    "Fedora",
 			desired: withDocker,
 			observe: func(o *Observed) { o.Distro, o.DistroVersion = "fedora", "41" },
-			want:    []string{`cannot continue: Docker inside jobs needs Sysbox, which supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs "fedora"`},
+			want:    []string{`cannot continue: Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs "fedora"`},
 		},
 		{
 			name:    "an architecture without a package",
 			desired: withDocker,
 			observe: func(o *Observed) { o.Arch = "riscv64" },
-			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which has packages for amd64 and arm64; this box is riscv64"},
+			want:    []string{"cannot continue: Sysbox has packages for amd64 and arm64; this box is riscv64"},
 		},
 	}
 	for _, c := range cases {
@@ -259,6 +259,91 @@ func TestPlanDocker(t *testing.T) {
 				t.Errorf("Plan =\n%q\nwant\n%q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestPlanSysbox(t *testing.T) {
+	withSysbox := desired
+	withSysbox.Sysbox = true
+	sysbox := "install Sysbox 0.7.1; Docker reloads its configuration and running containers keep running"
+	sysboxClass := func(o *Observed) {
+		o.Paths[layout.ConfigPath] = File{[]byte(string(o.Paths[layout.ConfigPath].Content) + "isolation = \"sysbox\"\n"), 0o644}
+	}
+	cases := []struct {
+		name    string
+		desired Desired
+		observe func(*Observed)
+		want    []string
+	}{
+		{
+			name:    "fresh box",
+			desired: withSysbox,
+			observe: func(o *Observed) { *o = fresh() },
+			want: []string{
+				"install Docker (docker.io) and start it",
+				sysbox,
+				"write /usr/local/bin/boxrunner (0755)",
+				"write /etc/systemd/system/boxrunner_idle.slice (0644)",
+				"write /etc/systemd/system/boxrunner.service (0644)",
+				"write /etc/boxrunner/config.toml (0644)",
+				"write /etc/boxrunner/token (0600)",
+				"reload systemd",
+				"create the Docker network boxrunner on bridge boxrunner0",
+				"apply the firewall rules for boxrunner0",
+				"build the job image boxrunner/runner:local",
+				"enable and start boxrunner.service",
+			},
+		},
+		{
+			name:    "installed box without Sysbox",
+			desired: withSysbox,
+			observe: func(*Observed) {},
+			want:    []string{sysbox, "restart boxrunner.service"},
+		},
+		{
+			name:    "Sysbox already installed",
+			desired: withSysbox,
+			observe: func(o *Observed) { o.Sysbox = true },
+			want:    nil,
+		},
+		{
+			name:    "a class with isolation = sysbox and no flag",
+			desired: desired,
+			observe: sysboxClass,
+			want:    []string{sysbox, "restart boxrunner.service"},
+		},
+		{
+			name:    "a class with isolation = sysbox on Fedora",
+			desired: desired,
+			observe: func(o *Observed) {
+				sysboxClass(o)
+				o.Distro, o.DistroVersion = "fedora", "41"
+			},
+			want: []string{`cannot continue: Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs "fedora"`},
+		},
+		{
+			name:    "no flag on a box Sysbox does not support",
+			desired: desired,
+			observe: func(o *Observed) { o.Distro, o.DistroVersion = "fedora", "41" },
+			want:    nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := installed()
+			c.observe(&o)
+			steps := Plan(c.desired, o)
+			if got := names(steps); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Plan =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+
+	// --sysbox leaves Docker inside jobs off in a new config.
+	steps := Plan(withSysbox, fresh())
+	cfg, err := config.Parse(steps[5].(WriteFile).Content, "unused")
+	if err != nil || len(cfg.Classes) != 2 || cfg.Classes[0].Docker || cfg.Classes[1].Docker || cfg.Classes[0].Isolation != config.AutoIsolation {
+		t.Errorf("new config = %+v, %v", cfg.Classes, err)
 	}
 }
 

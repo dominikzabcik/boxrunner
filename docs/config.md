@@ -54,13 +54,25 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `keep_failed` | none | Keeps a failed job's container this long, like `15m`, so `sudo boxrunner shell` can open a shell in a copy of it with the workspace as the job left it. At most `24h`. Kept containers do not count toward `max`. |
 | `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. |
 | `warm` | none | Keeps one idle runner of this class ready for each of these repositories, as `["owner/name", …]`, so their jobs skip the cold start. Each must be one the class serves. A warm runner counts toward `max` and is never removed for being idle; when it takes a job, another starts once no other job is waiting for the place. Name fewer repositories than `max`, unless `repos` lists only warm repositories, so the class's other repositories always have a place. |
-| `docker` | `false` | Gives each job its own Docker daemon; see below. |
+| `isolation` | `sysbox` when Docker has Sysbox's runtime, else `runc` | How the class's jobs are kept from the box; see below. |
+| `docker` | `false` | Gives each job its own Docker daemon; see below. Needs `isolation = "sysbox"`, which it implies. |
 
 Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
 
+## Isolation
+
+A job starts as root, and the job image gives `runner` passwordless `sudo`, so any step can become root inside its container. The class's `isolation` decides what that root is on the box:
+
+- `sysbox` runs the job under Sysbox's `sysbox-runc` runtime, where root inside the container is an unprivileged user on the box.
+- `runc` runs the job under Docker's default runtime, where root inside the container is root on the box, held back by the container's namespaces and Docker's default capabilities.
+
+A class that does not set `isolation` uses `sysbox` when Docker has the `sysbox-runc` runtime and `runc` otherwise. `sudo boxrunner install --sysbox` installs Sysbox without giving jobs Docker, and `--docker` installs it too. Install then restarts the agent, and from then on such classes start their jobs under Sysbox. A class that sets `isolation = "sysbox"` makes `install` add Sysbox, and the agent does not serve it while Docker has no `sysbox-runc` runtime; it logs why. `isolation = "runc"` keeps a class on Docker's default runtime on a box with Sysbox. `sudo boxrunner doctor` shows each class's isolation and, under Sysbox, the host uid that a job's root maps to.
+
+Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer on Linux 5.15 or newer, on amd64 and arm64. Docker keeps running while Sysbox installs: install first writes Docker's current bridge address and address pools into `/etc/docker/daemon.json`, so Sysbox's package only makes Docker reload its configuration.
+
 ## Docker inside jobs
 
-With `docker = true`, a class's jobs can use `services:`, `container:` jobs, Docker container actions and `docker build`. It needs Sysbox, which `sudo boxrunner install --docker` installs, as does any `install` while a class has `docker = true`. A new config written with `--docker` turns `docker` on for both classes. Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer on Linux 5.15 or newer, on amd64 and arm64. Docker keeps running while Sysbox installs: install first writes Docker's current bridge address and address pools into `/etc/docker/daemon.json`, so Sysbox's package only makes Docker reload its configuration.
+With `docker = true`, a class's jobs can use `services:`, `container:` jobs, Docker container actions and `docker build`. It needs Sysbox, which `sudo boxrunner install --docker` installs, as does any `install` while a class has `docker = true`. A new config written with `--docker` turns `docker` on for both classes.
 
 Each job runs under Sysbox's `sysbox-runc` runtime, where root inside the container is an unprivileged user on the box, and starts its own Docker daemon before the runner. The job's Docker shares the class's CPU, memory and process limits and its priority, and the firewall applies to the containers it starts. The agent does not serve a class with `docker = true` while Docker has no `sysbox-runc` runtime; it logs why.
 

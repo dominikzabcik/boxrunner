@@ -57,6 +57,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		add("config", true, "%s, box %s, %d classes", layout.ConfigPath, c.Config.Box, len(c.Config.Classes))
 	}
 
+	sysbox := false
 	d, err := docker.Dial(ctx, layout.DockerSocket)
 	if err != nil {
 		add("docker", false, "%v", err)
@@ -66,9 +67,10 @@ func (c Checks) All(ctx context.Context) []Result {
 		add("docker", true, "Docker %s, API %s", info.ServerVersion, d.API)
 		add("cgroup v2", info.CgroupVersion == "2", "cgroup version %s", info.CgroupVersion)
 		add("cgroup driver", info.CgroupDriver == "systemd", "%s (boxrunner needs systemd)", info.CgroupDriver)
+		_, sysbox = info.Runtimes[layout.SysboxRuntime]
 		if c.ConfigErr == nil {
 			paths := []string{info.RootDir}
-			if _, ok := info.Runtimes[layout.SysboxRuntime]; ok {
+			if sysbox {
 				paths = append(paths, layout.SysboxDir)
 			}
 			free, path, err := disk.Lowest(paths...)
@@ -90,6 +92,9 @@ func (c Checks) All(ctx context.Context) []Result {
 
 	if d != nil {
 		results = append(results, c.probe(ctx, d)...)
+		if c.ConfigErr == nil {
+			results = append(results, isolation(ctx, d, c.Config.Classes, sysbox)...)
+		}
 		if withDocker {
 			results = append(results, dockerInJobs(ctx, d, rules.Mirror)...)
 		}
@@ -204,6 +209,75 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	blocked("metadata", "169.254.169.254")
 	add("github", codes["github"] == 0, "github.com:443 from a job container (exit %d)", codes["github"])
 	return results
+}
+
+// isolation starts a job container under sysbox-runc when a class runs its
+// jobs there, reads which host uid the job's root is, and judges each class.
+func isolation(ctx context.Context, d *docker.Client, classes []config.Class, sysbox bool) []Result {
+	resolved := config.Config{Classes: classes}.ResolveIsolation(sysbox).Classes
+	if !sysbox || !slices.ContainsFunc(resolved, func(k config.Class) bool { return k.Isolation == config.Sysbox }) {
+		return Isolation(classes, sysbox, "", nil)
+	}
+	const name = "boxrunner-doctor-sysbox"
+	d.Remove(ctx, name)
+	id, err := d.Create(ctx, docker.ContainerSpec{
+		Name: name, Image: layout.Image, Cmd: []string{"cat", "/proc/self/uid_map"}, Tty: true,
+		Runtime: layout.SysboxRuntime, CgroupParent: layout.IdleSlice, Network: layout.Network, NanoCPUs: 1e9, Memory: 256 << 20, PidsLimit: 64,
+	})
+	if err == nil {
+		defer d.Remove(context.WithoutCancel(ctx), id)
+		err = d.Start(ctx, id)
+	}
+	if err == nil {
+		_, err = d.Wait(ctx, id)
+	}
+	logs := ""
+	if err == nil {
+		logs, err = d.Logs(ctx, id)
+	}
+	return Isolation(classes, sysbox, logs, err)
+}
+
+// Isolation judges how each class keeps its jobs from the host. classes are
+// as the config file sets them, sysbox says whether Docker lists sysbox-runc, and
+// uidMap is /proc/self/uid_map as a job container under sysbox-runc read it,
+// or why that container could not run.
+func Isolation(classes []config.Class, sysbox bool, uidMap string, probeErr error) []Result {
+	var results []Result
+	resolved := config.Config{Classes: classes}.ResolveIsolation(sysbox).Classes
+	for i, class := range resolved {
+		r := Result{Name: "isolation " + class.Name}
+		switch {
+		case class.Isolation == config.Sysbox && !sysbox:
+			r.Detail = "the class needs Sysbox, but Docker has no " + layout.SysboxRuntime + " runtime, so it gets no jobs; run sudo boxrunner install"
+		case class.Isolation == config.Sysbox && probeErr != nil:
+			r.Detail = fmt.Sprintf("sysbox: a job container could not start under %s: %v", layout.SysboxRuntime, probeErr)
+		case class.Isolation == config.Sysbox:
+			if uid, ok := rootOnHost(uidMap); ok && uid != 0 {
+				r.OK, r.Detail = true, fmt.Sprintf("sysbox: a job's root is uid %d on the host", uid)
+			} else {
+				r.Detail = fmt.Sprintf("sysbox: a job's root is not mapped to an unprivileged user on the host (uid_map %q)", strings.TrimSpace(uidMap))
+			}
+		case classes[i].Isolation == config.Runc:
+			r.OK, r.Detail = true, `runc, as the class asks: a job's root is root on the host`
+		default:
+			r.OK, r.Detail = true, "runc: a job's root is root on the host; sudo boxrunner install --sysbox maps it to an unprivileged user"
+		}
+		results = append(results, r)
+	}
+	return results
+}
+
+// rootOnHost reads a uid_map and returns the host uid that uid 0 maps to.
+func rootOnHost(uidMap string) (int64, bool) {
+	for _, line := range strings.Split(strings.ReplaceAll(uidMap, "\r", ""), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 3 && f[0] == "0" {
+			uid, err := strconv.ParseInt(f[1], 10, 64)
+			return uid, err == nil
+		}
+	}
+	return 0, false
 }
 
 // dockerScript runs as the runner user in a job container with Docker and

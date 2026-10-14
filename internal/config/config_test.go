@@ -73,7 +73,7 @@ docker = true
 		DiskFloor: 20_000_000_000,
 		Classes: []Class{
 			{Name: "boxrunner", NanoCPUs: 4_000_000_000, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local"},
-			{Name: "boxrunner-light", NanoCPUs: 1_500_000_000, Memory: 2560 << 20, Pids: 512, Shm: 256 << 20, Priority: Idle, Max: 3, Image: "boxrunner/runner-node:local", Docker: true},
+			{Name: "boxrunner-light", NanoCPUs: 1_500_000_000, Memory: 2560 << 20, Pids: 512, Shm: 256 << 20, Priority: Idle, Max: 3, Image: "boxrunner/runner-node:local", Docker: true, Isolation: Sysbox},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -192,8 +192,8 @@ func TestDefaultWithDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Class{
-		{Name: "boxrunner", NanoCPUs: 4e9, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local", Docker: true},
-		{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 3 << 30, Pids: 4096, Shm: 1 << 30, Priority: Idle, Max: 2, Image: "boxrunner/runner:local", Docker: true},
+		{Name: "boxrunner", NanoCPUs: 4e9, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local", Docker: true, Isolation: Sysbox},
+		{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 3 << 30, Pids: 4096, Shm: 1 << 30, Priority: Idle, Max: 2, Image: "boxrunner/runner:local", Docker: true, Isolation: Sysbox},
 	}
 	if !reflect.DeepEqual(got.Classes, want) {
 		t.Errorf("Default with docker parsed to\n%+v\nwant\n%+v", got.Classes, want)
@@ -243,6 +243,68 @@ dockerfile = "/etc/boxrunner/images/web/../web/Dockerfile"
 		_, err := Parse([]byte("worker = \"https://w.example.dev\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"+file+"\n"), "box")
 		if err == nil || err.Error() != want {
 			t.Errorf("Parse(%s) error = %v\nwant %s", file, err, want)
+		}
+	}
+}
+
+func TestIsolation(t *testing.T) {
+	cfg, err := Parse([]byte(`worker = "https://w.example.dev"
+box = "b"
+[[class]]
+name = "auto"
+cpus = 1
+memory = "1GiB"
+max = 1
+[[class]]
+name = "runc"
+cpus = 1
+memory = "1GiB"
+max = 1
+isolation = "runc"
+[[class]]
+name = "sysbox"
+cpus = 1
+memory = "1GiB"
+max = 1
+isolation = "sysbox"
+[[class]]
+name = "docker"
+cpus = 1
+memory = "1GiB"
+max = 1
+docker = true
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolation := func(c Config) []string {
+		var out []string
+		for _, k := range c.Classes {
+			out = append(out, k.Name+" "+k.Isolation.String())
+		}
+		return out
+	}
+	if got, want := isolation(cfg), []string{"auto auto", "runc runc", "sysbox sysbox", "docker sysbox"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("parsed isolation = %q, want %q", got, want)
+	}
+	if got, want := isolation(cfg.ResolveIsolation(true)), []string{"auto sysbox", "runc runc", "sysbox sysbox", "docker sysbox"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("on a box with Sysbox = %q, want %q", got, want)
+	}
+	if got, want := isolation(cfg.ResolveIsolation(false)), []string{"auto runc", "runc runc", "sysbox sysbox", "docker sysbox"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("on a box without Sysbox = %q, want %q", got, want)
+	}
+	if cfg.Classes[0].Isolation != AutoIsolation {
+		t.Errorf("ResolveIsolation changed the config it was called on: %s", cfg.Classes[0].Isolation)
+	}
+
+	head := "worker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	for lines, want := range map[string]string{
+		`isolation = "gvisor"`:                `isolation: "gvisor" must be "sysbox" or "runc"`,
+		"isolation = \"runc\"\ndocker = true": `isolation: "runc" cannot give jobs their own Docker; docker = true needs "sysbox"`,
+	} {
+		_, err := Parse([]byte(head+lines+"\n"), "")
+		if want = "config:\nclass \"web\": " + want; err == nil || err.Error() != want {
+			t.Errorf("Parse(%s) error = %v\nwant %s", lines, err, want)
 		}
 	}
 }

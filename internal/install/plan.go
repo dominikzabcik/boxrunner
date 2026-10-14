@@ -33,6 +33,8 @@ type Desired struct {
 	// Docker installs Sysbox so jobs can run Docker, and gives a new config's
 	// classes docker = true.
 	Docker bool
+	// Sysbox installs Sysbox, so classes that leave isolation unset run under it.
+	Sysbox bool
 }
 
 type File struct {
@@ -173,14 +175,14 @@ func sysboxProblem(o Observed) string {
 	first, ok := oldest[o.Distro]
 	switch {
 	case !ok:
-		return fmt.Sprintf("Docker inside jobs needs Sysbox, which supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs %q", o.Distro)
+		return fmt.Sprintf("Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs %q", o.Distro)
 	case !atLeast(o.DistroVersion, first):
-		return fmt.Sprintf("Docker inside jobs needs Sysbox, which supports %s %s or newer; this box runs %s", o.Distro, first, o.DistroVersion)
+		return fmt.Sprintf("Sysbox supports %s %s or newer; this box runs %s", o.Distro, first, o.DistroVersion)
 	case !atLeast(o.Kernel, "5.15"):
-		return fmt.Sprintf("Docker inside jobs needs Sysbox, which needs Linux 5.15 or newer; this box runs %s", o.Kernel)
+		return fmt.Sprintf("Sysbox needs Linux 5.15 or newer; this box runs %s", o.Kernel)
 	}
 	if _, ok := sysboxPackages[o.Arch]; !ok {
-		return fmt.Sprintf("Docker inside jobs needs Sysbox, which has packages for amd64 and arm64; this box is %s", o.Arch)
+		return fmt.Sprintf("Sysbox has packages for amd64 and arm64; this box is %s", o.Arch)
 	}
 	return ""
 }
@@ -255,10 +257,12 @@ func Plan(d Desired, o Observed) []Step {
 	if cfgErr != nil {
 		block("%v", cfgErr)
 	}
-	// A class with docker = true needs Sysbox, whether or not --docker asked,
-	// and its jobs pull through the registry mirror.
+	// A class with docker = true or isolation = "sysbox" needs Sysbox,
+	// whether or not a flag asked. Jobs with Docker pull through the registry
+	// mirror.
 	wantMirror := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker })
-	sysbox := !o.Sysbox && (d.Docker || wantMirror)
+	needSysbox := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Isolation == config.Sysbox })
+	sysbox := !o.Sysbox && (d.Docker || d.Sysbox || needSysbox)
 	if problem := sysboxProblem(o); sysbox && problem != "" {
 		block("%s", problem)
 	}
