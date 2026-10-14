@@ -189,6 +189,16 @@ func TestErrorCodes(t *testing.T) {
 	}
 }
 
+// A session another box holds comes back at once, naming that box, and is not
+// a session this box left open.
+func TestSessionHeldByAnotherBox(t *testing.T) {
+	client, seen, _ := fake(t, reply{409, `{"error":"session_exists","message":"box-2 holds it","heldBy":"box-2"}`})
+	_, err := client.OpenSession(context.Background(), "octo/site", 7, "box-1")
+	if len(*seen) != 1 || HeldBy(err) != "box-2" || !Is(err, SessionExists) || client.SessionBlocked() {
+		t.Errorf("%d requests, err %v, held by %q, blocked %v", len(*seen), err, HeldBy(err), client.SessionBlocked())
+	}
+}
+
 func TestNotFoundMeansGone(t *testing.T) {
 	c, _, _ := fake(t, reply{404, errorBody("not_found")})
 	if err := c.RemoveRunner(context.Background(), "octo/site", 7, 41); err != nil {

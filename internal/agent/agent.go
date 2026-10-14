@@ -546,6 +546,12 @@ func (a *Agent) publish(s scheduler.State) {
 	for key, ss := range s.ScaleSets {
 		snap.ScaleSets = append(snap.ScaleSets, status.ScaleSet{Repo: key.Repo, Class: key.Class, Assigned: len(ss.Jobs)})
 	}
+	for key, box := range s.HeldBy {
+		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box})
+	}
+	slices.SortFunc(snap.Elsewhere, func(x, y status.Elsewhere) int {
+		return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Class, y.Class))
+	})
 	slices.SortFunc(snap.Runners, func(x, y status.Runner) int { return cmp.Compare(x.Name, y.Name) })
 	slices.SortFunc(snap.ScaleSets, func(x, y status.ScaleSet) int {
 		return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Class, y.Class))
@@ -663,12 +669,15 @@ func (a *Agent) supervise(ctx context.Context) error {
 func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]context.CancelFunc, key scheduler.Key, err error) error {
 	running[key]()
 	delete(running, key)
+	heldBy := worker.HeldBy(err)
 	select {
-	case a.events <- scheduler.ScaleSetGone{ScaleSet: key}:
+	case a.events <- scheduler.ScaleSetGone{ScaleSet: key, HeldBy: heldBy}:
 	case <-ctx.Done():
 	}
 	switch {
 	case err == nil:
+	case heldBy != "":
+		a.Log.Info("another box's session holds the scale set; trying again within five minutes", "repo", key.Repo, "class", key.Class, "box", heldBy)
 	case worker.Fatal(err):
 		return err
 	case worker.Is(err, worker.RepoIneligible):

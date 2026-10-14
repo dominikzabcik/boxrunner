@@ -24,6 +24,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
 
@@ -124,6 +125,22 @@ func (c Checks) All(ctx context.Context) []Result {
 				}
 			}
 		}
+	}
+	// A stopped agent has no sessions to report; the other checks say what is wrong.
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
+		results = append(results, Elsewhere(s)...)
+	}
+	return results
+}
+
+// Elsewhere fails once for every repository and class the running agent
+// cannot serve because another box's session holds the scale set.
+func Elsewhere(s status.Snapshot) []Result {
+	var results []Result
+	for _, e := range s.Elsewhere {
+		results = append(results, Result{"other box", false, e.Sentence()})
 	}
 	return results
 }

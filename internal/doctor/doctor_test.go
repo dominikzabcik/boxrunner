@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
+	"github.com/dominikzabcik/boxrunner/internal/status"
 )
 
 func TestParseProbes(t *testing.T) {
@@ -134,5 +135,16 @@ func TestIsolation(t *testing.T) {
 		if got := Isolation(classes, c.sysbox, c.uidMap, c.err); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: Isolation =\n%+v\nwant\n%+v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestElsewhere(t *testing.T) {
+	snap := status.Snapshot{
+		ScaleSets: []status.ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
+		Elsewhere: []status.Elsewhere{{Repo: "octo/docs", Class: "boxrunner", Box: "box-2"}},
+	}
+	want := []Result{{"other box", false, "box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. Give each box its own classes or repos (docs/config.md#several-boxes)."}}
+	if got := Elsewhere(snap); !reflect.DeepEqual(got, want) {
+		t.Errorf("Elsewhere =\n%+v\nwant\n%+v", got, want)
 	}
 }

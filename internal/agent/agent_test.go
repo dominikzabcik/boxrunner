@@ -159,6 +159,8 @@ type fakeGitHub struct {
 	busy map[string]bool
 	// paused are the classes paused on the dashboard.
 	paused []string
+	// heldBy, when set, is the other box whose session holds the scale set.
+	heldBy string
 }
 
 func (g *fakeGitHub) pause(classes ...string) {
@@ -188,6 +190,9 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			json.NewEncoder(w).Encode(map[string]any{"repos": []map[string]any{{"name": "octo/site", "id": 123}}, "classes": serving, "paused": paused})
 		case r.URL.Path == "/v1/scalesets":
 			io.WriteString(w, `{"id":7,"name":"boxrunner"}`)
+		case r.URL.Path == "/v1/sessions" && g.heldBy != "":
+			w.WriteHeader(409)
+			fmt.Fprintf(w, `{"error":"session_exists","message":"%s holds it","heldBy":%q}`, g.heldBy, g.heldBy)
 		case r.URL.Path == "/v1/sessions":
 			io.WriteString(w, session)
 		case strings.HasPrefix(r.URL.Path, "/v1/sessions/"):
@@ -248,8 +253,8 @@ type harness struct {
 }
 
 // startAgent runs the agent with one class; change may adjust the class and
-// the fake Docker before the agent starts.
-func startAgent(t *testing.T, containers map[string]*container, busy map[string]bool, change ...func(*config.Class, *fakeDocker)) *harness {
+// the fakes before the agent starts.
+func startAgent(t *testing.T, containers map[string]*container, busy map[string]bool, change ...func(*config.Class, *harness)) *harness {
 	h := &harness{
 		docker: &fakeDocker{containers: containers, volumes: map[string]bool{}},
 		github: &fakeGitHub{queue: make(chan string, 8), busy: busy},
@@ -262,7 +267,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		Classes: []config.Class{{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Max: 1, Image: "boxrunner/runner:local"}},
 	}
 	for _, f := range change {
-		f(&cfg.Classes[0], h.docker)
+		f(&cfg.Classes[0], h)
 	}
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
@@ -450,7 +455,7 @@ func TestRestartAdoptsContainers(t *testing.T) {
 // A warm repository gets a runner before any job, status marks it, and
 // stopping the agent removes it like any runner without a job.
 func TestWarmRunner(t *testing.T) {
-	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) {
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *harness) {
 		c.Repos, c.Warm = []string{"octo/site"}, []string{"octo/site"}
 	})
 	var snap status.Snapshot
@@ -468,6 +473,39 @@ func TestWarmRunner(t *testing.T) {
 	}
 	if calls := h.github.workerCalls(); !slices.Contains(calls, "DELETE /v1/runners/41?repo=octo%2Fsite&scaleSetId=7") {
 		t.Errorf("worker calls = %q", calls)
+	}
+}
+
+// A scale set another box's session holds shows in status as that box's, the
+// agent does not keep asking for it, and status does not point to replacing a
+// box.
+func TestScaleSetHeldByAnotherBox(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.github.heldBy = "box-2"
+		if err := os.WriteFile(h.jobs, []byte(`{"repo":"octo/site","class":"boxrunner"}`+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var snap status.Snapshot
+	waitFor(t, "the other box in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && len(snap.Elsewhere) > 0
+	})
+	time.Sleep(300 * time.Millisecond)
+	h.stop(t)
+	want := []status.Elsewhere{{Repo: "octo/site", Class: "boxrunner", Box: "box-2"}}
+	if !reflect.DeepEqual(snap.Elsewhere, want) || snap.FreshStart || len(snap.ScaleSets) != 0 {
+		t.Errorf("status = %+v", snap)
+	}
+	opened := 0
+	for _, c := range h.github.workerCalls() {
+		if strings.HasPrefix(c, "POST /v1/sessions ") {
+			opened++
+		}
+	}
+	if opened != 1 {
+		t.Errorf("%d session requests; want 1 until the next repository check", opened)
 	}
 }
 
@@ -529,10 +567,10 @@ func TestRuntimeFollowsIsolation(t *testing.T) {
 	}
 	// Not subtests: their longer temporary paths overflow a Unix socket's name.
 	for _, c := range cases {
-		h := startAgent(t, map[string]*container{}, nil, func(k *config.Class, d *fakeDocker) {
+		h := startAgent(t, map[string]*container{}, nil, func(k *config.Class, h *harness) {
 			k.Isolation = c.isolation
 			if c.sysbox {
-				d.runtimes = []string{"sysbox-runc"}
+				h.docker.runtimes = []string{"sysbox-runc"}
 			}
 		})
 		h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
@@ -554,7 +592,7 @@ func TestRuntimeFollowsIsolation(t *testing.T) {
 }
 
 func TestDockerClassNeedsSysbox(t *testing.T) {
-	without := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) { c.Docker, c.Isolation = true, config.Sysbox })
+	without := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *harness) { c.Docker, c.Isolation = true, config.Sysbox })
 	waitFor(t, "the repository list", func() bool { return len(without.github.workerCalls()) > 0 })
 	time.Sleep(300 * time.Millisecond)
 	without.stop(t)
@@ -562,9 +600,9 @@ func TestDockerClassNeedsSysbox(t *testing.T) {
 		t.Errorf("without Sysbox, worker calls = %q; want only the repository list", got)
 	}
 
-	with := startAgent(t, map[string]*container{}, nil, func(c *config.Class, d *fakeDocker) {
+	with := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) {
 		c.Docker, c.Isolation = true, config.Sysbox
-		d.runtimes = []string{"sysbox-runc"}
+		h.docker.runtimes = []string{"sysbox-runc"}
 	})
 	with.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
 	var body map[string]any

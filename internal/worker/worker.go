@@ -66,6 +66,8 @@ type Error struct {
 	Code    Code
 	Message string
 	Call    string
+	// HeldBy is the other box whose session holds the scale set, with SessionExists.
+	HeldBy string
 }
 
 func (e *Error) Error() string {
@@ -77,6 +79,10 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) handling() handling {
+	if e.HeldBy != "" {
+		// Another box serves the scale set; the caller tries again later.
+		return giveBack
+	}
 	if h, ok := handlings[e.Code]; ok {
 		return h
 	}
@@ -90,6 +96,16 @@ func (e *Error) handling() handling {
 func Is(err error, code Code) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == code
+}
+
+// HeldBy is the other box whose session holds the scale set err was about,
+// or "" when err is not that.
+func HeldBy(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.HeldBy
+	}
+	return ""
 }
 
 // SessionBlocked reports whether a session an earlier owner left open ever
@@ -251,8 +267,9 @@ func (r sessionResponse) session() Session {
 }
 
 // OpenSession opens the scale set's message session. While an earlier session
-// still holds the scale set it keeps retrying; GitHub releases an abandoned
-// one after about a minute.
+// of this box still holds the scale set it keeps retrying; GitHub releases an
+// abandoned one after about a minute. When another box's session holds it,
+// OpenSession returns at once with an error whose HeldBy names that box.
 func (c *Client) OpenSession(ctx context.Context, repo string, scaleSetID int64, owner string) (Session, error) {
 	var out sessionResponse
 	err := c.do(ctx, "open session", http.MethodPost, "/v1/sessions", nil,
@@ -364,9 +381,13 @@ func (c *Client) once(ctx context.Context, call, method, u string, body []byte, 
 		var shape struct {
 			Error   Code   `json:"error"`
 			Message string `json:"message"`
+			HeldBy  string `json:"heldBy"`
 		}
 		if json.Unmarshal(data, &shape) == nil {
 			e.Code, e.Message = shape.Error, shape.Message
+			if e.Code == SessionExists {
+				e.HeldBy = shape.HeldBy
+			}
 		}
 		if e.Message == "" {
 			e.Message = http.StatusText(resp.StatusCode)
