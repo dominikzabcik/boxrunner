@@ -210,7 +210,7 @@ ${table(
 		escape(job.class),
 		escape(job.name),
 		job.result === 'failed' ? `<span class="alert">${escape(job.result)}</span>` : escape(job.result),
-		job.waitSeconds === null ? 'Never started' : duration(job.waitSeconds),
+		job.started === null ? 'Never started' : job.waitSeconds === null ? 'Unknown' : duration(job.waitSeconds),
 		duration(job.durationSeconds),
 		time(job.finished, ago(job.secondsSinceFinished)),
 	]),
