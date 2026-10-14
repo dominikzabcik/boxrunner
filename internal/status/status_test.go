@@ -80,10 +80,13 @@ func TestPrint(t *testing.T) {
 		},
 		Jobs: []Job{{Repo: "octo/site", Class: "boxrunner", Name: "test", Result: "succeeded",
 			Queued: t0.Add(-time.Hour), Started: t0.Add(-time.Hour + 8*time.Second), Finished: t0.Add(-50 * time.Minute)}},
+		Started: t0, FreshStart: true,
 	}
 	var b strings.Builder
 	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
 	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  disk 41.2 GB free, floor 10.0 GB
+
+If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
 CLASS            PRIORITY  RUNNERS  MAX
 boxrunner        normal    2        2
@@ -101,5 +104,11 @@ FINISHED      REPOSITORY  CLASS      JOB   RESULT     QUEUED FOR  TOOK
 `
 	if got := b.String(); got != want {
 		t.Errorf("Print =\n%s\nwant\n%s", got, want)
+	}
+
+	b.Reset()
+	Print(&b, snap, t0.Add(30*time.Minute))
+	if strings.Contains(b.String(), "replaced") {
+		t.Errorf("30 minutes after the start, Print still points to replacing a box:\n%s", b.String())
 	}
 }

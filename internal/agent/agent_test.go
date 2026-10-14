@@ -386,7 +386,7 @@ func TestWarmRunner(t *testing.T) {
 		snap, err = status.Fetch(context.Background(), h.socket)
 		return err == nil && len(snap.Runners) == 1 && snap.Runners[0].Phase == "starting"
 	})
-	if r := snap.Runners[0]; !r.Warm || r.Repo != "octo/site" {
+	if r := snap.Runners[0]; !r.Warm || r.Repo != "octo/site" || !snap.FreshStart {
 		t.Errorf("status = %+v", snap)
 	}
 	h.stop(t)

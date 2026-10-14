@@ -67,6 +67,10 @@ type Agent struct {
 	fatal   chan error
 	work    sync.WaitGroup
 
+	// started and adoptedNone belong to the scheduler goroutine.
+	started     time.Time
+	adoptedNone bool
+
 	mu       sync.Mutex
 	snapshot status.Snapshot
 }
@@ -84,6 +88,7 @@ func Run(ctx context.Context, o Options) error {
 		Options: o,
 		queue:   &queue.Client{HTTP: &http.Client{Timeout: 90 * time.Second}, UserAgent: "boxrunner/" + o.Version},
 		events:  make(chan scheduler.Event, 64),
+		started: time.Now(),
 		stopped: make(chan struct{}),
 		fatal:   make(chan error, 1),
 	}
@@ -173,6 +178,9 @@ func (a *Agent) schedule(ctx context.Context) error {
 	for {
 		select {
 		case e := <-a.events:
+			if o, ok := e.(scheduler.Observed); ok && !state.Observed {
+				a.adoptedNone = len(o.Containers) == 0
+			}
 			if u, ok := e.(scheduler.Update); ok {
 				for _, j := range u.Completed {
 					// A redelivered message must not log its job twice; a runner runs one job.
@@ -463,6 +471,7 @@ func (a *Agent) publish(s scheduler.State) {
 		Box: a.Config.Box, Version: a.Version,
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
+		Started: a.started, FreshStart: a.adoptedNone || a.Worker.SessionBlocked(),
 	}
 	warm := scheduler.Warm(s)
 	active := map[string]int{}

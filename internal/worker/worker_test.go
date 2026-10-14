@@ -149,6 +149,9 @@ func TestErrorCodes(t *testing.T) {
 			if len(*seen) != c.requests {
 				t.Errorf("%d requests; want %d", len(*seen), c.requests)
 			}
+			if blocked := client.SessionBlocked(); blocked != (c.code == SessionExists) {
+				t.Errorf("SessionBlocked = %v", blocked)
+			}
 			if c.retried {
 				if err != nil || !reflect.DeepEqual(*slept, []time.Duration{500 * time.Millisecond}) {
 					t.Errorf("err = %v, slept %v", err, *slept)

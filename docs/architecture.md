@@ -94,6 +94,21 @@ Scheduler rules:
 
 **Every call to the Worker backs off** exponentially with jitter, up to five minutes, and the systemd unit limits restarts. A loop on the box must never spend the Worker's daily request allowance.
 
+## Replacing a box
+
+A box that disappears, such as a deleted server, cannot close its sessions. The jobs its sessions had already acquired stay queued at GitHub. A replacement box with the same classes opens new sessions on the same scale sets, sees none of those jobs and never runs them; jobs queued after it took over run normally. This was seen once: three runs queued just before a box was deleted stayed queued for over an hour after a new box took over.
+
+To recover a stranded run, cancel it and run it again:
+
+```sh
+gh run cancel <run id> -R <owner/name>
+gh run rerun <run id> -R <owner/name>
+```
+
+`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after it starts without containers to adopt, or after a session left open blocked it, `boxrunner status` points here.
+
+Before retiring a box on purpose, run `sudo boxrunner uninstall` on it. Stopping the agent closes the sessions and removes the runners that took no job, so GitHub hands their jobs to the next session and nothing is stranded. Uninstall then removes every container, running jobs included, so let those finish first or re-run them on the new box.
+
 ## Priority classes
 
 A class with `priority = idle` runs in `boxrunner_idle.slice`, a top-level systemd slice with `CPUWeight=idle`. The kernel schedules its processes as SCHED_IDLE: they use any core nothing else wants and step aside at once otherwise. Normal classes run in Docker's default cgroup.

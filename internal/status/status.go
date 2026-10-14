@@ -30,7 +30,17 @@ type Snapshot struct {
 	DiskFree  int64       `json:"diskFree"`
 	DiskFloor int64       `json:"diskFloor"`
 	Jobs      []Job       `json:"jobs,omitempty"`
+	// Started is when the agent started.
+	Started time.Time `json:"started,omitzero"`
+	// FreshStart means the agent found no containers to adopt, or a session
+	// an earlier owner left open: jobs a box that died had acquired may be
+	// stranded at GitHub.
+	FreshStart bool `json:"freshStart,omitempty"`
 }
+
+// strandedHint is how long after a fresh start status points to recovering
+// jobs a dead box acquired.
+const strandedHint = 30 * time.Minute
 
 type Class struct {
 	Name     string `json:"name"`
@@ -212,6 +222,9 @@ func Fetch(ctx context.Context, socket string) (Snapshot, error) {
 func Print(w io.Writer, s Snapshot, now time.Time) {
 	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)  disk %s free, floor %s\n\n",
 		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	if s.FreshStart && now.Sub(s.Started) < strandedHint {
+		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")
+	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
 	for _, c := range s.Classes {

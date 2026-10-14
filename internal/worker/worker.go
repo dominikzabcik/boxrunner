@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/backoff"
@@ -91,6 +92,10 @@ func Is(err error, code Code) bool {
 	return errors.As(err, &e) && e.Code == code
 }
 
+// SessionBlocked reports whether a session an earlier owner left open ever
+// refused a new one.
+func (c *Client) SessionBlocked() bool { return c.blocked.Load() }
+
 // Fatal reports whether err means the agent must stop: a wrong token, an
 // agent too old for its Worker, or a Worker whose setup is unfinished.
 func Fatal(err error) bool {
@@ -131,6 +136,8 @@ type Client struct {
 	http    *http.Client
 	backoff backoff.Policy
 	log     *slog.Logger
+	// blocked is set once a session an earlier owner left open refused a new one.
+	blocked atomic.Bool
 }
 
 type Options struct {
@@ -304,6 +311,7 @@ func (c *Client) do(ctx context.Context, call, method, path string, query url.Va
 		}
 		switch {
 		case werr != nil && werr.Code == SessionExists && attempt == 0:
+			c.blocked.Store(true)
 			// Expected after a crash: GitHub releases the old session in about a minute.
 			c.log.Info("waiting for GitHub to release the previous session", "call", call, "err", err)
 		case werr != nil && werr.Code == SessionExists:
