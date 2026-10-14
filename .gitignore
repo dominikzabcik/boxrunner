@@ -1,9 +1,9 @@
-node_modules/
-.wrangler/
-/dist/
-/bin/
-*.test
-coverage.out
-.DS_Store
 .dev.vars
+.DS_Store
 .env
+.wrangler/
+*.test
+/bin/
+/dist/
+coverage.out
+node_modules/
