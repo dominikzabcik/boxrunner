@@ -3,11 +3,11 @@
 **GitHub Actions runners on the Linux box you already pay for.** Every job gets a fresh container that is gone when the job ends. Your GitHub App key stays in a Cloudflare Worker and never touches the box. Your main CI job keeps the box's full speed while lighter jobs use only the cores it leaves idle.
 
 ```text
-4 threads of CPU work in a normal-priority job, on a 4-core ARM VPS:
+4 threads of CPU work in a normal-priority job:   4-core ARM VPS   4-core x86 VPS
 
-alone                                428 ms
-beside 4 busy jobs at idle priority  429 ms   +0%
-beside 4 busy jobs at normal         2.1 s    +390%
+alone                                             428 ms           1.39 s
+beside 4 busy jobs at idle priority               429 ms   +0%     1.44 s   +3%
+beside 4 busy jobs at normal priority             2.10 s   +390%   6.91 s   +396%
 ```
 
 <sub>Measured with `boxrunner bench`, which you can run on your own box.</sub>

@@ -40,6 +40,8 @@ Keeping one idle runner per repository and class does not fit a small box. Ten r
 
 On a 4-core ARM box, four timed threads took 1,319 ms alone, 1,345 ms beside four busy threads in a top-level SCHED_IDLE slice, and 6,536 ms beside four busy threads at normal priority. A first attempt named the slice `runners-idle.slice`. systemd read the dash as nesting and put it inside `runners.slice`, where it was idle only against its siblings and still took half the CPU. The slice is therefore named `boxrunner_idle.slice`, and `doctor` checks `cpu.idle` on it.
 
+`boxrunner bench` repeats the measurement with containers: on a 4-core ARM VPS a normal-priority job took 428 ms alone, 429 ms (+0%) beside four busy idle-class containers and 2,096 ms (+390%) beside four busy normal ones; on a 4-core x86 VPS 1,393 ms, 1,438 ms (+3%) and 6,905 ms (+396%).
+
 ## Setup in the browser, behind a secret
 
 The private key goes from GitHub straight to the Worker through the App manifest flow, so nobody copies it. A freshly deployed Worker is reachable by anyone, so its setup page requires a secret set at deploy time. It signs the manifest's `state` and ties it to a cookie, and it works once. Both design reviews found the unguarded version claimable by whoever came first.
