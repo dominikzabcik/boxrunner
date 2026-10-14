@@ -16,9 +16,9 @@ beside 4 busy jobs at normal priority             2.10 s   +390%   6.91 s   +396
 
 You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; amd64 or arm64) and a free Cloudflare account.
 
-1. **Deploy the Worker.** With one click, where Cloudflare asks for a setup secret (keep it, the setup page asks for it):
+1. **Deploy the Worker.** With one click, from the latest release, where Cloudflare asks for a setup secret (keep it, the setup page asks for it):
 
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dominikzabcik/boxrunner/tree/main/worker)
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dominikzabcik/boxrunner/tree/stable/worker)
 
    Or from a clone of this repository:
    ```sh
