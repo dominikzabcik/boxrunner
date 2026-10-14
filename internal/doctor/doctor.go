@@ -126,10 +126,11 @@ func (c Checks) All(ctx context.Context) []Result {
 			}
 		}
 	}
-	// A stopped agent has no sessions to report; the other checks say what is wrong.
+	// A stopped agent has no sessions or held classes to report; the other checks say what is wrong.
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
+		results = append(results, Held(s, time.Now())...)
 		results = append(results, Elsewhere(s)...)
 	}
 	return results
@@ -141,6 +142,18 @@ func Elsewhere(s status.Snapshot) []Result {
 	var results []Result
 	for _, e := range s.Elsewhere {
 		results = append(results, Result{"other box", false, e.Sentence()})
+	}
+	return results
+}
+
+// Held fails a check for each class that holds its starts because its
+// runners fail before taking a job.
+func Held(snap status.Snapshot, now time.Time) []Result {
+	var results []Result
+	for _, c := range snap.Classes {
+		if next := c.NextTry(now); next != "" {
+			results = append(results, Result{"class " + c.Name, false, "its runners exit before taking a job; " + next + "; see journalctl -u boxrunner"})
+		}
 	}
 	return results
 }

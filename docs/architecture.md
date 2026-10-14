@@ -70,6 +70,7 @@ Class
   isolation sysbox | runc; sysbox when Docker has sysbox-runc, unless the class says
   docker    the job gets its own Docker daemon; needs sysbox
   warm      repositories that keep one idle runner of the class ready
+  max_duration  how long a job may run before its container is stopped
 Runner      requested -> starting -> running -> exited
             failed to start after 3 minutes -> removed
 ```
@@ -84,6 +85,8 @@ Scheduler rules:
 - A repository in its class's `warm` list keeps one runner more than it has jobs, once its scale set has a session. That runner is the warm one: it counts toward `max` and is never removed for being idle. When a job arrives for it, its three minutes start then.
 - A warm runner is refilled only after every waiting job of the class has a place. No warm runner is removed to make room for a job.
 - A warm runner does not hold back a rebuild of the job image, as a runner that is about to run a job does.
+- When three runners of a class in a row fail before taking a job, because the container exited or could not be created or started, the class holds its starts for a minute. Each further failure doubles the hold, up to 30 minutes, and after a hold the class starts one runner at a time until one takes a job. Without the hold, a broken class image or entrypoint would mint and remove a runner every few seconds. The agent logs the last 20 lines of the container whose exit set each hold, and `status` and `doctor` name the class and its next try. The count lives in memory, so a restart of the agent starts it over.
+- A runner whose job runs longer than its class's `max_duration` is stopped with SIGTERM, so the runner cancels the job and reports it, and its container is removed. The time counts from when the runner took the job, or from when a restarted agent found it busy.
 
 **Startup and shutdown converge.** The agent keeps no state file. Docker's container labels and GitHub's scale sets are the state.
 
@@ -192,9 +195,9 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 | Command | Does |
 |---|---|
 | `boxrunner install` | Converges the box: Docker, Sysbox with `--sysbox`, `--docker` or a class that needs it, the registry mirror with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
-| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration |
+| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration, and classes that hold their starts because their runners fail before taking a job |
 | `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
-| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
+| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, registry mirror and its cache, network, rules, slice and files. Docker and Sysbox stay. |
 | `boxrunner worker deploy` | Deploys the Worker with Wrangler and opens its setup page |
 

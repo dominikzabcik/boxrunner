@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/status"
@@ -146,5 +147,14 @@ func TestElsewhere(t *testing.T) {
 	want := []Result{{"other box", false, "box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. Give each box its own classes or repos (docs/config.md#several-boxes)."}}
 	if got := Elsewhere(snap); !reflect.DeepEqual(got, want) {
 		t.Errorf("Elsewhere =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestHeld(t *testing.T) {
+	now := time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC)
+	snap := status.Snapshot{Classes: []status.Class{{Name: "boxrunner"}, {Name: "web", HeldUntil: now.Add(-time.Second)}}}
+	want := []Result{{"class web", false, "its runners exit before taking a job; trying one runner now; see journalctl -u boxrunner"}}
+	if got := Held(snap, now); !reflect.DeepEqual(got, want) {
+		t.Errorf("Held = %+v, want %+v", got, want)
 	}
 }

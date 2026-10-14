@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,6 +257,29 @@ func (c *Client) LogsSince(ctx context.Context, id string, since time.Time) (str
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return string(b), err
+}
+
+// Tail returns the last lines a container without a TTY wrote.
+func (c *Client) Tail(ctx context.Context, id string, lines int) ([]string, error) {
+	q := url.Values{"stdout": {"1"}, "stderr": {"1"}, "tail": {strconv.Itoa(lines)}}
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/logs?"+q.Encode(), "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	r := bufio.NewReader(io.LimitReader(resp.Body, 1<<20))
+	header := make([]byte, 8)
+	// Each frame is a stream byte, three zero bytes and the payload's length.
+	for {
+		if _, err := io.ReadFull(r, header); err != nil {
+			break
+		}
+		if _, err := io.CopyN(&out, r, int64(binary.BigEndian.Uint32(header[4:]))); err != nil {
+			break
+		}
+	}
+	return strings.Split(strings.TrimRight(out.String(), "\n"), "\n"), nil
 }
 
 // Pid returns the host pid of a running container's first process.

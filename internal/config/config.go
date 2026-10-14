@@ -119,6 +119,8 @@ type Class struct {
 	Image string
 	// KeepFailed keeps a failed job's container this long for boxrunner shell.
 	KeepFailed time.Duration
+	// MaxDuration stops a job's container that runs longer; 0 never does.
+	MaxDuration time.Duration
 	// Repos, when set, limits the class to these repositories (owner/name,
 	// lower case); otherwise it serves every repository the Worker lists.
 	Repos []string
@@ -169,20 +171,21 @@ type rawConfig struct {
 }
 
 type rawClass struct {
-	Name       string   `toml:"name"`
-	CPUs       float64  `toml:"cpus"`
-	Memory     string   `toml:"memory"`
-	Pids       int64    `toml:"pids"`
-	Shm        string   `toml:"shm"`
-	Priority   string   `toml:"priority"`
-	Max        int      `toml:"max"`
-	Image      string   `toml:"image"`
-	Dockerfile string   `toml:"dockerfile"`
-	Repos      []string `toml:"repos"`
-	Warm       []string `toml:"warm"`
-	KeepFailed string   `toml:"keep_failed"`
-	Docker     bool     `toml:"docker"`
-	Isolation  string   `toml:"isolation"`
+	Name        string   `toml:"name"`
+	CPUs        float64  `toml:"cpus"`
+	Memory      string   `toml:"memory"`
+	Pids        int64    `toml:"pids"`
+	Shm         string   `toml:"shm"`
+	Priority    string   `toml:"priority"`
+	Max         int      `toml:"max"`
+	Image       string   `toml:"image"`
+	Dockerfile  string   `toml:"dockerfile"`
+	Repos       []string `toml:"repos"`
+	Warm        []string `toml:"warm"`
+	KeepFailed  string   `toml:"keep_failed"`
+	MaxDuration string   `toml:"max_duration"`
+	Docker      bool     `toml:"docker"`
+	Isolation   string   `toml:"isolation"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -333,6 +336,17 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 			errs = append(errs, fmt.Errorf("keep_failed: %s must be between 0 and 24h", rc.KeepFailed))
 		default:
 			c.KeepFailed = d
+		}
+	}
+	if rc.MaxDuration != "" {
+		d, err := time.ParseDuration(rc.MaxDuration)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("max_duration: %q is not a duration like 90m or 6h", rc.MaxDuration))
+		case d < time.Minute:
+			errs = append(errs, fmt.Errorf("max_duration: %s must be at least 1m", rc.MaxDuration))
+		default:
+			c.MaxDuration = d
 		}
 	}
 	for _, r := range rc.Repos {
