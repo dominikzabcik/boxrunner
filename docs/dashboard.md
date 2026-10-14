@@ -27,9 +27,29 @@ The Worker uses `GITHUB_CLIENT_SECRET` only when setup did not keep a secret. It
 - **Its runners.** Name, repository, class, state and for how long it has been in that state.
 - **Recent jobs.** The last 30: repository, class, job, result, how long the job waited in the queue, how long it took and when it finished.
 - **GitHub minutes not billed.** Jobs and minutes today (UTC) and in the last 30 days, each job rounded up to whole minutes as GitHub bills them. The dollar value uses $0.006 a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan's free allowance would not have cost money, so this is what the minutes are worth, not necessarily what you saved.
-- **What the Worker serves.** The repositories as the agent last fetched them with `GET /v1/repos`, and the Worker's `CLASSES`.
+- **What the Worker serves.** The repositories as the agent last fetched them with `GET /v1/repos`, and the Worker's `CLASSES`, each serving or paused, with who paused it and when. A paused class also reads "(paused)" in each box's classes.
 
 The page works without JavaScript; reload it to update it. With JavaScript, a small inline script fetches `GET /dashboard.json` every 10 seconds while the tab is visible, and stops while it is hidden. `dashboard.json` holds the same data and, under `html`, the same part of the page rendered by the Worker, which the script puts in place. The page has one renderer, on the Worker. While the keyboard focus is inside that part of the page (for example on a table that scrolls sideways on a phone), the script leaves it alone.
+
+## Actions
+
+Each action is a button that posts a form with the session's CSRF token, so it works without JavaScript.
+
+### Pausing a class
+
+**Pause** next to a class stops every box from starting new runners for it. Jobs that are running finish, and a runner that already started may still take a job. Every other job for the class waits at GitHub until someone presses **Resume**; the box then picks it up as it does after a restart. The pause is the Worker's, so it applies to every box, and it stays until someone resumes the class, across restarts of the box and the Worker. Pausing a paused class changes nothing; the page keeps who paused it first.
+
+The agent stops listening to the paused class's scale sets, which closes their sessions. The Worker names the paused classes in its answer to every heartbeat, so a box learns of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes, because `GET /v1/repos` leaves paused classes out of `classes` ([api.md](api.md#get-v1repos)); its log then says the class is not one of the Worker's.
+
+### Replacing the box token
+
+**Replace the box token** makes a new token and shows it once, with the command that puts it on a box:
+
+```sh
+sudo boxrunner install --token <new token>
+```
+
+It writes the token to `/etc/boxrunner/token` and restarts the agent; jobs that are running keep running. The old token stops working at once, so every box stops reaching the Worker until it has the new one: run the command on each. The Worker keeps only the token's hash, so no page can show it again. `POST /setup/token` does the same with the setup secret instead of a session.
 
 ## Where the data comes from
 
@@ -49,7 +69,7 @@ Totals come from one row per day, so a refresh reads at most about 30 of them ho
 
 - **Sessions.** The session cookie, `__Host-boxrunner-session`, holds the login, an expiry 12 hours out and an HMAC of both. It is `HttpOnly`, `Secure` and `SameSite=Strict`. The HMAC key is 32 random bytes made once and kept in the Durable Object; resetting setup forgets it, which ends every session. The Worker never stores the GitHub user token: it reads the login with it and drops it.
 - **Signing in.** `GET /login` sets a `__Host-boxrunner-login` cookie (`SameSite=Lax`, 10 minutes) and sends GitHub a `state` the Worker signs for it. The callback refuses a state that does not match the cookie or is older than 10 minutes, before it asks GitHub anything. A `SameSite=Strict` cookie is not sent on a redirect that began at github.com, so the callback answers with a short page that moves on to the dashboard by itself.
-- **Actions.** Every form that changes something carries a CSRF token, an HMAC of the session. The only action today is signing out (`POST /logout`).
+- **Actions.** Every form that changes something carries a CSRF token, an HMAC of the session. Without a session an action answers 401, with a missing or wrong token 403, and nothing changes. The session cookie is `SameSite=Strict` as well, so another site's form arrives without it. There is no place to paste a token or a key: the App key arrives through the manifest flow and stays in the Worker.
 - **The page.** Server-rendered HTML with no requests to other origins. The CSP allows exactly the page's inline style and script by their hashes, `connect-src 'self'` for the refresh, and forms only to the Worker. `X-Frame-Options: DENY`, `noindex` and `Cache-Control: no-store`.
 
 ## Endpoints
@@ -61,3 +81,6 @@ Totals come from one row per day, so a refresh reads at most about 30 of them ho
 | `GET /login` | Sends the browser to GitHub to sign in |
 | `GET /login/callback` | Where GitHub sends the browser back |
 | `POST /logout` | Ends the session; needs the CSRF token |
+| `POST /classes/pause` | Pauses the class named by the form field `class`; needs a session and the CSRF token |
+| `POST /classes/resume` | Resumes the class named by `class`; needs a session and the CSRF token |
+| `POST /box-token` | Replaces the box token and shows the new one; needs a session and the CSRF token |

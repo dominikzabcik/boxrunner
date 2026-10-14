@@ -120,10 +120,7 @@ async function rotate(box: Box, request: Request, origin: string) {
 	const secret = box.setupSecret;
 	if (!secret) return messagePage(503, 'Setup is locked', 'Set the SETUP_SECRET secret to at least 32 characters.');
 	if (!(await sameSecret(formText(await form(request), 'secret'), secret))) return donePage(401, 'That is not the setup secret.');
-	const token = randomToken();
-	box.store.replaceBoxToken(await boxTokenHash(token));
-	box.resetBudget();
-	return tokenPage(200, 'New box token', stored.app.slug, origin, token, false);
+	return tokenPage(200, 'New box token', stored.app.slug, origin, await box.replaceBoxToken(), false);
 }
 
 async function reset(box: Box, request: Request) {

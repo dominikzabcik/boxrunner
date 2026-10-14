@@ -157,6 +157,14 @@ type fakeGitHub struct {
 	queue chan string
 	// busy are runner ids that took a job, so removing them answers 409.
 	busy map[string]bool
+	// paused are the classes paused on the dashboard.
+	paused []string
+}
+
+func (g *fakeGitHub) pause(classes ...string) {
+	g.mu.Lock()
+	g.paused = classes
+	g.mu.Unlock()
 }
 
 func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
@@ -173,7 +181,11 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 		session := fmt.Sprintf(`{"sessionId":"s1","queueUrl":"%s/queue/7","queueToken":"q1","acquireJobsUrl":"%s/acquire","statistics":{"totalAssignedJobs":0}}`, srv.URL, srv.URL)
 		switch {
 		case r.URL.Path == "/v1/repos":
-			io.WriteString(w, `{"repos":[{"name":"octo/site","id":123}],"classes":["boxrunner","boxrunner-light"]}`)
+			g.mu.Lock()
+			paused := append([]string{}, g.paused...)
+			g.mu.Unlock()
+			serving := slices.DeleteFunc([]string{"boxrunner", "boxrunner-light"}, func(c string) bool { return slices.Contains(paused, c) })
+			json.NewEncoder(w).Encode(map[string]any{"repos": []map[string]any{{"name": "octo/site", "id": 123}}, "classes": serving, "paused": paused})
 		case r.URL.Path == "/v1/scalesets":
 			io.WriteString(w, `{"id":7,"name":"boxrunner"}`)
 		case r.URL.Path == "/v1/sessions":
@@ -204,7 +216,9 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 		case r.URL.Path == "/releases/latest":
 			http.Redirect(w, r, "/releases/tag/v2.338.0", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
-			w.WriteHeader(204)
+			g.mu.Lock()
+			json.NewEncoder(w).Encode(map[string]any{"paused": append([]string{}, g.paused...)})
+			g.mu.Unlock()
 		default:
 			t.Errorf("fake github: unexpected %s %s", r.Method, r.URL)
 		}
@@ -265,13 +279,14 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	go func() {
 		h.done <- Run(ctx, Options{
 			Config: cfg, Docker: d, Version: "0.1.0", Log: log,
-			Worker:      worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
-			Run:         func(context.Context, string, string, ...string) (string, error) { return "", nil },
-			JobsLog:     h.jobs,
-			Socket:      h.socket,
-			ReleasesURL: srv.URL + "/releases/latest",
-			Tick:        50 * time.Millisecond,
-			SysboxDir:   t.TempDir(),
+			Worker:         worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
+			Run:            func(context.Context, string, string, ...string) (string, error) { return "", nil },
+			JobsLog:        h.jobs,
+			Socket:         h.socket,
+			ReleasesURL:    srv.URL + "/releases/latest",
+			Tick:           50 * time.Millisecond,
+			HeartbeatEvery: 50 * time.Millisecond,
+			SysboxDir:      t.TempDir(),
 		})
 	}()
 	return h
@@ -348,6 +363,33 @@ func TestJobLifecycle(t *testing.T) {
 		Queued: time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC), Started: time.Date(2026, 10, 13, 21, 0, 8, 0, time.UTC), Finished: time.Date(2026, 10, 13, 21, 3, 0, 0, time.UTC)}
 	if len(jobs) != 1 || !reflect.DeepEqual(jobs[0], wantJob) {
 		t.Errorf("job log = %+v", jobs)
+	}
+}
+
+// The repository list is read every five minutes, so only the heartbeat's
+// answer can make the agent act on a pause within this test's ten seconds.
+func TestPauseAndResume(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil)
+	defer h.stop(t)
+	count := func(call string) func() int {
+		return func() int {
+			n := 0
+			for _, c := range h.github.workerCalls() {
+				if strings.HasPrefix(c, call) {
+					n++
+				}
+			}
+			return n
+		}
+	}
+	opened, closed := count("POST /v1/sessions"), count("DELETE /v1/sessions/s1")
+	waitFor(t, "a session", func() bool { return opened() == 1 })
+	h.github.pause("boxrunner")
+	waitFor(t, "the paused class's session to close", func() bool { return closed() == 1 })
+	h.github.pause()
+	waitFor(t, "a session after resuming", func() bool { return opened() == 2 })
+	if closed() != 1 {
+		t.Errorf("sessions closed while resumed: %d", closed())
 	}
 }
 

@@ -82,6 +82,7 @@ describe('GET /v1/repos', () => {
 				{ name: 'octo/docs', id: 124 },
 			],
 			classes: ['boxrunner', 'boxrunner-light'],
+			paused: [],
 		});
 		await call('GET', '/v1/repos');
 		expect(github.count('GET', '/installation/repositories')).toBe(1);

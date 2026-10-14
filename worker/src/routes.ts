@@ -1,6 +1,14 @@
 export type SetupRoute = { name: 'setup.form' } | { name: 'setup.start' } | { name: 'setup.callback' } | { name: 'setup.rotate' } | { name: 'setup.reset' };
 
-export type WebRoute = { name: 'web.dashboard' } | { name: 'web.data' } | { name: 'web.login' } | { name: 'web.callback' } | { name: 'web.logout' };
+export type WebRoute =
+	| { name: 'web.dashboard' }
+	| { name: 'web.data' }
+	| { name: 'web.login' }
+	| { name: 'web.callback' }
+	| { name: 'web.logout' }
+	| { name: 'web.token' }
+	| { name: 'web.pause' }
+	| { name: 'web.resume' };
 
 export type ApiRoute =
 	| { name: 'heartbeat' }
@@ -25,6 +33,9 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['GET', /^\/login$/, () => ({ name: 'web.login' })],
 	['GET', /^\/login\/callback$/, () => ({ name: 'web.callback' })],
 	['POST', /^\/logout$/, () => ({ name: 'web.logout' })],
+	['POST', /^\/box-token$/, () => ({ name: 'web.token' })],
+	['POST', /^\/classes\/pause$/, () => ({ name: 'web.pause' })],
+	['POST', /^\/classes\/resume$/, () => ({ name: 'web.resume' })],
 	['POST', /^\/v1\/heartbeat$/, () => ({ name: 'heartbeat' })],
 	['GET', /^\/v1\/repos$/, () => ({ name: 'repos' })],
 	['POST', /^\/v1\/scalesets$/, () => ({ name: 'scalesets.ensure' })],

@@ -26,6 +26,8 @@ table { width: 100%; min-width: max-content; border-collapse: collapse; margin-t
 .scroll { overflow-x: auto; }
 th, td { text-align: left; padding: 0.4rem 1rem 0.4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
 th:last-child, td:last-child { padding-right: 0; }
+td form { margin: 0; }
+td button { margin-top: 0; padding: 0.25rem 0.75rem; }
 th { color: var(--muted); font-weight: 600; }
 .number { text-align: right; font-variant-numeric: tabular-nums; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0 0; }

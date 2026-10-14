@@ -1,5 +1,17 @@
 import type { AppKey } from './crypto';
-import { billedMinutes, dayOf, startOfDay, type App, type BoxStatus, type ClassName, type FinishedJob, type Heartbeat, type ScaleSetId } from './model';
+import {
+	billedMinutes,
+	dayOf,
+	startOfDay,
+	type App,
+	type BoxStatus,
+	type ClassName,
+	type FinishedJob,
+	type Heartbeat,
+	type Login,
+	type Pause,
+	type ScaleSetId,
+} from './model';
 
 /** Jobs, their daily totals and boxes that stopped reporting are kept this many days. */
 export const retentionDays = 30;
@@ -46,6 +58,11 @@ CREATE TABLE IF NOT EXISTS job_days (
 	day INTEGER PRIMARY KEY,
 	jobs INTEGER NOT NULL,
 	minutes INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS paused_classes (
+	class TEXT PRIMARY KEY,
+	since INTEGER NOT NULL,
+	by_login TEXT NOT NULL
 );
 `;
 
@@ -106,9 +123,9 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets, every cached token and the session key, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets, every cached token, the session key and the pauses, so setup can run again. */
 	reset() {
-		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache; DELETE FROM keys;');
+		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes;');
 	}
 
 	/** Fills in the OAuth client id and owner of an App set up before the Worker kept them. */
@@ -127,6 +144,22 @@ export class Store {
 
 	replaceBoxToken(boxTokenSha256: string) {
 		this.sql.exec('UPDATE app SET box_token_sha256 = ?', boxTokenSha256);
+	}
+
+	pauses(): Pause[] {
+		return this.sql
+			.exec<{ class: string; since: number; by_login: string }>('SELECT class, since, by_login FROM paused_classes ORDER BY class')
+			.toArray()
+			.map((row) => ({ className: row.class as ClassName, since: row.since, by: row.by_login as Login }));
+	}
+
+	/** Pausing a paused class keeps who paused it first, and when. */
+	pause(className: ClassName, by: Login, at: number) {
+		this.sql.exec('INSERT OR IGNORE INTO paused_classes (class, since, by_login) VALUES (?, ?, ?)', className, at, by);
+	}
+
+	resume(className: ClassName) {
+		this.sql.exec('DELETE FROM paused_classes WHERE class = ?', className);
 	}
 
 	scaleSet(repoId: number, className: ClassName): ScaleSetId | undefined {

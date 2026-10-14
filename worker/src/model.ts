@@ -98,6 +98,15 @@ export function repoFilter(value: string | undefined): (name: string) => boolean
 	return names.size === 0 ? () => true : (name) => names.has(name.toLowerCase());
 }
 
+/** A class paused on the dashboard: boxes start no new runners for it until someone resumes it. */
+export type Pause = { className: ClassName; since: number; by: Login };
+
+/** Splits the Worker's classes into those boxes serve now and those paused on the dashboard. */
+export function splitPaused(classes: readonly ClassName[], pauses: readonly Pause[]) {
+	const paused = new Set(pauses.map((pause) => pause.className));
+	return { serving: classes.filter((name) => !paused.has(name)), paused: classes.filter((name) => paused.has(name)) };
+}
+
 /** Reads the optional `ADMINS` variable: logins besides the App's owner that may sign in, compared case-insensitively. */
 export function mayOpenDashboard(owner: string | null, admins: string | undefined): (login: Login) => boolean {
 	const allowed = new Set(

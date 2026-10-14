@@ -2,7 +2,7 @@ import type { Box } from './box';
 import { matchesBoxToken } from './crypto';
 import * as github from './github';
 import { ApiError, errorResponse, json, noContent } from './http';
-import { parse, parseHeartbeat, semverPattern, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
+import { parse, parseHeartbeat, semverPattern, splitPaused, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
 import type { ApiRoute } from './routes';
 
 /** Agent major versions this Worker speaks protocol 1 with. */
@@ -133,16 +133,19 @@ function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 	}
 }
 
+/** The answer names the paused classes, so an agent learns of a pause within one heartbeat instead of at its next `GET /v1/repos`. */
 async function heartbeat(context: Context) {
 	const parsed = parseHeartbeat(await body(context.request));
 	if (!parsed.ok) throw new ApiError('bad_request', `"${parsed.field}" is missing or malformed.`);
 	context.box.store.saveHeartbeat(parsed.heartbeat, Date.now());
-	return noContent();
+	return json({ paused: splitPaused(context.classes, context.box.store.pauses()).paused });
 }
 
+/** `classes` leaves out the paused ones, so an agent that does not know `paused` stops serving them too. */
 async function repos({ box, app, classes }: Context) {
 	const repos = await box.repos(app);
-	return json({ repos: repos.map(({ name, id }) => ({ name, id })), classes });
+	const { serving, paused } = splitPaused(classes, box.store.pauses());
+	return json({ repos: repos.map(({ name, id }) => ({ name, id })), classes: serving, paused });
 }
 
 async function ensureScaleSet(context: Context) {
