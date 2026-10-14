@@ -97,6 +97,9 @@ type Class struct {
 	// Repos, when set, limits the class to these repositories (owner/name,
 	// lower case); otherwise it serves every repository the Worker lists.
 	Repos []string
+	// Warm names repositories (owner/name, lower case) that each keep one
+	// idle runner of the class ready.
+	Warm []string
 	// Dockerfile, when set, builds Image FROM the job image; the agent
 	// rebuilds it whenever the job image or the Dockerfile's directory changes.
 	Dockerfile string
@@ -149,6 +152,7 @@ type rawClass struct {
 	Image      string   `toml:"image"`
 	Dockerfile string   `toml:"dockerfile"`
 	Repos      []string `toml:"repos"`
+	Warm       []string `toml:"warm"`
 	KeepFailed string   `toml:"keep_failed"`
 	Docker     bool     `toml:"docker"`
 }
@@ -294,6 +298,26 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 			continue
 		}
 		c.Repos = append(c.Repos, strings.ToLower(r))
+	}
+	for _, r := range rc.Warm {
+		switch owner, name, ok := strings.Cut(r, "/"); {
+		case !ok || owner == "" || name == "" || strings.Contains(name, "/"):
+			errs = append(errs, fmt.Errorf("warm: %q must be owner/name", r))
+		case !c.Serves(r):
+			errs = append(errs, fmt.Errorf("warm: %q is not in the class's repos", r))
+		case !slices.Contains(c.Warm, strings.ToLower(r)):
+			c.Warm = append(c.Warm, strings.ToLower(r))
+		}
+	}
+	// A warm runner is never removed for idleness, so the class's other
+	// repositories need a place of their own.
+	onlyWarm := len(c.Repos) > 0 && len(c.Repos) == len(c.Warm)
+	switch {
+	case c.Max < 1:
+	case len(c.Warm) > c.Max:
+		errs = append(errs, fmt.Errorf("warm: %d repositories need more idle runners than max (%d)", len(c.Warm), c.Max))
+	case len(c.Warm) == c.Max && !onlyWarm:
+		errs = append(errs, fmt.Errorf("warm: the warm runners fill max (%d) and leave no place for the class's other repositories; raise max or list only the warm repositories in repos", c.Max))
 	}
 	switch {
 	case rc.Dockerfile != "" && rc.Image != "":

@@ -68,6 +68,7 @@ Class
   max       runners of this class at once on this box
   image
   docker    the job gets its own Docker daemon under Sysbox
+  warm      repositories that keep one idle runner of the class ready
 Runner      requested -> starting -> running -> exited
             failed to start after 3 minutes -> removed
 ```
@@ -79,6 +80,9 @@ Scheduler rules:
 - A class never has more than `max` runners starting or running.
 - A scale set needs as many runners as it has assigned jobs. Missing runners start in order of the oldest waiting job, while the class has room.
 - A runner that has not taken a job within three minutes is removed through the Worker, and its container stops. A minted runner that never started can be removed (*measured*).
+- A repository in its class's `warm` list keeps one runner more than it has jobs, once its scale set has a session. That runner is the warm one: it counts toward `max` and is never removed for being idle. When a job arrives for it, its three minutes start then.
+- A warm runner is refilled only after every waiting job of the class has a place. No warm runner is removed to make room for a job.
+- A warm runner does not hold back a rebuild of the job image, as a runner that is about to run a job does.
 
 **Startup and shutdown converge.** The agent keeps no state file. Docker's container labels and GitHub's scale sets are the state.
 
@@ -86,6 +90,7 @@ Scheduler rules:
 - **On start**, it adopts the containers labelled with its box name. Running jobs count toward `max`, and containers whose runner never took a job are removed. Then it opens its sessions.
 - **After a crash**, a session left open blocks a new one with 409. GitHub released one such session after about a minute (*measured* once). The agent retries with backoff until then.
 - **It never deletes and re-creates a scale set** to get around the block. A job already assigned to a deleted scale set stays queued, and a new scale set with the same name does not take it (*measured*).
+- **After a restart, warm runners start again.** The agent sees Docker before its sessions report their scale sets, so an adopted warm runner that waited longer than three minutes is removed, and a new one starts once the session is open.
 
 **Every call to the Worker backs off** exponentially with jitter, up to five minutes, and the systemd unit limits restarts. A loop on the box must never spend the Worker's daily request allowance.
 

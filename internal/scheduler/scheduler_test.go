@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -36,6 +37,15 @@ func state(maxMain, maxLight int, sets map[Key]ScaleSet, runners ...Runner) Stat
 	for _, r := range runners {
 		s.Runners[r.Name] = r
 	}
+	return s
+}
+
+// warm keeps one idle runner ready for each repository in the main class.
+func warm(s State, repos ...string) State {
+	c := s.Classes["boxrunner"]
+	c.Warm = repos
+	s.Classes = maps.Clone(s.Classes)
+	s.Classes["boxrunner"] = c
 	return s
 }
 
@@ -166,6 +176,52 @@ func TestDecide(t *testing.T) {
 				return s
 			}(),
 			want: nil,
+		},
+		{
+			name:  "a warm repository gets an idle runner",
+			state: warm(state(2, 2, map[Key]ScaleSet{siteMain: {ID: 7}, apiMain: {ID: 9}}), "octo/site"),
+			want:  []Action{Start{siteMain}},
+		},
+		{
+			name:  "only once its scale set is listened to",
+			state: warm(state(2, 2, map[Key]ScaleSet{apiMain: {ID: 9}}), "octo/site"),
+			want:  nil,
+		},
+		{
+			name: "the warm runner is never removed for idleness; a second idle one is",
+			state: warm(state(3, 2, map[Key]ScaleSet{siteMain: {ID: 7}},
+				Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(0)},
+				Runner{Name: "r2", ScaleSet: siteMain, Phase: Starting, Since: at(1)}), "octo/site"),
+			want: []Action{Remove{Runner: "r1", Deregister: true, Reason: "took no job within 3 minutes"}},
+		},
+		{
+			name: "the warm runner counts toward max",
+			state: warm(state(2, 2, map[Key]ScaleSet{siteMain: {ID: 7}, apiMain: {ID: 9, Jobs: jobs(1, 2)}},
+				Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(0)}), "octo/site"),
+			want: []Action{Start{apiMain}},
+		},
+		{
+			name: "no refill while another repository's job waits for the place",
+			state: warm(state(2, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(1)}, apiMain: {ID: 9, Jobs: jobs(5)}},
+				Runner{Name: "r1", ScaleSet: siteMain, Phase: Running, TookJob: true}), "octo/site"),
+			want: []Action{Start{apiMain}},
+		},
+		{
+			name: "nor is a warm runner evicted for it",
+			state: warm(state(2, 2, map[Key]ScaleSet{siteMain: {ID: 7}, apiMain: {ID: 9, Jobs: jobs(1, 5)}},
+				Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(0)},
+				Runner{Name: "r2", ScaleSet: apiMain, Phase: Running, TookJob: true}), "octo/site"),
+			want: nil,
+		},
+		{
+			name: "a warm runner does not hold back an image build",
+			state: func() State {
+				s := warm(state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7}},
+					Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(0)}), "octo/site")
+				s.Image = Image{Built: "2.328.0", Latest: "2.329.0"}
+				return s
+			}(),
+			want: []Action{Build{Version: "2.329.0"}},
 		},
 		{
 			name: "not while building or before the retry time",
@@ -302,6 +358,40 @@ func TestFinishedJobStartsNothing(t *testing.T) {
 	want := []Action{Remove{Runner: "r1", Reason: "exited"}}
 	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
 		t.Errorf("Decide = %#v", got)
+	}
+}
+
+// A job arrives for the warm runner, which waited ten minutes: a new warm
+// runner starts beside it, the first gets three minutes to take the job, and
+// when the job ends nothing more starts.
+func TestWarmRunnerIsReplaced(t *testing.T) {
+	s := warm(state(2, 2, map[Key]ScaleSet{siteMain: {ID: 7}},
+		Runner{Name: "w1", ScaleSet: siteMain, ScaleSetID: 7, Phase: Starting, Since: at(0)}), "octo/site")
+	if got := Warm(s); !reflect.DeepEqual(got, map[string]bool{"w1": true}) {
+		t.Errorf("Warm before the job = %v", got)
+	}
+	s = Apply(s, Update{ScaleSet: siteMain, ID: 7, Jobs: jobs(10)}, at(10))
+	if got, want := Decide(s, at(10)), []Action{Start{siteMain}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Decide when a job arrives = %#v", got)
+	}
+	s = Apply(s, StartDispatched{"w2", siteMain}, at(10))
+	s = Apply(s, Started{"w2", 42}, at(10.1))
+	if got := Warm(s); !reflect.DeepEqual(got, map[string]bool{"w2": true}) {
+		t.Errorf("Warm once the job arrived = %v", got)
+	}
+	if got, want := Decide(s, at(13.5)), []Action{Remove{Runner: "w1", Deregister: true, Reason: "took no job within 3 minutes"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide if the job is not taken in 3 minutes = %#v", got)
+	}
+	s = Apply(s, Update{ScaleSet: siteMain, ID: 7, Jobs: jobs(10), Started: []string{"w1"}}, at(10.2))
+	if got := Decide(s, at(13.5)); got != nil {
+		t.Errorf("Decide while the job runs = %#v", got)
+	}
+	s = Apply(s, Update{ScaleSet: siteMain, ID: 7, Completed: []queue.JobCompleted{{RunnerName: "w1"}}}, at(20))
+	if got, want := Decide(s, at(20)), []Action{Remove{Runner: "w1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide after the job = %#v", got)
+	}
+	if got := Decide(Apply(s, Removed{"w1"}, at(20)), at(60)); got != nil {
+		t.Errorf("an hour later the warm runner is still kept; Decide = %#v", got)
 	}
 }
 

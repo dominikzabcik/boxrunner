@@ -198,6 +198,7 @@ type harness struct {
 	docker *fakeDocker
 	github *fakeGitHub
 	jobs   string
+	socket string
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -209,6 +210,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		docker: &fakeDocker{containers: containers},
 		github: &fakeGitHub{queue: make(chan string, 8), busy: busy},
 		jobs:   filepath.Join(t.TempDir(), "jobs.jsonl"),
+		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
 	}
 	cfg := config.Config{
@@ -236,7 +238,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			Worker:      worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
 			Run:         func(context.Context, string, string, ...string) (string, error) { return "", nil },
 			JobsLog:     h.jobs,
-			Socket:      filepath.Join(t.TempDir(), "s.sock"),
+			Socket:      h.socket,
 			ReleasesURL: srv.URL + "/releases/latest",
 			Tick:        50 * time.Millisecond,
 		})
@@ -369,6 +371,30 @@ func TestRestartAdoptsContainers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(removals, want) {
 		t.Errorf("runner removals = %q", removals)
+	}
+}
+
+// A warm repository gets a runner before any job, status marks it, and
+// stopping the agent removes it like any runner without a job.
+func TestWarmRunner(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) {
+		c.Repos, c.Warm = []string{"octo/site"}, []string{"octo/site"}
+	})
+	var snap status.Snapshot
+	waitFor(t, "a warm runner in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && len(snap.Runners) == 1 && snap.Runners[0].Phase == "starting"
+	})
+	if r := snap.Runners[0]; !r.Warm || r.Repo != "octo/site" {
+		t.Errorf("status = %+v", snap)
+	}
+	h.stop(t)
+	if left := h.docker.snapshot(); len(left) != 0 {
+		t.Errorf("containers left after stop: %v", left)
+	}
+	if calls := h.github.workerCalls(); !slices.Contains(calls, "DELETE /v1/runners/41?repo=octo%2Fsite&scaleSetId=7") {
+		t.Errorf("worker calls = %q", calls)
 	}
 }
 

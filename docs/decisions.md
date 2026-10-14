@@ -34,7 +34,7 @@ Deleting the scale set and creating it again would clear the block. But a job al
 
 ## Runners start when a job waits
 
-Keeping one idle runner per repository and class does not fit a small box. Ten repositories and two classes would mean twenty idle runners, while the main class may allow one runner at a time. Runners start when GitHub assigns a job. One cold start took 8 seconds from queue to start on a laptop with the image already pulled (probe). Warm runners for chosen repositories may come later. A runner that has not taken a job within three minutes is removed; one minted and never started can be removed (probe).
+Keeping one idle runner per repository and class does not fit a small box. Ten repositories and two classes would mean twenty idle runners, while the main class may allow one runner at a time. Runners start when GitHub assigns a job. One cold start took 8 seconds from queue to start on a laptop with the image already pulled (probe). A runner that has not taken a job within three minutes is removed; one minted and never started can be removed (probe).
 
 ## Idle-priority class
 
@@ -57,6 +57,10 @@ Jobs that use `services:`, `container:`, Docker container actions or `docker bui
 Sysbox's package refuses to install while Docker has any container, unless `/etc/docker/daemon.json` already sets `bip` and `default-address-pools`; otherwise it sets its own and restarts Docker. `install` therefore writes Docker's current bridge address and address pools (Docker's built-in ones when none are set) into that file first. On a box with a running container, `install --docker` then left Docker's process and the container untouched, and the package only made Docker reload its configuration to add the runtime.
 
 Every job starts with an empty Docker, so images are pulled cold; a pull-through mirror on the box is planned.
+
+## Warm runners are chosen per repository
+
+A class's `warm` list keeps one idle runner ready for each named repository, so its jobs skip the container start. It is opt-in per repository because the reason above still holds: a personal account with many repositories cannot keep one idle runner each on a small box, and every warm runner holds one of the class's `max` places for as long as it waits. A warm runner never takes the place a waiting job needs: the scheduler refills a warm runner only after every waiting job of the class has a place, and the configuration refuses a `warm` list that would fill `max` while the class serves other repositories. A warm runner is not evicted when another repository's job waits; removing a registered runner and starting it again later would cost the cold start warm runners exist to avoid. Runners of one scale set are interchangeable, so the scheduler does not track which runner is warm; while the scale set has more runners than jobs, its newest runner without a job is the warm one.
 
 ## Not in v0.1
 

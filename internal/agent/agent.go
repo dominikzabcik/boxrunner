@@ -464,12 +464,13 @@ func (a *Agent) publish(s scheduler.State) {
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 	}
+	warm := scheduler.Warm(s)
 	active := map[string]int{}
 	for _, r := range s.Runners {
 		if r.Phase != scheduler.Exited {
 			active[r.ScaleSet.Class]++
 		}
-		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since})
+		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since, Warm: warm[r.Name]})
 	}
 	for _, c := range a.Config.Classes {
 		snap.Classes = append(snap.Classes, status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name]})

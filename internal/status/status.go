@@ -51,6 +51,9 @@ type Runner struct {
 	Class string    `json:"class"`
 	Phase string    `json:"phase"`
 	Since time.Time `json:"since"`
+	// Warm means the runner is kept ready for its repository and is never
+	// removed for idleness.
+	Warm bool `json:"warm,omitempty"`
 }
 
 type ImageStatus struct {
@@ -229,7 +232,11 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	} else {
 		fmt.Fprintln(t, "RUNNER\tREPOSITORY\tCLASS\tSTATE\tFOR")
 		for _, r := range s.Runners {
-			fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Repo, r.Class, r.Phase, now.Sub(r.Since).Round(time.Second))
+			state := r.Phase
+			if r.Warm {
+				state += " (warm)"
+			}
+			fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Repo, r.Class, state, now.Sub(r.Since).Round(time.Second))
 		}
 		t.Flush()
 	}

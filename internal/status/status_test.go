@@ -69,27 +69,32 @@ func TestServeAndFetch(t *testing.T) {
 }
 
 func TestPrint(t *testing.T) {
-	var b strings.Builder
-	Print(&b, Snapshot{
+	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0"},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
-		Classes:   []Class{{"boxrunner", "normal", 1, 1}, {"boxrunner-light", "idle", 2, 0}},
+		Classes:   []Class{{"boxrunner", "normal", 2, 2}, {"boxrunner-light", "idle", 2, 0}},
 		ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 1}},
-		Runners:   []Runner{{"box-1-boxrunner-3f9a2c", "octo/site", "boxrunner", "running", t0}},
+		Runners: []Runner{
+			{Name: "box-1-boxrunner-3f9a2c", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0},
+			{Name: "box-1-boxrunner-8e41b7", Repo: "octo/site", Class: "boxrunner", Phase: "starting", Since: t0.Add(time.Minute), Warm: true},
+		},
 		Jobs: []Job{{Repo: "octo/site", Class: "boxrunner", Name: "test", Result: "succeeded",
 			Queued: t0.Add(-time.Hour), Started: t0.Add(-time.Hour + 8*time.Second), Finished: t0.Add(-50 * time.Minute)}},
-	}, t0.Add(4*time.Minute+10*time.Second))
+	}
+	var b strings.Builder
+	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
 	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  disk 41.2 GB free, floor 10.0 GB
 
 CLASS            PRIORITY  RUNNERS  MAX
-boxrunner        normal    1        1
+boxrunner        normal    2        2
 boxrunner-light  idle      0        2
 
 REPOSITORY  CLASS      ASSIGNED JOBS
 octo/site   boxrunner  1
 
-RUNNER                  REPOSITORY  CLASS      STATE    FOR
-box-1-boxrunner-3f9a2c  octo/site   boxrunner  running  4m10s
+RUNNER                  REPOSITORY  CLASS      STATE            FOR
+box-1-boxrunner-3f9a2c  octo/site   boxrunner  running          4m10s
+box-1-boxrunner-8e41b7  octo/site   boxrunner  starting (warm)  3m10s
 
 FINISHED      REPOSITORY  CLASS      JOB   RESULT     QUEUED FOR  TOOK
 ` + t0.Add(-50*time.Minute).Local().Format("Jan 02 15:04") + `  octo/site   boxrunner  test  succeeded  8s          9m52s

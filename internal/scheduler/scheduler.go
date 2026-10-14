@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
@@ -14,7 +15,7 @@ import (
 )
 
 // IdleTimeout is how long a started runner may wait for a job before it is
-// removed.
+// removed. A warm runner waits as long as it takes.
 const IdleTimeout = 3 * time.Minute
 
 // ResultWait is how long a stopped container of a class that keeps failed
@@ -82,7 +83,11 @@ type Class struct {
 	Priority config.Priority
 	// KeepFailed holds a failed job's container this long before it is removed.
 	KeepFailed time.Duration
+	// Warm names the repositories, lower case, that keep one idle runner ready.
+	Warm []string
 }
+
+func (c Class) warm(repo string) bool { return slices.Contains(c.Warm, strings.ToLower(repo)) }
 
 type Image struct {
 	Built    string
@@ -110,7 +115,7 @@ func New(cfg config.Config) State {
 		DiskFloor: int64(cfg.DiskFloor),
 	}
 	for _, c := range cfg.Classes {
-		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority, KeepFailed: c.KeepFailed}
+		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority, KeepFailed: c.KeepFailed, Warm: c.Warm}
 	}
 	return s
 }
@@ -143,6 +148,7 @@ func Decide(s State, now time.Time) []Action {
 		return nil
 	}
 	var actions []Action
+	warm := Warm(s)
 	removing := false
 	for _, r := range sortedRunners(s) {
 		switch {
@@ -153,7 +159,7 @@ func Decide(s State, now time.Time) []Action {
 			// The container stopped before GitHub's message said how the job ended; a failed one is kept.
 		case r.Phase == Exited:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited"})
-		case r.Phase == Starting && now.Sub(r.Since) >= IdleTimeout:
+		case r.Phase == Starting && !warm[r.Name] && now.Sub(r.Since) >= IdleTimeout:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "took no job within 3 minutes"})
 		}
 	}
@@ -174,7 +180,7 @@ func Decide(s State, now time.Time) []Action {
 		actions = append(actions, starts(s)...)
 	}
 
-	if img := s.Image; img.Latest != "" && img.Latest != img.Built && !img.Building && !now.Before(img.RetryAt) && !normalBusy(s) {
+	if img := s.Image; img.Latest != "" && img.Latest != img.Built && !img.Building && !now.Before(img.RetryAt) && !normalBusy(s, warm) {
 		actions = append(actions, Build{Version: img.Latest})
 	}
 	return actions
@@ -218,6 +224,13 @@ func starts(s State) []Action {
 		slices.SortFunc(queue, func(a, b waiting) int {
 			return cmp.Or(a.queued.Compare(b.queued), cmp.Compare(a.key.Repo, b.key.Repo))
 		})
+		// A warm repository's next runner waits behind every job, so warm
+		// runners never take the place a waiting job needs.
+		for _, key := range slices.SortedFunc(maps.Keys(s.ScaleSets), func(a, b Key) int { return cmp.Compare(a.Repo, b.Repo) }) {
+			if key.Class == class && s.Classes[class].warm(key.Repo) && held[key] <= len(s.ScaleSets[key].Jobs) {
+				queue = append(queue, waiting{key: key})
+			}
+		}
 		for _, w := range queue[:min(room, len(queue))] {
 			actions = append(actions, Start{ScaleSet: w.key})
 		}
@@ -225,9 +238,37 @@ func starts(s State) []Action {
 	return actions
 }
 
-func normalBusy(s State) bool {
+// Warm returns the runners kept ready for warm repositories. Runners of one
+// scale set are interchangeable, so while a warm repository's scale set has
+// more runners than jobs, its newest runner without a job is the warm one.
+func Warm(s State) map[string]bool {
+	warm := map[string]bool{}
+	for key, ss := range s.ScaleSets {
+		if !s.Classes[key.Class].warm(key.Repo) {
+			continue
+		}
+		held := 0
+		var newest *Runner
+		for _, r := range s.Runners {
+			if r.ScaleSet != key || !r.holdsJob() {
+				continue
+			}
+			held++
+			if r.Phase != Running && (newest == nil || cmp.Or(r.Since.Compare(newest.Since), cmp.Compare(r.Name, newest.Name)) > 0) {
+				newest = &r
+			}
+		}
+		if newest != nil && held > len(ss.Jobs) {
+			warm[newest.Name] = true
+		}
+	}
+	return warm
+}
+
+// normalBusy reports whether a normal-priority job runs or is about to.
+func normalBusy(s State, warm map[string]bool) bool {
 	for _, r := range s.Runners {
-		if c, ok := s.Classes[r.ScaleSet.Class]; ok && c.Priority == config.Normal && r.holdsJob() {
+		if c, ok := s.Classes[r.ScaleSet.Class]; ok && c.Priority == config.Normal && r.holdsJob() && !warm[r.Name] {
 			return true
 		}
 	}
@@ -321,6 +362,7 @@ func (LatestRunner) event()     {}
 
 // Apply returns the state after an event. It never changes s.
 func Apply(s State, e Event, now time.Time) State {
+	warm := Warm(s)
 	s.Runners = maps.Clone(s.Runners)
 	s.ScaleSets = maps.Clone(s.ScaleSets)
 	update := func(name string, f func(*Runner)) {
@@ -387,6 +429,15 @@ func Apply(s State, e Event, now time.Time) State {
 		s.Image.Latest = e.Version
 	default:
 		panic("scheduler: unhandled event")
+	}
+	// A warm runner's wait does not count: once a job arrives for it, it has
+	// the idle timeout from then to take the job.
+	still := Warm(s)
+	for name := range warm {
+		if r, ok := s.Runners[name]; ok && r.Phase == Starting && !still[name] {
+			r.Since = now
+			s.Runners[name] = r
+		}
 	}
 	return s
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -263,5 +264,32 @@ func TestParseRepos(t *testing.T) {
 	_, err = Parse([]byte(head+`repos = ["site"]`+"\n"), "")
 	if err == nil || err.Error() != "config:\nclass \"web\": repos: \"site\" must be owner/name" {
 		t.Errorf("error = %v", err)
+	}
+}
+
+func TestParseWarm(t *testing.T) {
+	class := func(maxRunners int, lines string) string {
+		return fmt.Sprintf("worker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = %d\n%s\n", maxRunners, lines)
+	}
+	got, err := Parse([]byte(class(3, `warm = ["octo/Site", "octo/site", "octo/api"]`)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warm := got.Classes[0].Warm; !reflect.DeepEqual(warm, []string{"octo/site", "octo/api"}) {
+		t.Errorf("warm = %v", warm)
+	}
+	if _, err := Parse([]byte(class(1, "repos = [\"octo/site\"]\nwarm = [\"octo/site\"]")), ""); err != nil {
+		t.Errorf("a class of only warm repositories may keep all of max warm: %v", err)
+	}
+	for lines, want := range map[string]string{
+		`warm = ["site"]`: `warm: "site" must be owner/name`,
+		"repos = [\"octo/site\"]\nwarm = [\"octo/api\"]": `warm: "octo/api" is not in the class's repos`,
+		`warm = ["octo/site", "octo/api"]`:               "warm: 2 repositories need more idle runners than max (1)",
+		`warm = ["octo/site"]`:                           "warm: the warm runners fill max (1) and leave no place for the class's other repositories; raise max or list only the warm repositories in repos",
+	} {
+		_, err := Parse([]byte(class(1, lines)), "")
+		if want = "config:\nclass \"web\": " + want; err == nil || err.Error() != want {
+			t.Errorf("Parse(%s) error = %v\nwant %s", lines, err, want)
+		}
 	}
 }
