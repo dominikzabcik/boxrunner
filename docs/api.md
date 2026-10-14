@@ -190,7 +190,7 @@ Times are RFC 3339. Repositories and classes are stored as the box sends them: t
 
 The body must fit in 16 KB like every other call. Fifty jobs with long repository and job names can pass that, so the agent leaves out the oldest jobs until it fits.
 
-With [fallback](fallback.md) on, the time a heartbeat arrives also decides when the Worker sends jobs to GitHub's runners and back. A heartbeat never waits for GitHub: a Durable Object alarm makes those calls.
+With [fallback](fallback.md) or [alerts](alerts.md) on, the time a heartbeat arrives also decides when the Worker sends jobs to GitHub's runners and back, and when it posts an alert. A heartbeat never waits for GitHub or the webhook: a Durable Object alarm makes those calls.
 
 The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
 

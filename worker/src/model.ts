@@ -124,18 +124,42 @@ export function splitPaused(classes: readonly ClassName[], pauses: readonly Paus
 
 export type FallbackConfig = { ok: true; afterMs: number | null } | { ok: false; problem: string };
 
-/**
- * Reads the optional `FALLBACK_MINUTES` variable: how long the box may stay
- * silent before its jobs go to GitHub's runners. Empty turns fallback off.
- */
-export function parseFallback(value: string | undefined): FallbackConfig {
+/** Reads a variable of whole minutes from 2 to 1440; empty gives null. */
+function parseMinutes(name: string, value: string | undefined): FallbackConfig {
 	const text = (value ?? '').trim();
 	if (text === '') return { ok: true, afterMs: null };
 	const minutes = /^\d{1,4}$/.test(text) ? Number(text) : Number.NaN;
 	if (!(minutes >= 2 && minutes <= 1440)) {
-		return { ok: false, problem: `FALLBACK_MINUTES is "${text}", not a whole number of minutes from 2 to 1440` };
+		return { ok: false, problem: `${name} is "${text}", not a whole number of minutes from 2 to 1440` };
 	}
 	return { ok: true, afterMs: minutes * 60_000 };
+}
+
+/**
+ * Reads the optional `FALLBACK_MINUTES` variable: how long the box may stay
+ * silent before its jobs go to GitHub's runners. Empty turns fallback off.
+ */
+export const parseFallback = (value: string | undefined) => parseMinutes('FALLBACK_MINUTES', value);
+
+/** Long enough that an agent upgrade or a reboot of the box usually passes without an alert. */
+export const defaultAlertMinutes = 10;
+
+export type AlertConfig = { ok: true; webhook: URL | null; afterMs: number } | { ok: false; problem: string };
+
+/**
+ * Reads the optional `ALERT_WEBHOOK` secret, an https address the Worker posts
+ * to when the box goes silent and when it is back, and `ALERT_MINUTES`.
+ * Empty turns alerts off. A problem never quotes the address: it is a secret.
+ */
+export function parseAlerts(webhook: string | undefined, minutes: string | undefined): AlertConfig {
+	const address = (webhook ?? '').trim();
+	const after = parseMinutes('ALERT_MINUTES', minutes);
+	if (!after.ok) return after;
+	const afterMs = after.afterMs ?? defaultAlertMinutes * 60_000;
+	if (address === '') return { ok: true, webhook: null, afterMs };
+	const url = URL.canParse(address) ? new URL(address) : null;
+	if (url?.protocol !== 'https:') return { ok: false, problem: 'ALERT_WEBHOOK is not an https:// address' };
+	return { ok: true, webhook: url, afterMs };
 }
 
 /** Reads the optional `ADMINS` variable: logins besides the App's owner that may sign in, compared case-insensitively. */

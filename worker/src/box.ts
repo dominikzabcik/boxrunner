@@ -1,12 +1,14 @@
 import { boxTokenHash, randomToken, sameDigest, sha256, signAppJwt } from './crypto';
-import { variable, type Alarms } from './fallback';
+import { variable, type Alarms, type Watch } from './fallback';
 import * as github from './github';
 import { ApiError } from './http';
 import {
 	mayOpenDashboard,
+	parseAlerts,
 	parseClasses,
 	parseFallback,
 	repoFilter,
+	type AlertConfig,
 	type App,
 	type ClassName,
 	type Classes,
@@ -71,6 +73,19 @@ export class Box {
 	fallbackAfterMs(): number | null {
 		const config = this.fallback();
 		return config.ok ? config.afterMs : null;
+	}
+
+	alerts(): AlertConfig {
+		return parseAlerts(this.env.ALERT_WEBHOOK, this.env.ALERT_MINUTES);
+	}
+
+	/** One notion of down for fallback and alerts: with fallback on, its minutes decide. */
+	watch(): Watch {
+		const fallbackMs = this.fallbackAfterMs();
+		const alerts = this.alerts();
+		const webhook = alerts.ok ? alerts.webhook : null;
+		const alertMs = alerts.ok && webhook !== null ? alerts.afterMs : null;
+		return { afterMs: fallbackMs ?? alertMs, fallback: fallbackMs !== null, webhook };
 	}
 
 	/** Signs dashboard sessions and their CSRF tokens; made once and forgotten by a reset. */

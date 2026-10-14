@@ -305,7 +305,8 @@ export class Store {
 
 	fallback(): Fallback {
 		const state = this.sql.exec<{ state: string }>('SELECT state FROM fallback').toArray()[0]?.state;
-		return state === undefined ? idle : (JSON.parse(state) as Fallback);
+		// A row from before alerts has no `alert`, and `idle` fills it in.
+		return state === undefined ? idle : { ...idle, ...(JSON.parse(state) as Partial<Fallback>) };
 	}
 
 	saveFallback(state: Fallback) {

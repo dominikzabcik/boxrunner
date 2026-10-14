@@ -21,7 +21,11 @@
 		// BOXRUNNER_DOWN variable in every served repository, so workflows that
 		// read it run on GitHub's runners (docs/fallback.md). Needs the App's
 		// Variables permission. Empty turns fallback off.
-		"FALLBACK_MINUTES": ""
+		"FALLBACK_MINUTES": "",
+		// Optional: minutes without a heartbeat after which the Worker posts to
+		// the ALERT_WEBHOOK secret (docs/alerts.md). Empty means 10. With
+		// fallback on, FALLBACK_MINUTES decides instead.
+		"ALERT_MINUTES": ""
 	},
 	"secrets": {
 		"required": ["SETUP_SECRET"]

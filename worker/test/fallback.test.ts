@@ -34,7 +34,7 @@ async function ready(github: FakeGitHub) {
 		},
 		dashboard: async () => {
 			const { cookie } = await signIn(github);
-			return (await (await send('/dashboard.json', { headers: { cookie: cookie! } })).json()) as { fallback: unknown; html: string };
+			return (await (await send('/dashboard.json', { headers: { cookie: cookie! } })).json()) as { fallback: unknown; alerts: unknown; html: string };
 		},
 	};
 }
@@ -179,5 +179,166 @@ describe('fallback to GitHub-hosted runners', () => {
 				written: false,
 			});
 		});
+	});
+});
+
+const webhook = 'https://hooks.test/services/T000/B000/XXXX';
+
+/** Answers posts to `webhook` with the next of `answers`, 200 once they run out, and records each; everything else goes to GitHub. */
+function fakeWebhook(github: FakeGitHub) {
+	const hook = { posts: [] as { headers: Record<string, string | null>; body: unknown }[], answers: [] as (number | Error)[] };
+	vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+		const request = new Request(input, init);
+		if (request.url !== webhook) return github.fetch(request);
+		const headers = Object.fromEntries(['content-type', 'x-template', 'x-message'].map((name) => [name, request.headers.get(name)]));
+		hook.posts.push({ headers, body: await request.json() });
+		const answer = hook.answers.shift() ?? 200;
+		if (answer instanceof Error) throw answer;
+		return new Response(answer === 200 ? 'ok' : 'no_text\n', { status: answer });
+	});
+	return hook;
+}
+
+const said = (hook: ReturnType<typeof fakeWebhook>) => hook.posts.map((post) => (post.body as { text: string }).text);
+
+describe('alerts', () => {
+	it('posts once when the box goes silent for 10 minutes and once when it is back, in a body ntfy, Discord and Slack read', async () => {
+		const github = await fakeGitHub();
+		const hook = fakeWebhook(github);
+		await withEnv({ ALERT_WEBHOOK: webhook }, async () => {
+			const { beat, beatEvery30s, fire, nextAlarm, dashboard } = await ready(github);
+			await beat();
+			expect(await nextAlarm()).toBe(iso('10:10:00'));
+
+			at('10:10:00');
+			await fire();
+			const down = 'boxrunner: no box has reported since 2036-10-14 10:00 UTC. Queued jobs wait for it.';
+			expect(hook.posts).toEqual([
+				{ headers: { 'content-type': 'application/json', 'x-template': 'yes', 'x-message': '{{.text}}' }, body: { text: down, content: down } },
+			]);
+			expect(github.count('POST', /\/actions\/variables$/)).toBe(0);
+			expect(await nextAlarm()).toBe(iso('11:10:00'));
+			at('11:10:00');
+			await fire();
+			expect(said(hook)).toEqual([down]);
+
+			const { alerts, html } = await dashboard();
+			expect(alerts).toEqual({ host: 'hooks.test', minutes: 10, configProblem: null, sentDown: true, problem: null });
+			expect(text(html)).toContain('Alerts After 10 minutes without a heartbeat, the Worker posts to hooks.test, and again once the box is back.');
+			expect(html).not.toContain('B000');
+
+			await beatEvery30s('11:20:00', '11:22:00');
+			expect(await nextAlarm()).toBe(iso('11:22:00'));
+			await fire();
+			expect(said(hook)).toEqual([down, 'boxrunner: box-1 reports again.']);
+			expect(await nextAlarm()).toBe(iso('11:32:00'));
+		});
+	});
+
+	it('waits ALERT_MINUTES without fallback, and FALLBACK_MINUTES with it', async () => {
+		const github = await fakeGitHub();
+		github.granted.actions_variables = 'write';
+		const hook = fakeWebhook(github);
+		const { beat, fire, nextAlarm, dashboard } = await ready(github);
+		await withEnv({ ALERT_WEBHOOK: webhook, ALERT_MINUTES: '3' }, async () => {
+			await beat();
+			expect(await nextAlarm()).toBe(iso('10:03:00'));
+			expect((await dashboard()).alerts).toMatchObject({ minutes: 3 });
+		});
+		await withEnv({ ALERT_WEBHOOK: webhook, ALERT_MINUTES: '3', FALLBACK_MINUTES: '5' }, async () => {
+			at('10:03:00');
+			await fire();
+			expect(said(hook)).toEqual([]);
+			expect(await nextAlarm()).toBe(iso('10:05:00'));
+			at('10:05:00');
+			await fire();
+			expect(variables(github)['octo/site']).toBe(iso('10:05:00'));
+			expect(said(hook)).toEqual(['boxrunner: no box has reported since 2036-10-14 10:00 UTC. Workflows that read BOXRUNNER_DOWN run on GitHub’s runners.']);
+			expect((await dashboard()).alerts).toMatchObject({ minutes: 5, sentDown: true });
+		});
+	});
+
+	it('retries a failed post after 1 minute, then 2, and shows why on the dashboard', async () => {
+		const github = await fakeGitHub();
+		const hook = fakeWebhook(github);
+		hook.answers.push(400, new Error(`fetch ${webhook} failed: Network connection lost.`));
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		await withEnv({ ALERT_WEBHOOK: webhook }, async () => {
+			const { beat, fire, nextAlarm, dashboard } = await ready(github);
+			await beat();
+			at('10:10:00');
+			await fire();
+			expect(warn).toHaveBeenLastCalledWith('Could not send the down alert (attempt 1): hooks.test answered 400: no_text');
+			expect(await nextAlarm()).toBe(iso('10:11:00'));
+			const { alerts, html } = await dashboard();
+			expect(alerts).toMatchObject({ sentDown: false, problem: 'hooks.test answered 400: no_text' });
+			expect(text(html)).toContain('The Worker could not post the down alert: hooks.test answered 400: no_text. It tries again.');
+
+			at('10:11:00');
+			await fire();
+			expect(warn).toHaveBeenLastCalledWith('Could not send the down alert (attempt 2): hooks.test could not be reached: fetch <webhook> failed: Network connection lost.');
+			expect(await nextAlarm()).toBe(iso('10:13:00'));
+
+			at('10:13:00');
+			await fire();
+			expect(hook.posts.length).toBe(3);
+			expect(await nextAlarm()).toBe(iso('11:13:00'));
+			expect((await dashboard()).alerts).toMatchObject({ sentDown: true, problem: null });
+		});
+	});
+
+	it('sends nothing for an outage that ended before its alert got through', async () => {
+		const github = await fakeGitHub();
+		const hook = fakeWebhook(github);
+		hook.answers.push(500);
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		await withEnv({ ALERT_WEBHOOK: webhook }, async () => {
+			const { beat, beatEvery30s, fire, nextAlarm, dashboard } = await ready(github);
+			await beat();
+			at('10:10:00');
+			await fire();
+			await beatEvery30s('10:10:30', '10:12:30');
+			expect(await nextAlarm()).toBe(iso('10:12:30'));
+			await fire();
+			expect(hook.posts.length).toBe(1);
+			expect(await nextAlarm()).toBe(iso('10:22:30'));
+			expect((await dashboard()).alerts).toMatchObject({ sentDown: false, problem: null });
+		});
+	});
+
+	it('reads the state a Worker from before alerts stored, and alerts for an outage it was already in', async () => {
+		const github = await fakeGitHub();
+		github.granted.actions_variables = 'write';
+		const hook = fakeWebhook(github);
+		const { beat, fire } = await ready(github);
+		await beat();
+		const before = { down: true, since: Date.parse(iso('10:05:00')), backSince: null, written: true, failures: 0, problem: null };
+		await runInDurableObject(env.BOX.getByName('box'), async (_, state) => {
+			state.storage.sql.exec('INSERT OR REPLACE INTO fallback (singleton, state) VALUES (1, ?)', JSON.stringify(before));
+			await state.storage.setAlarm(Date.parse(iso('11:05:00')));
+		});
+		await withEnv({ ALERT_WEBHOOK: webhook, FALLBACK_MINUTES: '5' }, async () => {
+			at('11:05:00');
+			await fire();
+			expect(said(hook)).toEqual(['boxrunner: no box has reported since 2036-10-14 10:00 UTC. Workflows that read BOXRUNNER_DOWN run on GitHub’s runners.']);
+		});
+	});
+
+	it('stays off with a webhook that is not https, and the dashboard says why without the address', async () => {
+		const github = await fakeGitHub();
+		const hook = fakeWebhook(github);
+		const { beat, nextAlarm, dashboard } = await ready(github);
+		await withEnv({ ALERT_WEBHOOK: webhook.replace('https:', 'http:') }, async () => {
+			await beat();
+			expect(await nextAlarm()).toBe(null);
+			const { alerts, html } = await dashboard();
+			expect(alerts).toEqual({ host: null, minutes: null, configProblem: 'ALERT_WEBHOOK is not an https:// address', sentDown: false, problem: null });
+			expect(text(html)).toContain('The Worker’s ALERT_WEBHOOK is not an https:// address, so alerts are off.');
+			expect(html).not.toContain('B000');
+		});
+		await withEnv({ ALERT_WEBHOOK: webhook, ALERT_MINUTES: '10m' }, async () => {
+			expect((await dashboard()).alerts).toMatchObject({ configProblem: 'ALERT_MINUTES is "10m", not a whole number of minutes from 2 to 1440' });
+		});
+		expect(hook.posts).toEqual([]);
 	});
 });

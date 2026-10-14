@@ -8,6 +8,7 @@ The same pages, with a sidebar, are at [boxrunner.zabcik.me/docs](https://boxrun
 | [Configuration](config.md) | You set up classes, limits, warm runners, Docker inside jobs or a custom job image. |
 | [Upgrading](upgrading.md) | A newer release is out, or `status` says so. It covers the agent and the Worker. |
 | [Fallback](fallback.md) | You want jobs to run on GitHub's runners while the box is down. |
+| [Alerts](alerts.md) | You want to hear when the box goes silent and when it is back. |
 | [Dashboard](dashboard.md) | You want to see boxes, runners and recent jobs in the browser. |
 | [Worker API](api.md) | You change the agent or the Worker; both sides test against it. |
 | [Decisions](decisions.md) | You wonder why it is built this way. Each entry names its measurement. |
