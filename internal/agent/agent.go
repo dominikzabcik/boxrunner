@@ -583,6 +583,8 @@ func (a *Agent) supervise(ctx context.Context) error {
 		err error
 	}
 	running := map[scheduler.Key]context.CancelFunc{}
+	// held are the stopped listeners whose scale set another box's session holds.
+	held := map[scheduler.Key]bool{}
 	exits := make(chan exit)
 	paused := map[string]bool{}
 	sync := func() error {
@@ -631,6 +633,12 @@ func (a *Agent) supervise(ctx context.Context) error {
 				cancel()
 			}
 		}
+		for key := range held {
+			if !want[key] {
+				delete(held, key)
+				a.post(scheduler.ScaleSetGone{ScaleSet: key})
+			}
+		}
 		for key := range want {
 			if _, ok := running[key]; ok {
 				continue
@@ -652,6 +660,11 @@ func (a *Agent) supervise(ctx context.Context) error {
 		case <-a.resync:
 			err = sync()
 		case e := <-exits:
+			if worker.HeldBy(e.err) != "" {
+				held[e.key] = true
+			} else {
+				delete(held, e.key)
+			}
 			err = a.listenerExited(ctx, running, e.key, e.err)
 		case <-ctx.Done():
 		}
