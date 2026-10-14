@@ -58,7 +58,20 @@ Jobs that use `services:`, `container:`, Docker container actions or `docker bui
 
 Sysbox's package refuses to install while Docker has any container, unless `/etc/docker/daemon.json` already sets `bip` and `default-address-pools`; otherwise it sets its own and restarts Docker. `install` therefore writes Docker's current bridge address and address pools (Docker's built-in ones when none are set) into that file first. On a box with a running container, `install --docker` then left Docker's process and the container untouched, and the package only made Docker reload its configuration to add the runtime.
 
-Every job starts with an empty Docker, so images are pulled cold; a pull-through mirror on the box is planned.
+Every job starts with an empty Docker, so images are pulled cold; the next section adds a mirror on the box.
+
+## A registry mirror for Docker in jobs
+
+Docker Hub allows 100 anonymous pulls per six hours per IP, and each docker job pulled its service images from it again. A `registry` 2.8.3 container in proxy mode now caches Docker Hub on the box, and each job's Docker uses it as its registry mirror. Measured in an Ubuntu 24.04 arm64 VM (Docker 29.1.3, Sysbox 0.7.1), with job containers started as the agent starts them:
+
+- `docker pull postgres:17-alpine` took 19.6 s in the first job. The mirror fetched the image from Docker Hub and logged 17 new cache entries.
+- The same pull took 4.9 s in a second job, started after the first was removed. The mirror answered its 18 requests from the cache and logged no new entries.
+- The mirror runs on the host's network and listens only on the `boxrunner0` gateway, so jobs reach it as the host and the firewall needs one exception: TCP to that address and port. From a job, the mirror answered and every other port on the host timed out, including a server on all addresses and one on the gateway's next port.
+- Listening on the gateway alone did not keep others out: a container on Docker's default bridge reached the mirror. The input chain now sees everything the host receives and drops traffic to the mirror that does not come from the bridge; the same container then timed out.
+
+Images inside a docker job do not show in Docker's own size for its container. Sysbox keeps a job's `/var/lib/docker` on the host in `/var/lib/sysbox/docker/<container id>`; after that pull it held 407 MB, while Docker said the container wrote 49 kB. The disk floor now adds those directories to each container's size. Sysbox deleted the directory after the container was removed.
+
+The job image adds the Docker Compose plugin, which GitHub's Ubuntu image also has; `docker compose up` ran a one-service project in a job.
 
 ## Warm runners are chosen per repository
 

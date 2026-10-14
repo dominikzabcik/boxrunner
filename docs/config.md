@@ -32,7 +32,7 @@ max = 2
 |---|---|---|
 | `worker` | required | Your Worker's URL. Must be HTTPS. |
 | `box` | the hostname's first label | Lower-case letters, digits and dashes. It names the box's runners and sessions at GitHub. |
-| `disk_floor` | `10GB` | No runner starts while Docker's data directory has less free space than this. Below half of it, the agent stops the job container that wrote the most. |
+| `disk_floor` | `10GB` | No runner starts while Docker's data directory, or Sysbox's `/var/lib/sysbox` when it sits on another filesystem, has less free space than this. Below half of it, the agent stops the job container that wrote the most, counting the images and containers of a job's own Docker. |
 
 The box token lives in `/etc/boxrunner/token`, readable by root only.
 
@@ -64,7 +64,9 @@ With `docker = true`, a class's jobs can use `services:`, `container:` jobs, Doc
 
 Each job runs under Sysbox's `sysbox-runc` runtime, where root inside the container is an unprivileged user on the box, and starts its own Docker daemon before the runner. The job's Docker shares the class's CPU, memory and process limits and its priority, and the firewall applies to the containers it starts. The agent does not serve a class with `docker = true` while Docker has no `sysbox-runc` runtime; it logs why.
 
-Every job starts with an empty Docker, so it pulls each image it uses again. Docker Hub limits anonymous pulls per IP address, so a box that runs many such jobs can reach the limit; a job that logs in with `docker/login-action` first pulls under its account's limit instead.
+Every job starts with an empty Docker, so it pulls each image it uses again. Images from Docker Hub come through a registry mirror on the box: the first job that pulls an image fetches it from Docker Hub, and later jobs get it from the box's cache. The mirror is a `registry` container named `boxrunner-mirror` that listens on port 5000 of the `boxrunner0` bridge's own address, which only job containers can reach, and keeps its cache in the volume `boxrunner-mirror`. It forgets an image a week after fetching it. Images from other registries, such as `ghcr.io`, are pulled directly. The mirror runs while a class has `docker = true`; `install` and the agent start it, and `install` without such a class, or `uninstall`, removes it with its cache.
+
+The job image has Docker Compose, so `docker compose up` works in these jobs.
 
 ## Extending the job image
 
