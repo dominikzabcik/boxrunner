@@ -332,6 +332,40 @@ describe('repositories that stop being private', () => {
 		);
 	});
 
+	it('deletes the scale sets of a repository that turned public at the next listing, without the agent asking for it', async () => {
+		const { github, call } = await ready();
+		const id = await scaleSet(call);
+		const light = await scaleSet(call, 'octo/site', 'boxrunner-light');
+		const docs = await scaleSet(call, 'octo/docs');
+
+		github.repos.find((repo) => repo.full_name === 'octo/site')!.private = false;
+		vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124 }]);
+		expect([scaleSetKey(123, id), scaleSetKey(123, light), scaleSetKey(124, docs)].map((key) => github.scaleSets.has(key))).toEqual([
+			false,
+			false,
+			true,
+		]);
+
+		github.repos.find((repo) => repo.full_name === 'octo/site')!.private = true;
+		vi.setSystemTime(Date.now() + 61_000);
+		expect(await scaleSet(call)).not.toBe(id);
+	});
+
+	it('forgets the scale sets of a repository the App was removed from, which it can no longer delete', async () => {
+		const { github, call } = await ready();
+		await scaleSet(call);
+		github.repos.find((repo) => repo.full_name === 'octo/site')!.installed = false;
+		vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+		await call('GET', '/v1/repos');
+		expect(github.count('DELETE', /runnerscalesets\/\d+$/)).toBe(0);
+
+		github.repos.find((repo) => repo.full_name === 'octo/site')!.installed = true;
+		vi.setSystemTime(Date.now() + 61_000);
+		await scaleSet(call);
+		expect(github.count('GET', /runnerscalesets/)).toBe(2);
+	});
+
 	it('answers 410 without minting when the App was removed from the repository', async () => {
 		const { github, call } = await ready();
 		const id = await scaleSet(call);
