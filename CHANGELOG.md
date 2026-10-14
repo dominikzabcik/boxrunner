@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0
+
+**Fixes**
+- The idle class is idle on Ubuntu 22.04 and other systems with systemd older than 252. `CPUWeight=idle` only sets `cpu.idle` from systemd 252, so on systemd 249 idle jobs ran at normal priority and `doctor` failed its idle slice check. The agent now sets `cpu.idle` itself and the slice keeps the CPU controller on. The idle class needs Linux 5.15 or newer; `doctor` names an older kernel (#73).
+- Reloading the page that shows a new box token no longer replaces the token again; the form redirects to a page that shows it once (#57).
+- `uninstall` removes the agent's status socket, which the agent could leave behind when it stopped.
+
+**Running unattended**
+- `boxrunner drain [--wait]` closes the box's sessions and starts no runners while running jobs finish; `boxrunner resume` undoes it, and a drain survives a reboot. docs/upgrading.md#rebooting-the-box has the steps. Docker's live-restore stays off, because Sysbox containers lose DNS after a Docker restart with it (#49).
+- An optional `ALERT_WEBHOOK` posts once when every box has been silent for `FALLBACK_MINUTES` or `ALERT_MINUTES` (10 by default), and once when a box reports again. One message works for ntfy, Discord and Slack (docs/alerts.md, part of #47).
+
+**Project**
+- A workflow installs, checks, reinstalls and uninstalls boxrunner on GitHub's Ubuntu 22.04, 24.04 and 24.04 arm64 VMs, with runc, Sysbox and Docker in jobs, on every change to the installer and nightly (#52).
+
 ## v0.3.0
 
 **Security**
