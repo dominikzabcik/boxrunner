@@ -222,7 +222,8 @@ type HeartbeatClass struct {
 }
 
 // HeartbeatScaleSet is a scale set the box listens to and its assigned
-// jobs, including the ones runners already took.
+// jobs, including the ones runners already took. A count of 0 tells the
+// Worker that the scale set's jobs no longer wait.
 type HeartbeatScaleSet struct {
 	Repo     string `json:"repo"`
 	Class    string `json:"class"`

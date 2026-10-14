@@ -28,7 +28,7 @@ const mostLines = 5;
 export function joinAlert(lines: readonly string[]): string {
 	if (lines.length <= mostLines) return lines.join('\n');
 	const rest = lines.length - mostLines + 1;
-	return [...lines.slice(0, mostLines - 1), `boxrunner: ${rest} more changes; see the dashboard.`].join('\n');
+	return [...lines.slice(0, mostLines - 1), `boxrunner: and ${rest} more repositories and classes whose jobs started or stopped waiting.`].join('\n');
 }
 
 /**

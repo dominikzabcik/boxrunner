@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -78,11 +79,12 @@ func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 	for _, c := range snap.Classes {
 		hb.Classes = append(hb.Classes, worker.HeartbeatClass{Name: c.Name, Priority: c.Priority, Max: c.Max, HeldUntil: c.HeldUntil})
 	}
-	// Only scale sets with assigned jobs can have jobs waiting, so the rest stay out of the body.
-	for _, ss := range snap.ScaleSets {
-		if ss.Assigned > 0 && len(hb.ScaleSets) < heartbeatScaleSets {
-			hb.ScaleSets = append(hb.ScaleSets, worker.HeartbeatScaleSet{Repo: ss.Repo, Class: ss.Class, Assigned: ss.Assigned})
-		}
+	// Scale sets with assigned jobs come first, so the cap never drops one;
+	// the others tell the Worker that their jobs no longer wait.
+	scaleSets := slices.Clone(snap.ScaleSets)
+	slices.SortStableFunc(scaleSets, func(x, y status.ScaleSet) int { return cmp.Compare(min(y.Assigned, 1), min(x.Assigned, 1)) })
+	for _, ss := range scaleSets[:min(len(scaleSets), heartbeatScaleSets)] {
+		hb.ScaleSets = append(hb.ScaleSets, worker.HeartbeatScaleSet{Repo: ss.Repo, Class: ss.Class, Assigned: ss.Assigned})
 	}
 	for _, r := range snap.Runners {
 		hb.Runners = append(hb.Runners, worker.HeartbeatRunner{Name: r.Name, Repo: r.Repo, Class: r.Class, State: r.Phase, Since: r.Since})

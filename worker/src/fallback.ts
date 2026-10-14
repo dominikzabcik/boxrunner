@@ -1,6 +1,6 @@
 import { alertText, endText, joinAlert, postAlert, waitText } from './alerts';
 import type { Box } from './box';
-import { heartbeatGapMs, type BoxStatus } from './model';
+import { heartbeatGapMs, type BoxStatus, type Repo } from './model';
 import { cause, changes, overdue, track, type ScaleSetName, type Wait } from './waits';
 
 /** The Durable Object's alarm, which wakes the Worker while the box is silent. */
@@ -57,11 +57,12 @@ export function heard(state: Fallback, previous: number | undefined, now: number
 
 const overdueChanged = (a: Fallback, b: Fallback) => JSON.stringify(overdue(a.waits)) !== JSON.stringify(overdue(b.waits));
 
-/** Takes in the waits a heartbeat brought; a change in which waits are overdue gets a fresh try at the webhook. Returns `state` itself when nothing changes. */
+/** Takes in the waits a heartbeat brought; a change in which waits are overdue gets a fresh try at the webhook, unless a down or recovery alert is still pending. Returns `state` itself when nothing changes. */
 export function waited(state: Fallback, waits: Wait[]): Fallback {
 	if (JSON.stringify(waits) === JSON.stringify(state.waits)) return state;
 	const next = { ...state, waits };
-	return overdueChanged(state, next) ? { ...next, alert: { ...state.alert, failures: 0, problem: null } } : next;
+	const fresh = overdueChanged(state, next) && state.alert.down === state.down;
+	return fresh ? { ...next, alert: { ...state.alert, failures: 0, problem: null } } : next;
 }
 
 /** Whether jobs should go to GitHub's runners at `now`; returns `state` itself when nothing changes. */
@@ -98,12 +99,20 @@ function nextCheck(state: Fallback, watch: Watch, lastSeen: number | undefined, 
 
 const pausedClasses = (box: Box) => new Set(box.store.pauses().map((pause) => pause.className));
 
+/** Whether the Worker still serves a repository and class, by the repository list the agent last fetched and `CLASSES`. */
+function servedNow(box: Box): (name: ScaleSetName) => boolean {
+	const listed = box.store.lastCached('repos');
+	const repos = listed === undefined ? null : new Set((JSON.parse(listed) as Repo[]).map((repo) => repo.name.toLowerCase()));
+	const classes = box.classes();
+	return ({ repo, className }) => (repos === null || repos.has(repo.toLowerCase())) && (!classes.ok || classes.classes.includes(className));
+}
+
 /** Runs on every heartbeat, before the Worker stores it. It never calls GitHub or the webhook: the alarm does. */
 export async function onHeartbeat(box: Box, status: BoxStatus, now: number): Promise<void> {
 	const watch = box.watch();
 	const stored = box.store.fallback();
 	const boxes = [...box.store.boxes().filter((other) => other.status.box !== status.box), { status, seenAt: now }];
-	const waits = track(stored.waits, boxes, pausedClasses(box), watch.afterMs, now);
+	const waits = track(stored.waits, boxes, servedNow(box), watch.afterMs, now);
 	const state = waited(heard(stored, box.store.lastSeen(), now), waits);
 	if (state !== stored) box.store.saveFallback(state);
 	if (watch.afterMs === null && !state.down && !state.written) return;

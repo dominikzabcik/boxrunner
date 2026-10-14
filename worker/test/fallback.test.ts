@@ -38,7 +38,7 @@ async function ready(github: FakeGitHub) {
 			return (await (await send('/dashboard.json', { headers: { cookie: cookie! } })).json()) as {
 				fallback: unknown;
 				alerts: unknown;
-				waiting: { box: string; class: string; cause: string | null }[];
+				waiting: { repo: string; box: string; class: string; cause: string | null }[];
 				html: string;
 			};
 		},
@@ -382,9 +382,19 @@ describe('alerts for waiting jobs', () => {
 			await fire();
 			expect(said(hook)).toEqual([stillWaiting]);
 
+			// A restarted agent reports before its sessions open, and a class held back after failing runners tries one more.
 			const starting = { name: 'box-1-boxrunner-light-4d5e6f', repo: 'octo/site', class: 'boxrunner-light', state: 'starting', since: iso('10:12:30') };
-			await beats('10:12:30', '10:12:30', { scaleSets: [site], runners: [starting] });
-			expect(await nextAlarm()).toBe(iso('10:12:30'));
+			const held = [
+				{ name: 'boxrunner', priority: 'normal', max: 1 },
+				{ name: 'boxrunner-light', priority: 'idle', max: 2, heldUntil: iso('10:12:00') },
+			];
+			await beats('10:12:30', '10:12:30', { scaleSets: [] });
+			await beats('10:13:00', '10:13:00', { scaleSets: [site], runners: [starting], classes: held });
+			expect(said(hook)).toEqual([stillWaiting]);
+			expect((await dashboard()).waiting).toMatchObject([{ repo: 'octo/site', overdue: true }]);
+
+			await beats('10:13:30', '10:13:30', { scaleSets: [site], runners: [starting] });
+			expect(await nextAlarm()).toBe(iso('10:13:30'));
 			await fire();
 			expect(said(hook)).toEqual([stillWaiting, 'boxrunner: octo/site no longer has jobs for class boxrunner-light waiting without a runner.']);
 			expect((await dashboard()).waiting).toEqual([]);
@@ -396,60 +406,71 @@ describe('alerts for waiting jobs', () => {
 		const hook = fakeWebhook(github);
 		await withEnv({ ALERT_WEBHOOK: webhook }, async () => {
 			const { call, fire, dashboard } = await ready(github);
+			const waits = (repo: string, className = 'boxrunner') => [{ repo, class: className, assigned: 1 }];
 			const box1 = (scaleSets: unknown[]) =>
 				heartbeatBody({
-					classes: [
-						{ name: 'boxrunner', priority: 'normal', max: 1 },
-						{ name: 'boxrunner-light', priority: 'idle', max: 2, heldUntil: iso('10:00:30') },
-					],
 					runners: [{ name: 'box-1-boxrunner-3f9a2c', repo: 'octo/docs', class: 'boxrunner', state: 'running', since: iso('09:55:00') }],
 					scaleSets,
 				});
-			const box2 = (scaleSets: unknown[]) =>
-				heartbeatBody({ box: 'box-2', classes: [{ name: 'boxrunner-light', priority: 'idle', max: 2 }], runners: [], draining: true, scaleSets });
-			const box1Waits = [
-				{ repo: 'octo/site', class: 'boxrunner', assigned: 1 },
-				{ repo: 'octo/site', class: 'boxrunner-light', assigned: 3 },
-			];
+			const box2 = (scaleSets: unknown[], draining = true) => heartbeatBody({ box: 'box-2', runners: [], draining, scaleSets });
+			const box4 = heartbeatBody({
+				box: 'box-4',
+				classes: [{ name: 'boxrunner', priority: 'normal', max: 2, heldUntil: iso('10:00:30') }],
+				runners: [{ name: 'box-4-boxrunner-7a8b9c', repo: 'octo/open', class: 'boxrunner', state: 'starting', since: iso('10:00:00') }],
+				scaleSets: waits('octo/open'),
+			});
 			const post = async (body: unknown) => expect((await call('POST', '/v1/heartbeat', body)).status).toBe(200);
 
 			at('10:00:00');
-			await post(box1([...box1Waits, { repo: 'octo/docs', class: 'boxrunner-gpu', assigned: 1 }]));
-			await post(box2([{ repo: 'octo/docs', class: 'boxrunner-light', assigned: 1 }]));
-			await post(heartbeatBody({ box: 'box-3', runners: [], scaleSets: [{ repo: 'octo/site', class: 'boxrunner-arm', assigned: 4 }] }));
+			await post(box1([...waits('octo/site'), ...waits('octo/site', 'boxrunner-light')]));
+			await post(box2(waits('octo/api')));
+			await post(heartbeatBody({ box: 'box-3', runners: [], scaleSets: waits('octo/old') }));
+			await post(box4);
 			await runInDurableObject(env.BOX.getByName('box'), async (_, state) => {
-				state.storage.sql.exec("INSERT INTO paused_classes (class, since, by_login) VALUES ('boxrunner-gpu', ?, 'octo')", Date.now());
+				state.storage.sql.exec("INSERT INTO paused_classes (class, since, by_login) VALUES ('boxrunner-light', ?, 'octo')", Date.now());
 			});
 			for (let t = Date.parse(iso('10:00:30')); t <= Date.parse(iso('10:10:00')); t += 30_000) {
 				vi.setSystemTime(t);
-				await post(box1(box1Waits));
+				await post(box1(waits('octo/site')));
 				await post(box2([]));
+				await post(box4);
 			}
 			await fire();
 			const since = 'waiting since 2036-10-14 10:00 UTC with no runner starting. Likely cause:';
 			expect(said(hook)).toEqual([
 				[
-					`boxrunner: octo/docs has had jobs for class boxrunner-gpu ${since} the class is paused on the dashboard.`,
-					`boxrunner: octo/docs has had jobs for class boxrunner-light ${since} box-2 is draining.`,
+					`boxrunner: octo/api has had jobs for class boxrunner ${since} box-2 is draining.`,
+					`boxrunner: octo/old has had jobs for class boxrunner ${since} box-3 stopped reporting.`,
+					`boxrunner: octo/open has had jobs for class boxrunner ${since} box-4 holds the class back because its runners failed before taking a job.`,
 					`boxrunner: octo/site has had jobs for class boxrunner ${since} box-1 already runs the class’s maximum of 1 runner for other repositories.`,
-					`boxrunner: octo/site has had jobs for class boxrunner-arm ${since} box-3 stopped reporting.`,
-					`boxrunner: octo/site has had jobs for class boxrunner-light ${since} box-1 holds the class back because its runners failed before taking a job.`,
+					`boxrunner: octo/site has had jobs for class boxrunner-light ${since} the class is paused on the dashboard.`,
 				].join('\n'),
 			]);
 			expect((await dashboard()).waiting.map((wait) => `${wait.box} ${wait.class}: ${wait.cause}`)).toEqual([
-				'box-1 boxrunner-gpu: the class is paused on the dashboard',
-				'box-2 boxrunner-light: box-2 is draining',
+				'box-2 boxrunner: box-2 is draining',
+				'box-3 boxrunner: box-3 stopped reporting',
+				'box-4 boxrunner: box-4 holds the class back because its runners failed before taking a job',
 				'box-1 boxrunner: box-1 already runs the class’s maximum of 1 runner for other repositories',
-				'box-3 boxrunner-arm: box-3 stopped reporting',
-				'box-1 boxrunner-light: box-1 holds the class back because its runners failed before taking a job',
+				'box-1 boxrunner-light: the class is paused on the dashboard',
 			]);
 
 			at('10:10:30');
-			await post(box2([]));
-			await post(heartbeatBody({ box: 'box-2', classes: [{ name: 'boxrunner-light', priority: 'idle', max: 2 }], runners: [], scaleSets: [] }));
+			await post(box2([{ repo: 'octo/api', class: 'boxrunner', assigned: 0 }], false));
 			await fire();
-			expect(said(hook).at(-1)).toBe('boxrunner: octo/docs no longer has jobs for class boxrunner-light waiting without a runner.');
+			expect(said(hook).at(-1)).toBe('boxrunner: octo/api no longer has jobs for class boxrunner waiting without a runner.');
 		});
+	});
+
+	it('ends a wait nobody reports once the Worker no longer serves its repository', async () => {
+		const github = await fakeGitHub();
+		const { call, dashboard } = await ready(github);
+		const beat = async (scaleSets: unknown[]) => expect((await call('POST', '/v1/heartbeat', heartbeatBody({ scaleSets }))).status).toBe(200);
+		await beat([site, { repo: 'octo/old', class: 'boxrunner', assigned: 1 }]);
+		await beat([]);
+		expect((await dashboard()).waiting.map((wait) => wait.repo)).toEqual(['octo/old', 'octo/site']);
+		expect((await call('GET', '/v1/repos')).status).toBe(200);
+		await beat([]);
+		expect((await dashboard()).waiting.map((wait) => wait.repo)).toEqual(['octo/site']);
 	});
 
 	it('reads the box statuses a Worker from before waits stored', async () => {
@@ -484,7 +505,7 @@ describe('alerts for waiting jobs', () => {
 			at('10:03:00');
 			await fire();
 			expect(await nextAlarm()).toBe(iso('10:05:00'));
-			await beat('10:03:30', []);
+			await beat('10:03:30', [{ ...site, assigned: 0 }]);
 			expect(await nextAlarm()).toBe(iso('10:05:00'));
 			at('10:05:00');
 			await fire();

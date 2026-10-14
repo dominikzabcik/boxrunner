@@ -44,7 +44,7 @@ func TestHeartbeatBodyTellsWhyJobsMayWait(t *testing.T) {
 	body, _ := json.Marshal(heartbeatBody(snap, nil))
 	want := `{"box":"box-1","version":"0.5.0","image":"2.338.0+3f9a2c0b1d4e","disk":{"free":0,"floor":0},` +
 		`"classes":[{"name":"boxrunner","priority":"normal","max":1},{"name":"boxrunner-light","priority":"idle","max":2,"heldUntil":"2026-10-14T09:05:00Z"}],` +
-		`"runners":[],"jobs":[],"draining":true,"scaleSets":[{"repo":"octo/site","class":"boxrunner-light","assigned":3}]}`
+		`"runners":[],"jobs":[],"draining":true,"scaleSets":[{"repo":"octo/site","class":"boxrunner-light","assigned":3},{"repo":"octo/docs","class":"boxrunner","assigned":0}]}`
 	if string(body) != want {
 		t.Errorf("body =\n%s\nwant\n%s", body, want)
 	}

@@ -18,11 +18,11 @@ Ten minutes is long enough that an agent upgrade, which restarts the agent in se
 
 ### When jobs wait
 
-Each heartbeat says which of the box's scale sets have jobs assigned to them, and which runners are requested, starting or running. A scale set waits while it has assigned jobs and no runner on the way for its repository and class. When one has waited for `ALERT_MINUTES` (or `FALLBACK_MINUTES` while fallback is on), the Worker posts once, naming the repository, the class and the likely cause:
+Each heartbeat lists the scale sets the box listens to with their assigned jobs, and its runners. A scale set waits while it has assigned jobs and no runner on the way for its repository and class. A runner that is requested or starting in a class the box holds back after failing runners does not count, since it is likely to fail too; a running one does. When one has waited for `ALERT_MINUTES` (or `FALLBACK_MINUTES` while fallback is on), the Worker posts once, naming the repository, the class and the likely cause:
 
 > boxrunner: octo/site has had jobs for class boxrunner waiting since 2026-10-14 10:00 UTC with no runner starting. Likely cause: the class is paused on the dashboard.
 
-Once a runner starts for them, or the box reports no jobs assigned, it posts once more:
+Once a runner is on the way for them, or a box reports the scale set with no jobs assigned, it posts once more:
 
 > boxrunner: octo/site no longer has jobs for class boxrunner waiting without a runner.
 
@@ -38,7 +38,7 @@ The likely cause is the first of these that holds, from the latest heartbeats:
 
 Without a cause, the message ends after "no runner starting", and `boxrunner status` on the box says more.
 
-A box listens to a scale set only while it serves it, so a paused class or a draining box stops reporting that scale set's jobs. The Worker then keeps the wait it last saw until the class resumes or the box serves again, and does the same while the box that reported it is silent. It does not see jobs that arrive in the meantime.
+A box reports a scale set only while it listens to it, and it stops listening while the class is paused, while it drains and for the moment it restarts. So a wait that no box reports any more stays, as the Worker last saw it, until a box reports the scale set again or the Worker stops serving its repository or class. Jobs canceled in the meantime keep it until then, and jobs that arrive in the meantime are not seen.
 
 Changes that happen together go out in one post, one line each, at most five lines, so Discord's limit of 2,000 characters holds. Agents up to v0.4.0 do not report assigned jobs, so the Worker sees no waits on their boxes.
 

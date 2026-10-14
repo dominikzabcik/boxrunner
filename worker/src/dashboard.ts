@@ -319,7 +319,7 @@ ${table(
 	]),
 	'',
 )}
-<p class="hint">Jobs assigned to a box with no runner requested, starting or running for their repository and class. A box stops reporting the jobs of a paused class, and all of them while it drains, so a row stays until the class resumes or the box serves again.</p>
+<p class="hint">Jobs assigned to a box with no runner requested, starting or running for their repository and class. A box stops reporting a scale set while its class is paused, while the box drains or restarts, so a row stays until a box reports the scale set again.</p>
 </section>`;
 }
 

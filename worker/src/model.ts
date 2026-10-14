@@ -206,7 +206,7 @@ export type BoxStatus = {
 	runners: BoxRunner[];
 	/** Whether `boxrunner drain` closed the box's sessions. */
 	draining: boolean;
-	/** Only the scale sets with assigned jobs; empty from an agent too old to send them. */
+	/** The scale sets the box listens to; empty from an agent too old to send them. */
 	scaleSets: BoxScaleSet[];
 };
 

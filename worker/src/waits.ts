@@ -1,4 +1,4 @@
-import { heartbeatGapMs, type BoxName, type ClassName, type RepoName, type RunnerState } from './model';
+import { heartbeatGapMs, type BoxName, type BoxStatus, type ClassName, type RepoName, type RunnerState } from './model';
 import type { StoredBox } from './store';
 
 /** A repository and class; the alert state keeps the ones the webhook heard waiting. */
@@ -18,17 +18,27 @@ const onTheWay: readonly RunnerState[] = ['requested', 'starting', 'running'];
 const fresh = (box: StoredBox, now: number) => now - box.seenAt <= heartbeatGapMs;
 
 /**
- * Brings the waits up to date with the boxes' latest heartbeats. A box sees a
- * scale set's jobs only while it listens to it, which it stops doing while it
- * drains or the class is paused. So a wait stays while the box that reported
- * it is silent or draining or the class is paused, and ends once that box
- * reports without it or any box has a runner on the way for it.
+ * A runner that is requested or starting in a class the box holds back is
+ * one more try that is likely to fail, so only a running one counts there.
  */
-export function track(previous: readonly Wait[], boxes: readonly StoredBox[], paused: ReadonlySet<ClassName>, afterMs: number | null, now: number): Wait[] {
+function runnersOnTheWay(status: BoxStatus): string[] {
+	const held = new Set(status.classes.filter((c) => c.heldUntil !== null).map((c) => c.name));
+	return status.runners
+		.filter((runner) => runner.state === 'running' || (onTheWay.includes(runner.state) && !held.has(runner.className)))
+		.map(key);
+}
+
+/**
+ * Brings the waits up to date with the boxes' latest heartbeats. A box reports
+ * the scale sets it listens to, and stops listening while it drains, restarts
+ * or the class is paused. So a wait ends only once a box reports the scale
+ * set with no jobs assigned, any box has a runner on the way for it, or the
+ * Worker stops serving its repository or class; it stays while nobody reports it.
+ */
+export function track(previous: readonly Wait[], boxes: readonly StoredBox[], served: (name: ScaleSetName) => boolean, afterMs: number | null, now: number): Wait[] {
 	const reporting = boxes.filter((box) => fresh(box, now));
-	const withRunner = new Set(
-		reporting.flatMap(({ status }) => status.runners.filter((runner) => onTheWay.includes(runner.state)).map(key)),
-	);
+	const withRunner = new Set(reporting.flatMap(({ status }) => runnersOnTheWay(status)));
+	const reported = new Set(reporting.flatMap(({ status }) => status.scaleSets.map(key)));
 	const waiting = new Map<string, Wait>();
 	for (const { status } of reporting) {
 		for (const scaleSet of status.scaleSets) {
@@ -43,13 +53,8 @@ export function track(previous: readonly Wait[], boxes: readonly StoredBox[], pa
 			});
 		}
 	}
-	const unseeing = (name: BoxName) => {
-		const box = boxes.find((candidate) => candidate.status.box === name);
-		return box !== undefined && (!fresh(box, now) || box.status.draining);
-	};
 	for (const wait of previous) {
-		if (waiting.has(key(wait)) || withRunner.has(key(wait))) continue;
-		if (paused.has(wait.className) || unseeing(wait.box)) waiting.set(key(wait), wait);
+		if (!waiting.has(key(wait)) && !withRunner.has(key(wait)) && !reported.has(key(wait)) && served(wait)) waiting.set(key(wait), wait);
 	}
 	return [...waiting.values()]
 		.map((wait) => ({ ...wait, overdue: wait.overdue || (afterMs !== null && now - wait.since >= afterMs) }))
