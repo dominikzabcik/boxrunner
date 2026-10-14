@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1
+
+**Fixes**
+- The Worker deletes the scale sets of a repository it stops serving (public, archived or left out of `REPOS`) the next time it lists repositories, so they leave the repository's runner settings even when no agent asks for that repository again. Where the App was removed it forgets them (#31).
+- `boxrunner status` points to recovering a dead box's jobs only on a box that has never run a job, or after a crash left a session open, no longer after every restart of an idle box.
+
+**Releases**
+- The Deploy to Cloudflare button deploys the Worker from the `stable` branch, which each release moves forward, so a new Worker matches the agent the installer downloads (#21).
+
 ## v0.2.0
 
 The first public release.
