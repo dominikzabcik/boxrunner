@@ -1,0 +1,574 @@
+<title>boxrunner Landing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one dark instrument. A full-bleed particle box in the hero, then four chapters that each animate one claim, then the install line. */
+:root {
+  --night: #070a10;
+  --deep: #0c1119;
+  --panel: #111824;
+  --rule: #1f2a3a;
+  --ink: #edf1f7;
+  --dim: #8c99ab;
+  --faint: #56637a;
+  --normal: #5aa7ff;
+  --idle: #f5b54a;
+  --key: #ff6a3d;
+  --ok: #45d48a;
+  --f-display: "Bricolage Grotesque", "Geist", system-ui, sans-serif;
+  --f-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--night); color: var(--ink); font: 16px/1.6 var(--f-ui); overflow-x: hidden; }
+a { color: inherit; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--normal); outline-offset: 3px; border-radius: 4px; }
+.gutter { padding-inline: clamp(16px, 4vw, 48px); }
+.measure { max-width: 1180px; margin-inline: auto; }
+.mono { font-family: var(--f-mono); }
+
+/* nav */
+nav.top { position: absolute; inset: env(safe-area-inset-top, 0px) 0 auto 0; z-index: 3; }
+nav.top .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; }
+.mark { font: 500 15px/1 var(--f-mono); letter-spacing: .02em; display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
+.mark i { width: 14px; height: 14px; border: 1.5px solid var(--ink); display: inline-block; position: relative; }
+.mark i::after { content: ""; position: absolute; inset: 3px; background: var(--normal); }
+nav.top ul { display: flex; gap: clamp(12px, 3vw, 28px); list-style: none; margin: 0; padding: 0; font-size: 14px; color: var(--dim); }
+nav.top a { text-decoration: none; }
+nav.top a:hover { color: var(--ink); }
+@media (max-width: 560px) { nav.top ul li:not(:last-child) { display: none; } }
+
+/* hero */
+.hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: end; overflow: hidden; isolation: isolate; }
+#field { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; pointer-events: none; }
+header.hero, main, footer { position: relative; z-index: 1; }
+
+.hero::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(90deg, var(--night) 0%, rgba(7,10,16,.7) 38%, transparent 62%), linear-gradient(transparent 70%, var(--night)); }
+@media (max-width: 760px) { .hero::after { background: linear-gradient(transparent 20%, rgba(7,10,16,.75) 52%, var(--night) 75%); } .hero .copy { padding-top: 46vh; } }
+.hero .copy { padding-block: 132px 56px; width: 100%; }
+.copytext { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; max-width: 640px; min-width: 0; }
+.install > * { min-width: 0; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 10px; }
+.eyebrow .live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: ping 2.4s infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(69,212,138,.6) } 70% { box-shadow: 0 0 0 9px rgba(69,212,138,0) } 100% { box-shadow: 0 0 0 0 rgba(69,212,138,0) } }
+h1 { font: 800 clamp(46px, 7.4vw, 112px)/0.92 var(--f-display); letter-spacing: -0.035em; margin: 0; text-wrap: balance; }
+h1 .w { display: inline-block; }
+h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 1.5px var(--ink); }
+.lede { font-size: clamp(17px, 1.6vw, 20px); color: var(--dim); max-width: 56ch; margin: 0; }
+.lede b { color: var(--ink); font-weight: 500; }
+.install { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+.cmd { display: flex; align-items: center; gap: 12px; min-width: 0; max-width: 100%; background: rgba(17,24,36,.82); backdrop-filter: blur(8px); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 12px 12px 16px; font: 14px/1.4 var(--f-mono); }
+.cmd code { overflow-x: auto; white-space: nowrap; min-width: 0; color: var(--ink); }
+.cmd code .p { color: var(--faint); }
+.copybtn { flex: none; border: 1px solid var(--rule); background: var(--panel); border-radius: 7px; padding: 7px 10px; font: 500 12px/1 var(--f-mono); cursor: pointer; color: var(--dim); }
+.copybtn:hover { color: var(--ink); border-color: var(--faint); }
+.ghost { display: inline-flex; align-items: center; gap: 8px; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: 500; border: 1px solid var(--rule); }
+.ghost:hover { border-color: var(--faint); }
+.ticker { display: flex; flex-wrap: wrap; gap: 8px 22px; font: 13px/1.3 var(--f-mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.ticker b { color: var(--ink); font-weight: 500; }
+.ticker .n { color: var(--normal); } .ticker .i { color: var(--idle); }
+
+/* chapters */
+section.ch { padding-block: clamp(72px, 11vw, 140px); border-top: 1px solid var(--rule); }
+.ch .head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-bottom: clamp(28px, 4vw, 48px); max-width: 600px; }
+.ch .kicker { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+.ch h2 { font: 800 clamp(34px, 5.4vw, 72px)/0.96 var(--f-display); letter-spacing: -0.03em; margin: 0; text-wrap: balance; }
+.ch h2 .n { color: var(--normal); } .ch h2 .i { color: var(--idle); } .ch h2 .k { color: var(--key); }
+.ch p.sub { margin: 0; color: var(--dim); font-size: 18px; max-width: 62ch; }
+.reveal { transition: transform .9s cubic-bezier(.2,.7,.2,1), filter .9s; }
+.js .reveal.pending { transform: translateY(18px); filter: blur(2px); }
+
+/* cores */
+.scope { background: var(--deep); border: 1px solid var(--rule); border-radius: 14px; padding: clamp(14px, 2vw, 22px); display: grid; gap: 16px; }
+.scope canvas { width: 100%; height: clamp(180px, 26vw, 280px); display: block; border-radius: 8px; }
+.scope .bar { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; font: 13px/1.3 var(--f-mono); color: var(--dim); }
+.sw { width: 14px; height: 10px; display: inline-block; border-radius: 2px; vertical-align: -1px; margin-right: 7px; }
+.sw.n { background: var(--normal); }
+.sw.i { background: repeating-linear-gradient(135deg, var(--idle) 0 3px, transparent 3px 6px); outline: 1px solid var(--idle); }
+.switch { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 3px; gap: 3px; }
+.switch button { border: 0; background: transparent; border-radius: 999px; padding: 7px 12px; cursor: pointer; color: var(--dim); font: 500 12px/1 var(--f-mono); }
+.switch button[aria-pressed="true"] { background: var(--ink); color: var(--night); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; margin-top: 26px; }
+.stat { border-left: 1px solid var(--rule); padding: 6px 0 6px 18px; display: grid; gap: 6px; }
+.stat dt { font: 12px/1.2 var(--f-mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.stat dd { margin: 0; font: 600 clamp(32px, 4vw, 48px)/1 var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.stat dd small { font-size: 15px; color: var(--dim); font-weight: 400; letter-spacing: 0; }
+.stat.bad dd { color: var(--key); }
+
+/* vault */
+.vault { display: grid; grid-template-columns: minmax(0, 1fr); }
+.caption { color: var(--dim); font-size: 13px; margin: -16px 0 28px; max-width: 600px; }
+.caption .k { color: var(--key); } .caption .n { color: var(--normal); }
+.vault svg { width: 100%; height: auto; display: block; overflow: visible; }
+.vault .node rect { fill: var(--deep); stroke: var(--rule); stroke-width: 1.5; }
+.vault .node.keyed rect { stroke: var(--key); }
+.vault text { font-family: var(--f-mono); fill: var(--dim); font-size: 13px; }
+.vault text.t { fill: var(--ink); font: 600 17px var(--f-ui); }
+.vault text.kt { fill: var(--key); }
+.vault .wire { stroke: var(--rule); stroke-width: 2; fill: none; stroke-dasharray: 4 6; }
+.vault .pkt rect { fill: var(--normal); }
+.vault .pkt text { fill: var(--night); font: 600 11px var(--f-mono); }
+.vault .pkt.key rect { fill: var(--key); }
+.claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 28px; max-width: 760px; }
+.claim { border-left: 2px solid var(--rule); padding: 4px 0 4px 16px; }
+.claim strong { display: block; font: 600 15px/1.3 var(--f-ui); margin-bottom: 4px; }
+.claim span { color: var(--dim); font-size: 15px; }
+.claim.k { border-color: var(--key); }
+
+/* install */
+.pair { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 880px) { .pair { grid-template-columns: 1fr; } }
+.term { background: var(--deep); border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; min-width: 0; }
+.term .chrome { display: flex; gap: 7px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+.term .chrome i { width: 10px; height: 10px; border-radius: 50%; background: var(--rule); }
+.term pre { margin: 0; padding: 16px 18px 22px; font: 13px/1.65 var(--f-mono); color: #c9d3e1; min-height: 360px; overflow-x: auto; }
+.term .p { color: var(--faint); } .term .ok { color: var(--ok); } .term .hi { color: var(--idle); } .term .b { color: var(--normal); }
+.term .caret { display: inline-block; width: 8px; height: 15px; background: var(--ink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0 } }
+.receipt { background: #f4f3ee; color: #17171a; padding: 22px 20px 30px; font: 13px/1.6 var(--f-mono); display: grid; gap: 12px; position: relative; transform: rotate(-1.2deg); box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  -webkit-mask: radial-gradient(circle 7px at 50% 100%, transparent 98%, #000) bottom / 16px 100% repeat-x; mask: radial-gradient(circle 7px at 50% 100%, transparent 98%, #000) bottom / 16px 100% repeat-x; }
+.receipt h3 { margin: 0; text-align: center; font: 600 12px/1 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; }
+.receipt .row { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.receipt .row.total { border-top: 1px dashed #9a9a92; padding-top: 10px; font-size: 16px; font-weight: 600; }
+.receipt .strike { color: #c03a1a; text-decoration: line-through; }
+.receipt label { display: grid; gap: 8px; color: #55554f; font-size: 12px; }
+.receipt input[type=range] { width: 100%; accent-color: #17171a; }
+.receipt .src { font-size: 11px; color: #6c6c66; margin: 0; }
+.stamp { position: absolute; right: 16px; top: 46px; border: 2px solid #1f8a4c; color: #1f8a4c; padding: 4px 8px; font: 700 13px/1 var(--f-mono); transform: rotate(9deg); letter-spacing: .1em; opacity: .85; }
+
+/* race */
+.race { display: grid; gap: 18px; }
+.lane { display: grid; grid-template-columns: 180px minmax(0, 1fr) 90px; gap: 14px; align-items: center; font: 14px/1.3 var(--f-mono); }
+@media (max-width: 620px) { .lane { grid-template-columns: 1fr 70px; } .lane .track { grid-column: 1 / -1; grid-row: 2; } }
+.track { height: 14px; background: var(--deep); border-radius: 999px; overflow: hidden; border: 1px solid var(--rule); }
+.fill { height: 100%; width: var(--w); border-radius: 999px; background: var(--c); transform-origin: left; }
+.js .race.pending .fill { transform: scaleX(0); }
+.race .fill { transition: transform 2.6s cubic-bezier(.3,.6,.2,1); }
+.lane .t { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.lane .who { color: var(--dim); }
+
+/* honest */
+.nots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.not { background: var(--deep); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px; }
+.not strong { display: block; margin-bottom: 6px; }
+.not span { color: var(--dim); font-size: 15px; }
+
+footer { border-top: 1px solid var(--rule); padding-block: 72px 56px; display: grid; gap: 22px; }
+footer h2 { font: 800 clamp(34px, 6vw, 80px)/.95 var(--f-display); letter-spacing: -0.03em; margin: 0; }
+footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: var(--night); padding: 10px 14px; border-radius: 8px; font: 500 13px var(--f-mono); transition: .25s; pointer-events: none; z-index: 9; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { .reveal, .race .fill { transition: none; } .eyebrow .live, .term .caret { animation: none; } }
+</style>
+
+<nav class="top gutter" aria-label="Site">
+  <div class="row measure">
+    <a class="mark" href="#top"><i aria-hidden="true"></i>boxrunner</a>
+    <ul>
+      <li><a href="#cores">Priorities</a></li>
+      <li><a href="#key">Security</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="https://github.com/dominikzabcik/boxrunner">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<canvas id="field" aria-hidden="true"></canvas>
+<header class="hero gutter" id="top" data-scene="hero">
+  <div class="copy measure">
+    <div class="copytext">
+      <div class="eyebrow"><span class="live" aria-hidden="true"></span>Self-hosted GitHub Actions runners</div>
+      <h1><span class="w">CI on the box</span> <span class="w">you <em>already</em></span> <span class="w">pay for.</span></h1>
+      <p class="lede">Every job gets a <b>fresh container that is gone when the job ends</b>. Your GitHub App key <b>never touches the box</b>. And your test suite keeps every core while the rest runs on what it leaves idle.</p>
+      <div class="install">
+        <div class="cmd"><code><span class="p">$ </span>curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh</code><button class="copybtn" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh" id="copy-hero">copy</button></div>
+        <a class="ghost" href="#install">How it installs</a>
+      </div>
+      <div class="ticker" aria-live="off">
+        <span>box <b>box-1</b></span>
+        <span>4 cores · <b class="n">1</b> normal · <b class="i">3</b> idle</span>
+        <span>queue to start <b>6–8 s</b></span>
+        <span>containers since load <b id="tk-born">0</b></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="ch gutter" id="cores" data-scene="cores">
+    <div class="measure">
+      <div class="head reveal">
+        <div class="kicker">Priority classes</div>
+        <h2>Your <span class="n">tests</span> keep every core. <span class="i">The rest</span> waits its turn.</h2>
+        <p class="sub">Light jobs run in an idle-priority class, scheduled by Linux's SCHED_IDLE: they use any core your main job is not using, and give it back the instant it wants it. Flip the switch to see the same box without it.</p>
+      </div>
+      <div class="scope reveal">
+        <canvas id="lanes" role="img" aria-label="Four CPU cores over time: a normal-priority job takes cores in bursts, idle-priority jobs fill the gaps"></canvas>
+        <div class="bar">
+          <span><i class="sw n"></i>normal priority &nbsp; <i class="sw i"></i>idle priority</span>
+          <div class="switch" role="group" aria-label="Scheduling">
+            <button aria-pressed="true" id="sched-on">boxrunner</button>
+            <button aria-pressed="false" id="sched-off">no priorities</button>
+          </div>
+        </div>
+      </div>
+      <dl class="stats">
+        <div class="stat"><dt>Main job alone</dt><dd><span data-count="428">428</span><small> ms</small></dd></div>
+        <div class="stat"><dt>Beside busy idle jobs</dt><dd><span data-count="429">429</span><small> ms · +0%</small></dd></div>
+        <div class="stat bad"><dt>Beside busy normal jobs</dt><dd><span data-count="2096">2,096</span><small> ms · +390%</small></dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="ch gutter" id="key" data-scene="key">
+    <div class="measure">
+      <div class="head reveal">
+        <div class="kicker">Key custody</div>
+        <h2>The <span class="k">key</span> stays in your Worker. The box gets tokens that expire.</h2>
+        <p class="sub">The GitHub App can administer your repositories, so its private key lives only in a Cloudflare Worker you deploy. The box can ask for one thing: a runner for one job.</p>
+      </div>
+      <p class="caption mono reveal"><span class="k">●</span> the vault holds your key &nbsp; <span class="n">●</span> tokens travel to your box &nbsp; <span class="n">●</span> one job's container forms and dissolves</p>
+      <div class="vault">
+        <div class="claims reveal">
+          <div class="claim k"><strong>If someone owns your box</strong><span>they get runner registrations for your private repositories for minutes, not the key that can delete them.</span></div>
+          <div class="claim"><strong>Checked against github.com</strong><span>A session token asked to mint a runner or delete a scale set is refused with "Invalid Claims". Only the Worker can.</span></div>
+          <div class="claim"><strong>Nobody copies a key</strong><span>GitHub hands the key straight to your Worker through the App manifest flow during setup.</span></div>
+          <div class="claim"><strong>Jobs can't wander</strong><span>From a job, the host, your LAN, a tailnet and the cloud metadata service do not answer. <span class="mono">boxrunner doctor</span> proves it.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ch gutter" id="install" data-scene="install">
+    <div class="measure">
+      <div class="head reveal">
+        <div class="kicker">Install</div>
+        <h2>One line on the box. Then minutes stop costing money.</h2>
+        <p class="sub">Deploy the Worker with one click, open its setup page, run the line it gives you. The installer checks the binary's checksum and its build attestation before anything runs.</p>
+      </div>
+      <div class="pair">
+        <div class="term"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div><pre id="term" aria-label="Installing boxrunner and checking its status"></pre></div>
+        <div class="receipt">
+          <div class="stamp" aria-hidden="true">PAID $0</div>
+          <h3>Your CI · last month</h3>
+          <label for="mins">Linux minutes: <b id="minsOut">5,000</b><input id="mins" type="range" min="2000" max="40000" step="500" value="5000"></label>
+          <div class="row"><span>Included in GitHub Free</span><span>2,000 min</span></div>
+          <div class="row"><span>Billed at $0.006/min</span><span class="strike" id="ghCost">$18.00</span></div>
+          <div class="row"><span>boxrunner</span><span>$0.00</span></div>
+          <div class="row total"><span>You keep</span><span id="kept">$18.00</span></div>
+          <p class="src">GitHub's published rate for a standard 2-core Linux runner on private repositories, October 2026. Self-hosted minutes are free today.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ch gutter" id="proof" data-scene="install">
+    <div class="measure">
+      <div class="head reveal">
+        <div class="kicker">Why it exists</div>
+        <h2>A personal site spent 2,000 free minutes in twelve days.</h2>
+        <p class="sub">Lighthouse, Playwright and CodeQL on every pull request. A 4-core ARM VPS that was already paid for now runs all of it, faster.</p>
+      </div>
+      <div class="race pending" id="race">
+        <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill" style="--w:100%;--c:var(--faint)"></div></div><span class="t">~15 min</span></div>
+        <div class="lane"><span class="who">first prototype</span><div class="track"><div class="fill" style="--w:83%;--c:var(--idle)"></div></div><span class="t">12.4 min</span></div>
+        <div class="lane"><span class="who">boxrunner</span><div class="track"><div class="fill" style="--w:77%;--c:var(--normal)"></div></div><span class="t">11.6 min</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ch gutter" id="not" data-scene="hero">
+    <div class="measure">
+      <div class="head reveal">
+        <div class="kicker">When not to use it</div>
+        <h2>Honest limits.</h2>
+      </div>
+      <div class="nots">
+        <div class="not"><strong>Public repositories</strong><span>Anyone who can open a pull request could run code on your box. The Worker refuses them.</span></div>
+        <div class="not"><strong>macOS or Windows jobs</strong><span>boxrunner runs Linux containers, on amd64 and arm64.</span></div>
+        <div class="not"><strong>A fleet of machines</strong><span>One Worker serves one box today. GARM and Actions Runner Controller manage fleets.</span></div>
+        <div class="not"><strong>Untrusted code</strong><span>Jobs share the host's kernel, like every container.</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="gutter" data-scene="hero">
+  <div class="measure" style="display:grid;grid-template-columns:minmax(0,1fr);gap:22px">
+    <h2>Your box is waiting.</h2>
+    <div class="install">
+      <div class="cmd"><code><span class="p">$ </span>curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh</code><button class="copybtn" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh" id="copy-foot">copy</button></div>
+      <a class="ghost" href="https://github.com/dominikzabcik/boxrunner">Read the source</a>
+    </div>
+    <div class="meta"><span>Apache-2.0</span><span>Go agent · Cloudflare Worker</span><span>amd64 · arm64</span><span>Built by Dominik Žabčík</span></div>
+  </div>
+</footer>
+<div class="toast" id="toast" role="status">Copied</div>
+
+<script>
+(function () {
+  document.documentElement.classList.add('js');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const C = { normal: css('--normal'), idle: css('--idle'), ink: css('--ink'), dim: css('--dim'), faint: css('--faint'), key: css('--key'), deep: css('--deep'), rule: css('--rule') };
+  const rgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+  const RGB = { normal: rgb(C.normal), idle: rgb(C.idle), ink: rgb(C.ink) };
+
+  // ---------------- The box: one particle field behind the whole page ----------------
+  // Every section names a scene. Each scene places every particle; scrolling
+  // between two sections blends their scenes, so the box rebuilds itself into
+  // what each section explains.
+  const cv = document.getElementById('field'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, dpr = 1;
+  function size() { dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  size(); addEventListener('resize', size);
+
+  let seed = 20261013;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const unit = () => { const u = rand() * 2 - 1, th = rand() * Math.PI * 2, s = Math.sqrt(1 - u * u); return [s * Math.cos(th), u, s * Math.sin(th)]; };
+  const EDGES = [[0,1],[1,3],[3,2],[2,0],[4,5],[5,7],[7,6],[6,4],[0,4],[1,5],[2,6],[3,7]];
+  // A point on edge e of a box with half-sizes h around c, t in [0,1).
+  function edgePoint(e, t, h, c, out) {
+    const [a, b] = EDGES[e];
+    for (let k = 0; k < 3; k++) {
+      const A = (a >> k & 1 ? 1 : -1) * h[k], B = (b >> k & 1 ? 1 : -1) * h[k];
+      out[k] = c[k] + A + (B - A) * t;
+    }
+    return out;
+  }
+  const ease = (x) => x < 0 ? 0 : x > 1 ? 1 : x * x * (3 - 2 * x);
+
+  const SHELL = 480, SLOT = 168, DUST = 260;
+  const parts = [];
+  for (let i = 0; i < SHELL; i++) parts.push({ kind: 'shell', i, s: unit(), r: rand() });
+  for (let j = 0; j < 4; j++) for (let m = 0; m < SLOT; m++) parts.push({ kind: 'slot', j, m, g: j * SLOT + m, s: unit(), r: rand() });
+  for (let d = 0; d < DUST; d++) parts.push({ kind: 'dust', i: d, s: unit(), r: 1.4 + rand() * 1.4, ph: rand() * 6.28 });
+  for (const p of parts) { p.p = [p.s[0] * 3, p.s[1] * 3, p.s[2] * 3]; p.d = [0, 0]; }
+
+  const COL = { ink: RGB.ink, normal: RGB.normal, idle: RGB.idle, key: rgb(C.key) };
+  const tmp = [0, 0, 0];
+  const SLOT_CENTERS = [[-.48, .48, -.48], [.48, .48, -.48], [-.48, .48, .48], [.48, .48, .48]];
+
+  // A container's life: forms from scattered particles, runs, then dissolves outward.
+  function container(p, local, t, period, offset, h, c, o) {
+    const ph = (t + offset) % period, e = Math.floor(local / (SLOT / 12)), tt = (local % (SLOT / 12)) / (SLOT / 12);
+    edgePoint(e, tt, [h, h, h], c, tmp);
+    if (ph < .8) { const k = ease(ph / .8); for (let q = 0; q < 3; q++) o.x[q] = tmp[q] + p.s[q] * (1 - k) * 1.1; o.a = k; }
+    else if (ph < period - 1.3) { for (let q = 0; q < 3; q++) o.x[q] = tmp[q]; o.a = .82 + .18 * Math.sin(t * 5 + offset); }
+    else { const d = (ph - (period - 1.3)) / 1.3; for (let q = 0; q < 3; q++) o.x[q] = tmp[q] + (tmp[q] - c[q]) * d * 2.4 + p.s[q] * d * .5; o.a = 1 - d; }
+  }
+  function dust(p, t, o, a) {
+    const ang = p.ph + t * .05, r = p.r;
+    o.x[0] = Math.cos(ang) * r * Math.sqrt(1 - p.s[1] * p.s[1]); o.x[1] = p.s[1] * r * .6; o.x[2] = Math.sin(ang) * r * Math.sqrt(1 - p.s[1] * p.s[1]);
+    o.c = COL.ink; o.a = a; o.size = .8;
+  }
+
+  const SCENES = {
+    hero(p, t, o) {
+      o.size = 1.2;
+      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [1, 1, 1], [0, 0, 0], o.x); o.c = COL.ink; o.a = .5; return; }
+      if (p.kind === 'dust') return dust(p, t, o, .12);
+      const normal = p.j === 0;
+      container(p, p.m, t, normal ? 8.5 : 4.6 + p.j * .9, p.j * 1.7, .3, SLOT_CENTERS[p.j], o);
+      o.c = normal ? COL.normal : COL.idle; o.size = 1.6;
+    },
+    cores(p, t, o) {
+      o.size = 1.2;
+      const xs = [-.84, -.28, .28, .84];
+      if (p.kind === 'shell') { const k = Math.floor(p.i / 120), l = p.i % 120; edgePoint(Math.floor(l / 10), (l % 10) / 10, [.2, .8, .2], [xs[k], -.35, 0], o.x); o.c = COL.ink; o.a = .45; return; }
+      if (p.kind === 'dust') return dust(p, t, o, .08);
+      // One block rises through each core. While the main job is busy it owns all four; then idle jobs take the free cores.
+      const busy = (t % 7) < 4.2, rise = ((t * .32 + p.j * .27) % 1), y = .3 - rise * 1.3;
+      const e = Math.floor(p.m / 14), tt = (p.m % 14) / 14;
+      edgePoint(e, tt, [.15, .15, .15], [xs[p.j], y, 0], o.x);
+      o.c = busy || p.j === 0 ? COL.normal : COL.idle; o.a = rise < .08 ? rise / .08 : rise > .92 ? (1 - rise) / .08 : 1; o.size = 1.5;
+    },
+    key(p, t, o) {
+      o.size = 1.2;
+      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [.42, .42, .42], [-.95, -.05, 0], o.x); o.c = COL.key; o.a = .55; return; }
+      if (p.kind === 'dust') return dust(p, t, o, .07);
+      const m = p.m;
+      if (p.j === 0) {
+        // The key itself, inside the vault.
+        if (m < 84) { const a = m / 84 * Math.PI * 2; o.x[0] = -.95 + Math.cos(a) * .14; o.x[1] = -.2 + Math.sin(a) * .14; o.x[2] = 0; }
+        else if (m < 140) { o.x[0] = -.95; o.x[1] = -.06 + (m - 84) / 56 * .34; o.x[2] = 0; }
+        else { const k = m - 140; o.x[0] = -.95 + (k < 14 ? (k / 14) * .1 : ((k - 14) / 14) * .07); o.x[1] = k < 14 ? .2 : .1; o.x[2] = 0; }
+        o.c = COL.key; o.a = .95; o.size = 1.7; return;
+      }
+      if (p.j === 1) { edgePoint(Math.floor(m / 14), (m % 14) / 14, [.34, .34, .34], [.95, -.05, 0], o.x); o.c = COL.ink; o.a = .6; return; }
+      if (p.j === 2) {
+        // Tokens travel from the vault to the box in three packets.
+        const u = (m / SLOT + t * .2) % 1, a = 1 - u;
+        o.x[0] = a * a * -.5 + 2 * a * u * 0 + u * u * .58; o.x[1] = a * a * -.1 + 2 * a * u * -1.05 + u * u * -.1; o.x[2] = Math.sin(m) * .03;
+        const packet = ((u * 3) % 1) < .28;
+        o.c = COL.normal; o.a = packet ? .95 : .08; o.size = packet ? 1.7 : 1; return;
+      }
+      container(p, m, t, 3.4, 0, .17, [.95, .72, 0], o); o.c = COL.normal; o.size = 1.5;
+    },
+    install(p, t, o) {
+      o.size = 1.2;
+      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [.8, .5, .8], [0, -.25, 0], o.x); o.c = COL.ink; o.a = .5; return; }
+      if (p.kind === 'dust') return dust(p, t, o, .08);
+      // Twelve small containers fall into the box, one job each.
+      const k = Math.floor(p.g / 56), l = p.g % 56;
+      if (l >= 48) { o.x[0] = 0; o.x[1] = -.25; o.x[2] = 0; o.a = 0; o.c = COL.ink; return; }
+      const ph = (t * .28 + k / 12) % 1, x = ((k % 4) - 1.5) * .34, z = (Math.floor(k / 4) - 1) * .34, y = -2.3 + ph * 2.2;
+      edgePoint(Math.floor(l / 4), (l % 4) / 4, [.09, .09, .09], [x, y, z], o.x);
+      o.c = k % 3 === 0 ? COL.normal : COL.idle; o.a = ph < .1 ? ph / .1 : ph > .82 ? Math.max(0, (1 - ph) / .18) : 1; o.size = 1.5;
+    },
+  };
+  const SPIN = { hero: 1, cores: .45, key: .2, install: .8 };
+  const PITCH = { hero: -.42, cores: -.12, key: -.18, install: -.38 };
+
+  const sections = [...document.querySelectorAll('[data-scene]')];
+  function sceneAt() {
+    const vh = H; let i = 0;
+    for (let k = 0; k < sections.length; k++) if (sections[k].getBoundingClientRect().top <= vh * .95) i = k;
+    const top = sections[i].getBoundingClientRect().top;
+    const k = i === 0 ? 1 : ease((vh * .95 - top) / (vh * .5));
+    return { from: sections[Math.max(0, i - 1)].dataset.scene, to: sections[i].dataset.scene, k };
+  }
+
+  const pointer = { x: -1e4, y: -1e4, tx: 0, ty: 0, active: false };
+  addEventListener('pointermove', (e) => { pointer.x = e.clientX; pointer.y = e.clientY; pointer.tx = e.clientX / W - .5; pointer.ty = e.clientY / H - .5; pointer.active = e.pointerType === 'mouse'; });
+  document.addEventListener('pointerleave', () => { pointer.active = false; });
+  let lastScroll = scrollY, scrollVel = 0;
+
+  let rotY = .6, rotX = -.42, tiltX = 0, tiltY = 0, elapsed = 0, lastT = performance.now(), born = 0, prevPh = [0, 0, 0, 0];
+  const A = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 }, B = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 };
+  function project(x, cx, cy, scale) {
+    const cyR = Math.cos(rotY + tiltY), syR = Math.sin(rotY + tiltY), cxR = Math.cos(rotX + tiltX), sxR = Math.sin(rotX + tiltX);
+    const X = x[0] * cyR - x[2] * syR; let Z = x[0] * syR + x[2] * cyR; const Y = x[1] * cxR - Z * sxR; Z = x[1] * sxR + Z * cxR;
+    const f = 4.5 / (4.5 + Z);
+    return [cx + X * scale * f, cy + Y * scale * f, f];
+  }
+  function frame(now) {
+    const dt = Math.min(.05, (now - lastT) / 1000); lastT = now; elapsed += dt;
+    const sv = scrollY - lastScroll; lastScroll = scrollY; scrollVel += (sv - scrollVel) * .15;
+    const { from, to, k } = sceneAt();
+    const narrow = W < 900;
+    const cx = narrow ? W * .5 : W * .74, cy = narrow ? H * .3 : H * .5, scale = Math.min(W, H) * (narrow ? .19 : .21);
+    const spin = SPIN[from] * (1 - k) + SPIN[to] * k;
+    if (!reduce) rotY += dt * .16 * spin + scrollVel * .0018;
+    rotX += ((PITCH[from] * (1 - k) + PITCH[to] * k) - rotX) * Math.min(1, dt * 2);
+    tiltX += ((pointer.active ? pointer.ty * .5 : 0) - tiltX) * .05;
+    tiltY += ((pointer.active ? pointer.tx * .6 : 0) - tiltY) * .05;
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    const fade = narrow ? .45 : 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
+    for (const p of parts) {
+      SCENES[from](p, elapsed, A); SCENES[to](p, elapsed, B);
+      for (let q = 0; q < 3; q++) { const target = A.x[q] + (B.x[q] - A.x[q]) * k; p.p[q] += (target - p.p[q]) * settle; }
+      const a = (A.a + (B.a - A.a) * k) * fade;
+      if (a <= .01) continue;
+      const c = k < .5 ? A.c : B.c, size = A.size + (B.size - A.size) * k;
+      const [x, y, f] = project(p.p, cx, cy, scale);
+      if (f <= 0) continue;
+      if (pointer.active) { const dx = x - pointer.x, dy = y - pointer.y, d2 = dx * dx + dy * dy; if (d2 < 12100) { const d = Math.sqrt(d2) || 1, push = (1 - d / 110) * 2.6; p.d[0] += dx / d * push; p.d[1] += dy / d * push; } }
+      p.d[0] *= .9; p.d[1] *= .9;
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, a * (.55 + .45 * f))})`;
+      ctx.beginPath(); ctx.arc(x + p.d[0], y + p.d[1], size * f, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    // Count containers the hero scene forms, for the ticker.
+    for (let j = 0; j < 4; j++) { const per = j === 0 ? 8.5 : 4.6 + j * .9, ph = (elapsed + j * 1.7) % per; if (ph < prevPh[j]) born++; prevPh[j] = ph; }
+    tkBorn.textContent = born + 4;
+    if (!reduce) requestAnimationFrame(frame);
+  }
+  const tkBorn = document.getElementById('tk-born');
+  if (reduce) { elapsed = 3; for (const p of parts) { SCENES.hero(p, elapsed, A); p.p = A.x.slice(); } frame(performance.now()); addEventListener('scroll', () => frame(performance.now()), { passive: true }); addEventListener('resize', () => frame(performance.now())); }
+  else requestAnimationFrame(frame);
+
+  // ---------------- Cores: four lanes ----------------
+  const lc = document.getElementById('lanes'), lx = lc.getContext('2d');
+  let fair = false;
+  const on = document.getElementById('sched-on'), off = document.getElementById('sched-off');
+  on.onclick = () => { fair = false; on.setAttribute('aria-pressed', 'true'); off.setAttribute('aria-pressed', 'false'); };
+  off.onclick = () => { fair = true; off.setAttribute('aria-pressed', 'true'); on.setAttribute('aria-pressed', 'false'); };
+  const cols = 150, lanes = 4, hist = [];
+  let step = 0;
+  function nextCol() {
+    const ph = step++ % 100, main = ph < 58 ? 4 : ph < 74 ? 2 : 0, col = [];
+    for (let l = 0; l < lanes; l++) col.push(l < main ? (fair ? (Math.random() < .5 ? 1 : 3) : 1) : 2);
+    hist.push(col); if (hist.length > cols) hist.shift();
+  }
+  for (let i = 0; i < cols; i++) nextCol();
+  function drawLanes() {
+    const w = lc.clientWidth, h = lc.clientHeight, d = Math.min(2, devicePixelRatio || 1);
+    if (lc.width !== Math.round(w * d)) { lc.width = w * d; lc.height = h * d; }
+    lx.setTransform(d, 0, 0, d, 0, 0);
+    lx.fillStyle = C.deep; lx.fillRect(0, 0, w, h);
+    const lh = h / lanes, cw = w / cols;
+    for (let c = 0; c < hist.length; c++) for (let l = 0; l < lanes; l++) {
+      const v = hist[c][l], x = c * cw, y = l * lh + 7, hh = lh - 14;
+      if (v === 1 || v === 3) { lx.fillStyle = C.normal; lx.globalAlpha = v === 3 ? .4 : .95; lx.fillRect(x, y, cw + .6, hh); lx.globalAlpha = 1; }
+      if (v === 2 || v === 3) { lx.save(); lx.beginPath(); lx.rect(x, y, cw + .6, hh); lx.clip(); lx.strokeStyle = C.idle; lx.lineWidth = 1.4; for (let k = -hh; k < cw + hh; k += 6) { lx.beginPath(); lx.moveTo(x + k - (c * cw) % 6, y + hh); lx.lineTo(x + k - (c * cw) % 6 + hh, y); lx.stroke(); } lx.restore(); }
+    }
+    lx.strokeStyle = C.rule; for (let l = 1; l < lanes; l++) { lx.beginPath(); lx.moveTo(0, l * lh); lx.lineTo(w, l * lh); lx.stroke(); }
+    lx.fillStyle = C.dim; lx.font = '11px "Geist Mono", monospace'; for (let l = 0; l < lanes; l++) lx.fillText('cpu' + l, 10, l * lh + 20);
+    // the "now" edge
+    lx.fillStyle = C.ink; lx.fillRect(w - 2, 0, 2, h);
+  }
+  let lanesLast = 0, lanesVisible = true;
+  new IntersectionObserver(([e]) => { lanesVisible = e.isIntersecting; }).observe(lc);
+  function lanesLoop(now) { if (lanesVisible && now - lanesLast > 90) { nextCol(); lanesLast = now; } if (lanesVisible) drawLanes(); requestAnimationFrame(lanesLoop); }
+  drawLanes(); if (!reduce) requestAnimationFrame(lanesLoop); else addEventListener('resize', drawLanes);
+
+  // ---------------- Install: terminal and receipt ----------------
+  const script = [
+    ['p', '$ '], ['', 'curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh -s -- --worker https://ci.example.workers.dev --token ••••••••\n'],
+    ['', '==> download boxrunner 0.2.0 for linux/arm64\n'], ['ok', '==> checksum ok\n'], ['ok', '==> build attestation ok\n'],
+    ['', '==> create the Docker network boxrunner on bridge boxrunner0\n'], ['', '==> apply the firewall rules for boxrunner0\n'],
+    ['', '==> build the job image boxrunner/runner:local\n'], ['', '==> enable and start boxrunner.service\n'], ['ok', 'Done in 9 steps.\n\n'],
+    ['p', '$ '], ['', 'sudo boxrunner status\n'],
+    ['', 'CLASS            PRIORITY  RUNNERS  MAX\n'], ['b', 'boxrunner'], ['', '        normal    1        1\n'], ['hi', 'boxrunner-light'], ['', '  idle      2        3\n\n'],
+    ['', 'FINISHED  REPOSITORY  JOB                     QUEUED  TOOK\n'],
+    ['', '09:41     octo/site   Check, build and test   '], ['hi', '7s'], ['', '      11m30s\n'],
+    ['', '09:34     octo/site   Analyze (javascript)    '], ['hi', '6s'], ['', '      4m7s\n'],
+  ];
+  const term = document.getElementById('term');
+  const total = script.reduce((a, [, t]) => a + t.length, 0);
+  function renderTerm(upto, caret) {
+    term.textContent = ''; let budget = upto;
+    for (const [cls, text] of script) { if (budget <= 0) break; const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text.slice(0, budget); budget -= text.length; term.appendChild(s); }
+    if (caret) { const c = document.createElement('span'); c.className = 'caret'; term.appendChild(c); }
+  }
+  renderTerm(total, true);
+  let typed = false;
+  new IntersectionObserver(([e], o) => {
+    if (!e.isIntersecting || typed || reduce) return; typed = true; o.disconnect();
+    let i = 0; (function tick() { i += 5; renderTerm(i, true); if (i < total) setTimeout(tick, 14); })();
+  }, { threshold: .25 }).observe(term);
+  const mins = document.getElementById('mins'), fmt = new Intl.NumberFormat('en-US'), usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+  function bill() { const m = +mins.value, cost = Math.max(0, m - 2000) * 0.006; document.getElementById('minsOut').textContent = fmt.format(m); document.getElementById('ghCost').textContent = usd.format(cost); document.getElementById('kept').textContent = usd.format(cost); }
+  mins.addEventListener('input', bill); bill();
+
+  // ---------------- Reveals, counters, race ----------------
+  const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+    if (!e.isIntersecting) return;
+    e.target.classList.remove('pending'); io.unobserve(e.target);
+    e.target.querySelectorAll?.('[data-count]').forEach(count);
+  }), { threshold: .15 });
+  if (!reduce) document.querySelectorAll('.reveal').forEach((el) => { const r = el.getBoundingClientRect(); if (r.top > innerHeight) { el.classList.add('pending'); io.observe(el); } });
+  const race = document.getElementById('race');
+  if (reduce || race.getBoundingClientRect().top < innerHeight) race.classList.remove('pending'); else io.observe(race);
+  function count(el) {
+    if (reduce) return; const to = +el.dataset.count, t0 = performance.now();
+    (function step(now) { const k = Math.min(1, (now - t0) / 1400), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt.format(Math.round(to * e)); if (k < 1) requestAnimationFrame(step); })(t0);
+  }
+  const statIo = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { count(e.target); statIo.unobserve(e.target); } }), { threshold: .6 });
+  document.querySelectorAll('[data-count]').forEach((el) => { if (el.getBoundingClientRect().top > innerHeight) statIo.observe(el); });
+
+  // ---------------- Copy ----------------
+  const toast = document.getElementById('toast');
+  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
+    const text = b.dataset.copy;
+    const done = () => { toast.classList.add('on'); setTimeout(() => toast.classList.remove('on'), 1400); };
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(done, () => { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
+  }));
+})();
+</script>
