@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "marked": "18.1.0",
-    "mermaid": "11.17.2",
+    "mermaid": "12.1.0",
     "playwright-core": "1.64.0"
   },
   "overrides": {
