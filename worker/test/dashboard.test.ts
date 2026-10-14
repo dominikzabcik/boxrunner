@@ -12,7 +12,7 @@ async function ready() {
 	const call = agent(await setUp(github));
 	const { cookie } = await signIn(github);
 	const finished = job('box-1-boxrunner-aaaaaa', '2026-10-14T09:50:00Z', '2026-10-14T09:50:20Z', '2026-10-14T09:53:05Z');
-	expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [finished] }))).status).toBe(204);
+	expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [finished] }))).status).toBe(200);
 	time('2026-10-14T10:00:00Z');
 	const view = (path = '/') => send(path, { headers: { cookie: cookie! } });
 	return { github, call, view };
@@ -39,7 +39,9 @@ describe('GET / signed in', () => {
 			'<tr><td>octo/site</td><td>boxrunner</td><td>test</td><td>succeeded</td><td class="number">20 s</td><td class="number">2 min 45 s</td><td><time datetime="2026-10-14T09:53:05.000Z">6 minutes ago</time></td></tr>',
 			'<tr><th scope="row">Today (UTC)</th><td class="number">1</td><td class="number">3</td><td class="number">$0.02</td></tr>',
 			'<p>The box has not asked for its repositories yet.</p>',
-			'<p>boxrunner, boxrunner-light</p>',
+			'<tr><td>boxrunner</td><td>Serving</td><td><form method="post" action="/classes/pause">',
+			'<input type="hidden" name="class" value="boxrunner-light">\n<button type="submit" aria-label="Pause boxrunner-light">Pause</button>',
+			'<form method="post" action="/box-token">',
 		]) {
 			expect(html).toContain(fragment);
 		}
@@ -112,8 +114,8 @@ describe('GET /dashboard.json', () => {
 					online: true,
 					disk: { free: 26_000_000_000, floor: 10_000_000_000 },
 					classes: [
-						{ name: 'boxrunner', priority: 'normal', max: 1, running: 1, starting: 0 },
-						{ name: 'boxrunner-light', priority: 'idle', max: 2, running: 0, starting: 1 },
+						{ name: 'boxrunner', priority: 'normal', max: 1, running: 1, starting: 0, paused: false },
+						{ name: 'boxrunner-light', priority: 'idle', max: 2, running: 0, starting: 1, paused: false },
 					],
 					runners: [
 						{ name: 'box-1-boxrunner-3f9a2c', repo: 'octo/site', class: 'boxrunner', state: 'running', since: '2026-10-14T09:55:00.000Z', seconds: 270 },
@@ -149,6 +151,7 @@ describe('GET /dashboard.json', () => {
 			repos: null,
 			classes: ['boxrunner', 'boxrunner-light'],
 			classesProblem: null,
+			paused: [],
 		});
 		const page = await (await view()).text();
 		expect(/<div id="live">\n([\s\S]*)\n<\/div>/.exec(page)?.[1]).toBe(html);

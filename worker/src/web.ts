@@ -3,7 +3,7 @@ import { hmac, randomToken, sameSecret } from './crypto';
 import { dashboardData, refreshScript, renderLive } from './dashboard';
 import * as github from './github';
 import { ApiError, errorResponse, json } from './http';
-import type { App } from './model';
+import { parse, type App } from './model';
 import { escape, messagePage, page, readCookie } from './page';
 import type { WebRoute } from './routes';
 import { endSession, readSession, startSession, type Session } from './session';
@@ -29,13 +29,17 @@ export async function handleWeb(box: Box, request: Request, route: WebRoute): Pr
 				return session ? dashboardPage(box, session, now) : landingPage(box, app, origin, 200);
 			case 'web.data':
 				if (!session) return errorResponse(new ApiError('unauthorized', 'Sign in to the dashboard first.'));
-				return json(dashboardJson(box, now));
+				return json(dashboardJson(box, session, now));
 			case 'web.login':
 				return await login(box, app, origin, key, now);
 			case 'web.callback':
 				return await callback(box, app, request, origin, key, now);
 			case 'web.logout':
 				return await logout(request, session);
+			case 'web.token':
+			case 'web.pause':
+			case 'web.resume':
+				return await act(box, request, route.name, session, now);
 		}
 	} catch (error) {
 		if (!(error instanceof github.GitHubError)) throw error;
@@ -43,9 +47,9 @@ export async function handleWeb(box: Box, request: Request, route: WebRoute): Pr
 	}
 }
 
-function dashboardJson(box: Box, now: number) {
+function dashboardJson(box: Box, session: Session, now: number) {
 	const data = dashboardData(box.store, box.classes(), now);
-	return { ...data, html: renderLive(data) };
+	return { ...data, html: renderLive(data, session.csrf) };
 }
 
 function landingPage(box: Box, app: App, origin: string, status: number) {
@@ -137,15 +141,51 @@ async function callback(box: Box, app: App, request: Request, origin: string, ke
 	return response;
 }
 
+const openDashboard = { href: '/', text: 'Open the dashboard' };
+
+/** The form, if its CSRF token is the session's. */
+async function formOf(request: Request, session: Session): Promise<FormData | undefined> {
+	const form = await request.formData().catch(() => undefined);
+	const token = form?.get('csrf');
+	return typeof token === 'string' && (await sameSecret(token, session.csrf)) ? form : undefined;
+}
+
 async function logout(request: Request, session: Session | undefined) {
-	const token = (await request.formData().catch(() => undefined))?.get('csrf');
-	if (session && !(typeof token === 'string' && (await sameSecret(token, session.csrf)))) {
-		return messagePage(403, 'This sign-out did not come from your dashboard', 'Sign out with the button on the dashboard.', {
-			href: '/',
-			text: 'Open the dashboard',
-		});
+	if (session && !(await formOf(request, session))) {
+		return messagePage(403, 'This sign-out did not come from your dashboard', 'Sign out with the button on the dashboard.', openDashboard);
 	}
 	return new Response(null, { status: 303, headers: { location: '/', 'cache-control': 'no-store', 'set-cookie': endSession } });
+}
+
+/** The dashboard's actions. Each is a form post carrying the session's CSRF token. */
+async function act(box: Box, request: Request, action: 'web.token' | 'web.pause' | 'web.resume', session: Session | undefined, now: number) {
+	if (!session) return messagePage(401, 'Sign in first', 'This browser is not signed in to the dashboard, so nothing changed.', { href: '/login', text: 'Sign in' });
+	const form = await formOf(request, session);
+	if (!form) return messagePage(403, 'This action did not come from your dashboard', 'Nothing changed. Use the buttons on the dashboard.', openDashboard);
+	if (action === 'web.token') return tokenPage(await box.replaceBoxToken());
+	const classes = box.classes();
+	const className = parse.className(form.get('class'));
+	if (!className || !classes.ok || !classes.classes.includes(className)) {
+		return messagePage(400, 'No such class', 'That is not one of this Worker’s classes, so nothing changed.', openDashboard);
+	}
+	if (action === 'web.pause') box.store.pause(className, session.login, now);
+	else box.store.resume(className);
+	return new Response(null, { status: 303, headers: { location: '/#classes', 'cache-control': 'no-store' } });
+}
+
+function tokenPage(token: string) {
+	return page({
+		status: 200,
+		title: 'New box token',
+		body: `<h1>New box token</h1>
+<p>The old token stopped working. A box cannot reach this Worker until it has the new one.</p>
+<p>Copy the token now. The Worker keeps only its hash, so no page can show it again.</p>
+<p>Run this on each box:</p>
+<pre><code>sudo boxrunner install --token ${escape(token)}</code></pre>
+<p class="hint">It writes the token to <code>/etc/boxrunner/token</code> and restarts the agent. Jobs that are running keep running.</p>
+<p>Box token: <code>${escape(token)}</code></p>
+<p><a href="/">Back to the dashboard</a></p>`,
+	});
 }
 
 function dashboardPage(box: Box, session: Session, now: number) {
@@ -165,7 +205,15 @@ function dashboardPage(box: Box, session: Session, now: number) {
 <p class="hint" id="refreshing" hidden>Updates every 10 seconds.</p>
 <noscript><p class="hint">Reload the page to update it.</p></noscript>
 <div id="live">
-${renderLive(dashboardData(box.store, box.classes(), now))}
-</div>`,
+${renderLive(dashboardData(box.store, box.classes(), now), session.csrf)}
+</div>
+<section aria-labelledby="token">
+<h2 id="token">Box token</h2>
+<p>Every box uses it to reach this Worker. A new token stops the old one at once, so each box stops working until it has the new one.</p>
+<form method="post" action="/box-token">
+<input type="hidden" name="csrf" value="${escape(session.csrf)}">
+<button type="submit">Replace the box token</button>
+</form>
+</section>`,
 	});
 }

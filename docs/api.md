@@ -35,14 +35,17 @@ Repositories are named `owner/name` and matched case-insensitively. Scale set id
 
 ## `GET /v1/repos`
 
-The private, unarchived repositories the App is installed on, narrowed to the `REPOS` variable when it is set, and the classes the Worker serves. The Worker caches the list for a minute. Listing needs a token for each whole installation, so that token gets `metadata: read` and nothing else; every other installation token is narrowed to one repository.
+The private, unarchived repositories the App is installed on, narrowed to the `REPOS` variable when it is set, and the classes the box should serve. The Worker caches the repository list for a minute. Listing needs a token for each whole installation, so that token gets `metadata: read` and nothing else; every other installation token is narrowed to one repository.
 
 ```json
 {
   "repos": [{ "name": "octo/site", "id": 123 }],
-  "classes": ["boxrunner", "boxrunner-light"]
+  "classes": ["boxrunner"],
+  "paused": ["boxrunner-light"]
 }
 ```
+
+`classes` is `CLASSES` without the classes paused on the [dashboard](dashboard.md#pausing-a-class), and `paused` lists those. An agent that does not know `paused` still stops serving a paused class, because the class is missing from `classes`; it logs that the class is not one of the Worker's. The agent stops listening to a paused class's scale sets, so it starts no runner for it, and lists the repositories again as soon as a heartbeat's answer shows the paused classes changed.
 
 ## `POST /v1/scalesets`
 
@@ -130,7 +133,13 @@ Removes a runner that has not taken a job. Answers 204, including when the runne
 
 ## `POST /v1/heartbeat`
 
-Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The agent sends one every 30 seconds: 2,880 requests a day per box, 120 an hour of the token's 1,800, and under 3% of the free plan's 100,000 requests a day. Answers 204.
+Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The agent sends one every 30 seconds: 2,880 requests a day per box, 120 an hour of the token's 1,800, and under 3% of the free plan's 100,000 requests a day. Answers 200 with the classes paused on the dashboard, as in `GET /v1/repos`:
+
+```json
+{ "paused": ["boxrunner-light"] }
+```
+
+A Worker from before pausing answers 204 with no body, which the agent reads as nothing paused.
 
 ```json
 {

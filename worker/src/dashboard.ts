@@ -21,7 +21,7 @@ export type Dashboard = {
 		secondsSinceSeen: number;
 		online: boolean;
 		disk: { free: number; floor: number };
-		classes: { name: string; priority: Priority; max: number; running: number; starting: number }[];
+		classes: { name: string; priority: Priority; max: number; running: number; starting: number; paused: boolean }[];
 		runners: { name: string; repo: string; class: string; state: RunnerState; since: string; seconds: number }[];
 	}[];
 	jobs: {
@@ -44,6 +44,8 @@ export type Dashboard = {
 	repos: string[] | null;
 	classes: string[];
 	classesProblem: string | null;
+	/** The Worker's classes paused on the dashboard: who paused each and when. */
+	paused: { class: string; by: string; since: string; seconds: number }[];
 };
 
 const iso = (time: number) => new Date(time).toISOString();
@@ -60,6 +62,9 @@ export function dashboardData(store: Store, classes: Classes, now: number): Dash
 	const today = dayOf(now);
 	const days = store.daysFrom(today - retentionDays + 1);
 	const repos = store.lastCached('repos');
+	const served = classes.ok ? classes.classes : [];
+	const pauses = store.pauses().filter((pause) => served.includes(pause.className));
+	const paused = new Set<string>(pauses.map((pause) => pause.className));
 	return {
 		generatedAt: iso(now),
 		boxes: store.boxes().map(({ status, seenAt }) => {
@@ -80,6 +85,7 @@ export function dashboardData(store: Store, classes: Classes, now: number): Dash
 						max,
 						running: states.filter((state) => state === 'running').length,
 						starting: states.filter((state) => state === 'requested' || state === 'starting').length,
+						paused: paused.has(name),
 					};
 				}),
 				runners: status.runners.map((runner) => ({
@@ -109,8 +115,9 @@ export function dashboardData(store: Store, classes: Classes, now: number): Dash
 		totals: { today: totals(days.filter((day) => day.day === today)), last30Days: totals(days) },
 		dollarsPerMinute,
 		repos: repos === undefined ? null : (JSON.parse(repos) as Repo[]).map((repo) => repo.name),
-		classes: classes.ok ? [...classes.classes] : [],
+		classes: [...served],
 		classesProblem: classes.ok ? null : classes.problem,
+		paused: pauses.map((pause) => ({ class: pause.className, by: pause.by, since: iso(pause.since), seconds: secondsBetween(pause.since, now) })),
 	};
 }
 
@@ -180,7 +187,7 @@ ${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>
 <h3>Classes</h3>
 ${table(
 	[{ title: 'Class' }, { title: 'Priority' }, { title: 'Running', number: true }, { title: 'Starting', number: true }, { title: 'Max', number: true }],
-	box.classes.map((c) => [escape(c.name), c.priority, String(c.running), String(c.starting), String(c.max)]),
+	box.classes.map((c) => [`${escape(c.name)}${c.paused ? ' (paused)' : ''}`, c.priority, String(c.running), String(c.starting), String(c.max)]),
 	'The box reported no classes.',
 )}
 <h3>Runners</h3>
@@ -219,7 +226,28 @@ ${table(
 </section>`;
 }
 
-function renderServed({ repos, classes, classesProblem }: Dashboard) {
+function classAction(csrf: string, name: string, paused: boolean) {
+	const [action, verb] = paused ? ['resume', 'Resume'] : ['pause', 'Pause'];
+	return `<form method="post" action="/classes/${action}">
+<input type="hidden" name="csrf" value="${escape(csrf)}">
+<input type="hidden" name="class" value="${escape(name)}">
+<button type="submit" aria-label="${verb} ${escape(name)}">${verb}</button>
+</form>`;
+}
+
+function renderClasses({ classes, classesProblem, paused }: Dashboard, csrf: string) {
+	if (classesProblem !== null) return `<p class="alert">The Worker’s ${escape(classesProblem)}.</p>`;
+	const rows = classes.map((name) => {
+		const pause = paused.find((p) => p.class === name);
+		const state = pause ? `Paused by ${escape(pause.by)}<br>${time(pause.since, ago(pause.seconds))}` : 'Serving';
+		return [escape(name), state, classAction(csrf, name, pause !== undefined)];
+	});
+	return `${table([{ title: 'Class' }, { title: 'State' }, { title: 'Action' }], rows, '')}
+<p class="hint">A paused class starts no new runners on any box. Its running jobs finish, and its new jobs wait at GitHub until you resume it. Boxes learn of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes.</p>`;
+}
+
+function renderServed(data: Dashboard, csrf: string) {
+	const { repos } = data;
 	return `<section aria-labelledby="served">
 <h2 id="served">What this Worker serves</h2>
 <h3>Repositories</h3>
@@ -230,18 +258,18 @@ ${
 			? '<p>None: install the App on a private repository.</p>'
 			: `<ul>\n${repos.map((repo) => `<li>${escape(repo)}</li>`).join('\n')}\n</ul>`
 }
-<h3>Classes</h3>
-${classesProblem === null ? `<p>${classes.map(escape).join(', ')}</p>` : `<p class="alert">The Worker’s ${escape(classesProblem)}.</p>`}
+<h3 id="classes">Classes</h3>
+${renderClasses(data, csrf)}
 </section>`;
 }
 
-/** The part of the page the script refreshes. */
-export function renderLive(data: Dashboard): string {
+/** The part of the page the script refreshes. Its forms carry the session's CSRF token. */
+export function renderLive(data: Dashboard, csrf: string): string {
 	const boxes =
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
 			: data.boxes.map(renderBox).join('\n');
-	return [boxes, renderJobs(data), renderTotals(data), renderServed(data)].join('\n');
+	return [boxes, renderJobs(data), renderTotals(data), renderServed(data, csrf)].join('\n');
 }
 
 /** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */

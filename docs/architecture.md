@@ -143,6 +143,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - the App's id, slug, private key and webhook secret
 - the SHA-256 hash of the box token
 - the scale sets it created or adopted, by repository and class
+- the classes paused on the dashboard, with who paused each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 
 The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories.
@@ -156,7 +157,7 @@ Setup happens in the browser, and nobody copies a private key.
 3. **Install the App** on the repositories that should use the box.
 4. **Install the agent.** The page shows a box token once, with the command that installs the agent.
 
-After that, `/setup` answers 410 and offers two forms, each needing the setup secret: `POST /setup/token` replaces the box token, and `POST /setup/reset` makes the Worker forget its App so setup can run again.
+After that, `/setup` answers 410 and offers two forms, each needing the setup secret: `POST /setup/token` replaces the box token, and `POST /setup/reset` makes the Worker forget its App so setup can run again. A signed-in admin can also replace the box token from the [dashboard](dashboard.md).
 
 The setup secret must be at least 32 characters, or the setup pages refuse to work. The browser's state cookie expires after an hour.
 
@@ -166,13 +167,14 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 
 | Endpoint | Does |
 |---|---|
-| `GET /v1/repos` | Private repositories the App is installed on |
+| `GET /v1/repos` | Private repositories the App is installed on, the classes to serve and the paused ones |
 | `POST /v1/scalesets` | Find or create the scale set for a repository and one of the Worker's classes |
 | `POST /v1/sessions` | Open a session; returns the queue URL and session token |
 | `PATCH /v1/sessions/:id` | Refresh a session |
 | `DELETE /v1/sessions/:id` | Close a session |
 | `POST /v1/runners` | Mint a one-job runner config for a scale set |
 | `DELETE /v1/runners/:id` | Remove a runner that has not taken a job |
+| `POST /v1/heartbeat` | Report the box's state for the dashboard; the answer names the paused classes |
 
 The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
 

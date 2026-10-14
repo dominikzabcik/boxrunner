@@ -1,4 +1,4 @@
-import { randomToken, signAppJwt } from './crypto';
+import { boxTokenHash, randomToken, signAppJwt } from './crypto';
 import * as github from './github';
 import { ApiError } from './http';
 import {
@@ -92,6 +92,14 @@ export class Box {
 
 	resetBudget() {
 		this.tokens = budget.burst;
+	}
+
+	/** Makes a new box token and returns it; the old one stops working at once. The Worker keeps only the hash. */
+	async replaceBoxToken(): Promise<string> {
+		const token = randomToken();
+		this.store.replaceBoxToken(await boxTokenHash(token));
+		this.resetBudget();
+		return token;
 	}
 
 	private once<T>(key: string, derive: () => Promise<T>): Promise<T> {

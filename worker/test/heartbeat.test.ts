@@ -23,11 +23,11 @@ async function ready() {
 }
 
 describe('POST /v1/heartbeat', () => {
-	it('answers 204 and keeps the latest status per box', async () => {
+	it('answers with the paused classes and keeps the latest status per box', async () => {
 		const { call, dashboard } = await ready();
 		const response = await call('POST', '/v1/heartbeat', heartbeatBody());
-		expect(response.status).toBe(204);
-		expect(await response.text()).toBe('');
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ paused: [] });
 		await call('POST', '/v1/heartbeat', heartbeatBody({ version: '0.2.1' }));
 		const { boxes } = await dashboard();
 		expect(boxes.map(({ name, online, version }) => ({ name, online, version }))).toEqual([
@@ -39,7 +39,7 @@ describe('POST /v1/heartbeat', () => {
 		const { call } = await ready();
 		await expectError(await agent('A'.repeat(43))('POST', '/v1/heartbeat', heartbeatBody()), 401, 'unauthorized');
 		await expectError(await agent('A'.repeat(43), '9.0.0')('POST', '/v1/heartbeat', heartbeatBody()), 426, 'upgrade_required');
-		expect((await call('POST', '/v1/heartbeat', heartbeatBody())).status).toBe(204);
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody())).status).toBe(200);
 	});
 
 	it('names the first malformed field', async () => {
@@ -94,7 +94,7 @@ describe('POST /v1/heartbeat', () => {
 	it('accepts a job an older agent logged without its queue time, and shows no wait for it', async () => {
 		const { call, dashboard } = await ready();
 		const old = { ...job('box-1-boxrunner-bbbbbb', '2026-10-14T09:00:00Z', '2026-10-14T09:00:10Z', '2026-10-14T09:02:10Z'), queued: null };
-		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [old] }))).status).toBe(204);
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [old] }))).status).toBe(200);
 		const { jobs } = (await dashboard()) as unknown as { jobs: { runner: string; queued: string | null; waitSeconds: number | null }[] };
 		expect(jobs.map(({ runner, queued, waitSeconds }) => ({ runner, queued, waitSeconds }))).toEqual([
 			{ runner: 'box-1-boxrunner-bbbbbb', queued: null, waitSeconds: null },
