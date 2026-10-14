@@ -231,8 +231,8 @@ func Recent(path string, n int) ([]Job, error) {
 }
 
 // Serve answers GET /status, POST /drain and POST /resume on a unix socket
-// until ctx ends. snapshot is called for every status request, and drain with
-// true to drain and false to resume.
+// until ctx ends, and returns once the socket file is gone. snapshot is called
+// for every status request, and drain with true to drain and false to resume.
 func Serve(ctx context.Context, socket string, snapshot func() Snapshot, drain func(bool) error) error {
 	os.Remove(socket)
 	l, err := net.Listen("unix", socket)
@@ -258,11 +258,8 @@ func Serve(ctx context.Context, socket string, snapshot func() Snapshot, drain f
 			http.NotFound(w, r)
 		}
 	})}
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-		os.Remove(socket)
-	}()
+	stop := context.AfterFunc(ctx, func() { srv.Close() })
+	defer stop()
 	if err := srv.Serve(l); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
