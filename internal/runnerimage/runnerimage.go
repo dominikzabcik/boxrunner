@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/dominikzabcik/boxrunner/image"
@@ -193,6 +194,112 @@ func EnsureClasses(ctx context.Context, d *docker.Client, classes []config.Class
 		built = append(built, c.Name)
 	}
 	return built, nil
+}
+
+// BaseRepo is the official runner image the job image is built from.
+const BaseRepo = "ghcr.io/actions/actions-runner"
+
+// baseTag matches the tags the job image's build pulls, one per runner
+// version; a tag like latest is someone else's.
+var baseTag = regexp.MustCompile(`^` + regexp.QuoteMeta(BaseRepo) + `:[0-9]+\.[0-9]+\.[0-9]+$`)
+
+func tagged(img docker.ImageSummary) bool {
+	return slices.ContainsFunc(img.RepoTags, func(t string) bool { return t != "<none>:<none>" })
+}
+
+// Superseded returns what rebuilds left behind, as references to remove in
+// order: job and class images no tag points to any more, then the runner
+// images of other runner versions. An image a container uses, running or
+// not, stays. Docker lists no untagged image another image is built from,
+// and removing an image removes such parents with it, so the old job image
+// goes with the last old class image built from it.
+func Superseded(images []docker.ImageSummary, containers []docker.Container, runnerVersion string) []string {
+	used := map[string]bool{}
+	for _, c := range containers {
+		used[c.ImageID] = true
+	}
+	var dangling, versions []string
+	for _, img := range images {
+		if used[img.ID] {
+			continue
+		}
+		if !tagged(img) && img.Labels[layout.LabelImage] != "" {
+			dangling = append(dangling, img.ID)
+		}
+		for _, tag := range img.RepoTags {
+			if baseTag.MatchString(tag) && tag != BaseRepo+":"+runnerVersion {
+				versions = append(versions, tag)
+			}
+		}
+	}
+	slices.Sort(dangling)
+	slices.Sort(versions)
+	return append(dangling, versions...)
+}
+
+// DiskUse is what boxrunner's images take on disk: the job and class
+// images, which carry the job image's identity, and the runner images they
+// are built from. Each counts only the layers it adds to the nearest listed
+// image it was built from: a class image's job image, or else the runner
+// image of its runner version.
+func DiskUse(images []docker.ImageSummary) int64 {
+	byID := map[string]docker.ImageSummary{}
+	byTag := map[string]docker.ImageSummary{}
+	for _, img := range images {
+		byID[img.ID] = img
+		for _, tag := range img.RepoTags {
+			byTag[tag] = img
+		}
+	}
+	var total int64
+	for _, img := range images {
+		identity := img.Labels[layout.LabelImage]
+		if identity == "" && !slices.ContainsFunc(img.RepoTags, baseTag.MatchString) {
+			continue
+		}
+		total += img.Size
+		version, _, _ := strings.Cut(identity, "+")
+		if base, ok := byID[img.Labels[LabelBase]]; ok {
+			total -= base.Size
+		} else if base, ok := byTag[BaseRepo+":"+version]; ok && identity != "" {
+			total -= base.Size
+		}
+	}
+	return total
+}
+
+// Prune removes the images Superseded names and returns the references it
+// removed and the disk boxrunner's images use afterwards. It goes on past an
+// image Docker refuses to remove.
+func Prune(ctx context.Context, d *docker.Client) ([]string, int64, error) {
+	identity, err := Built(ctx, d)
+	if err != nil || identity == "" {
+		return nil, 0, cmp.Or(err, errors.New("the job image is not built yet"))
+	}
+	images, err := d.Images(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	containers, err := d.List(ctx, "", false)
+	if err != nil {
+		return nil, 0, err
+	}
+	version, _, _ := strings.Cut(identity, "+")
+	var removed []string
+	var errs []error
+	for _, ref := range Superseded(images, containers, version) {
+		if err := d.RemoveImage(ctx, ref); err != nil {
+			errs = append(errs, fmt.Errorf("removing image %s: %w", ref, err))
+			continue
+		}
+		removed = append(removed, ref)
+	}
+	if len(removed) > 0 {
+		if images, err = d.Images(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return removed, DiskUse(images), errors.Join(errs...)
 }
 
 // Built returns the identity of the job image, or "" when there is none or it

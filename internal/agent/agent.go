@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
@@ -86,6 +87,8 @@ type Agent struct {
 
 	mu       sync.Mutex
 	snapshot status.Snapshot
+	// imageDisk is what boxrunner's images take on disk after the last prune.
+	imageDisk atomic.Int64
 }
 
 // Run serves jobs until ctx ends. It returns an error only for a problem a
@@ -408,7 +411,8 @@ func (a *Agent) build(ctx context.Context, version string) {
 	a.post(scheduler.ImageBuilt{Version: version})
 }
 
-// ensureClasses rebuilds the class images whose job image or files changed.
+// ensureClasses rebuilds the class images whose job image or files changed,
+// then removes the images those builds and earlier ones superseded.
 func (a *Agent) ensureClasses(ctx context.Context) {
 	built, err := runnerimage.EnsureClasses(ctx, a.Docker, a.Config.Classes)
 	for _, class := range built {
@@ -417,6 +421,14 @@ func (a *Agent) ensureClasses(ctx context.Context) {
 	if err != nil {
 		a.Log.Error("building a class image failed", "err", err)
 	}
+	removed, disk, err := runnerimage.Prune(ctx, a.Docker)
+	for _, ref := range removed {
+		a.Log.Info("removed a superseded image", "image", ref)
+	}
+	if err != nil {
+		a.Log.Warn("removing superseded images", "err", err)
+	}
+	a.imageDisk.Store(disk)
 }
 
 // shutdown removes runners that have not taken a job, so GitHub hands their
@@ -544,7 +556,7 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 func (a *Agent) publish(s scheduler.State) {
 	snap := status.Snapshot{
 		Box: a.Config.Box, Version: a.Version,
-		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest},
+		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
 	}

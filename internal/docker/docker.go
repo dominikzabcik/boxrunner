@@ -109,6 +109,7 @@ type Container struct {
 	State   string            `json:"State"`
 	Created int64             `json:"Created"`
 	SizeRw  int64             `json:"SizeRw"`
+	ImageID string            `json:"ImageID"`
 }
 
 func (c Container) Running() bool { return c.State == "running" }
@@ -116,11 +117,14 @@ func (c Container) Running() bool { return c.State == "running" }
 func (c Container) CreatedAt() time.Time { return time.Unix(c.Created, 0).UTC() }
 
 // List returns every container, running or not, that carries the label
-// (key or key=value). With sizes, Docker also measures what each one wrote,
-// which walks its files.
+// (key or key=value), or every container when label is empty. With sizes,
+// Docker also measures what each one wrote, which walks its files.
 func (c *Client) List(ctx context.Context, label string, sizes bool) ([]Container, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": {label}})
-	q := url.Values{"all": {"1"}, "filters": {string(filters)}}
+	q := url.Values{"all": {"1"}}
+	if label != "" {
+		filters, _ := json.Marshal(map[string][]string{"label": {label}})
+		q.Set("filters", string(filters))
+	}
 	if sizes {
 		q.Set("size", "1")
 	}
@@ -414,6 +418,22 @@ func (c *Client) Image(ctx context.Context, ref string) (ImageInfo, bool, error)
 		return ImageInfo{}, false, nil
 	}
 	return ImageInfo{ID: out.ID, Labels: out.Config.Labels}, err == nil, err
+}
+
+// ImageSummary is one image as Docker lists it. Size counts the layers of
+// the image it was built from too.
+type ImageSummary struct {
+	ID       string            `json:"Id"`
+	RepoTags []string          `json:"RepoTags"`
+	Labels   map[string]string `json:"Labels"`
+	Size     int64             `json:"Size"`
+}
+
+// Images lists the images that are not intermediate layers of a build.
+func (c *Client) Images(ctx context.Context) ([]ImageSummary, error) {
+	var out []ImageSummary
+	err := c.call(ctx, http.MethodGet, "/images/json", "", nil, &out)
+	return out, err
 }
 
 func (c *Client) RemoveImage(ctx context.Context, ref string) error {

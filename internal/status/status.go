@@ -99,6 +99,8 @@ type Runner struct {
 type ImageStatus struct {
 	Built  string `json:"built"`
 	Latest string `json:"latest"`
+	// Disk is what the job, class and runner images take, 0 when unknown.
+	Disk int64 `json:"disk,omitempty"`
 }
 
 // Job is one line of the job log.
@@ -250,8 +252,12 @@ func Fetch(ctx context.Context, socket string) (Snapshot, error) {
 
 // Print writes a snapshot for people.
 func Print(w io.Writer, s Snapshot, now time.Time) {
-	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)  disk %s free, floor %s\n\n",
-		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	images := ""
+	if s.Image.Disk > 0 {
+		images = "  images " + gigabytes(s.Image.Disk)
+	}
+	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
+		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
 	if s.FreshStart && now.Sub(s.Started) < strandedHint {
 		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")
 	}

@@ -141,6 +141,13 @@ Measured on a 4-core ARM box, CPU only: four timed threads of a normal job took 
 
 `install` builds the job image on the box from GitHub's official `ghcr.io/actions/actions-runner` image, plus `zstd`, `build-essential`, Python, `iptables` for a job's own Docker, the Docker Compose plugin (5.5.1, checked by SHA-256) and `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`. The official image already ships Docker's engine. The image starts as root: its entrypoint starts Docker when the class asks for it, then runs the job as `runner`. The agent checks the runner's latest release daily through the release page's redirect, which needs no API quota. It rebuilds the image only when the version changed, and never while a job of a normal-priority class runs. Runners keep self-update on as a safety net. A class can name any image built `FROM boxrunner/runner`.
 
+Each rebuild leaves the previous images behind, a gigabyte or more per runner release. After building, and each time it starts, the agent removes:
+
+- job and class images that no tag points to any more, which a rebuild leaves untagged
+- `ghcr.io/actions/actions-runner` images tagged with a runner version other than the current one
+
+It keeps any image a container uses, running or stopped and under Sysbox or runc, such as a failed job's container that its class keeps. It never removes a job or class image that has a tag, so the copy `boxrunner shell` commits of a failed job's container stays until the shell exits and removes it. Docker removes an old job image together with the last class image built from it, and only untags a runner image that an image still on the box was built from. The agent does not prune Docker's build cache: it builds with the classic builder, which keeps no cache beside the images, so a prune would remove only the cache of other builds on the box. `boxrunner status` shows how much disk the job, class and runner images take, counting the layers they share once.
+
 ## Worker
 
 The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed Durable Object:
@@ -195,7 +202,7 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 | Command | Does |
 |---|---|
 | `boxrunner install` | Converges the box: Docker, Sysbox with `--sysbox`, `--docker` or a class that needs it, the registry mirror with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
-| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration, and classes that hold their starts because their runners fail before taking a job |
+| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration, the disk boxrunner's images take, and classes that hold their starts because their runners fail before taking a job |
 | `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
 | `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, registry mirror and its cache, network, rules, slice and files. Docker and Sysbox stay. |

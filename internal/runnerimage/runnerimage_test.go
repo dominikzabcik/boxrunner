@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/dominikzabcik/boxrunner/internal/docker"
 )
 
 func TestParseLatest(t *testing.T) {
@@ -81,5 +84,66 @@ func TestDirTarHashFollowsContent(t *testing.T) {
 	write("setup.sh", "echo bye\n")
 	if _, changed, _ := DirTar(dir); changed == first {
 		t.Error("a changed file kept the hash")
+	}
+}
+
+// Three rebuilds' images as Docker lists them: runner 2.338.0 is current, a
+// kept failed job's container still uses the 2.337.0 class image, and nothing
+// uses 2.336.0's. Docker does not list the untagged job images the old class
+// images were built from.
+func rebuilds() []docker.ImageSummary {
+	runner := func(id, version string, size int64) docker.ImageSummary {
+		return docker.ImageSummary{ID: id, RepoTags: []string{"ghcr.io/actions/actions-runner:" + version}, Size: size}
+	}
+	class := func(id, version, base string, size int64, tags ...string) docker.ImageSummary {
+		return docker.ImageSummary{ID: id, RepoTags: tags, Labels: map[string]string{"boxrunner.image": version + "+3f9a2c0b1d4e", "boxrunner.base": base}, Size: size}
+	}
+	return []docker.ImageSummary{
+		runner("sha256:b338", "2.338.0", 1000),
+		runner("sha256:b337", "2.337.0", 990),
+		runner("sha256:b336", "2.336.0", 980),
+		{ID: "sha256:j338", RepoTags: []string{"boxrunner/runner:local"}, Labels: map[string]string{"boxrunner.image": "2.338.0+3f9a2c0b1d4e"}, Size: 1500},
+		class("sha256:w338", "2.338.0", "sha256:j338", 2500, "boxrunner/class-web:local"),
+		class("sha256:w337", "2.337.0", "sha256:j337", 2490),
+		class("sha256:w336", "2.336.0", "sha256:j336", 2480, "<none>:<none>"),
+		{ID: "sha256:a1", RepoTags: []string{}, Size: 8},
+		{ID: "sha256:a2", RepoTags: []string{"alpine:3.20"}, Size: 9},
+		{ID: "sha256:a3", RepoTags: []string{"ghcr.io/actions/actions-runner:latest"}, Size: 1310},
+	}
+}
+
+func TestSuperseded(t *testing.T) {
+	kept := []docker.Container{{ImageID: "sha256:w337"}, {ImageID: "sha256:a1"}}
+	want := []string{"sha256:w336", "ghcr.io/actions/actions-runner:2.336.0", "ghcr.io/actions/actions-runner:2.337.0"}
+	if got := Superseded(rebuilds(), kept, "2.338.0"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Superseded with a kept container = %q, want %q", got, want)
+	}
+	want = []string{"sha256:w336", "sha256:w337", "ghcr.io/actions/actions-runner:2.336.0", "ghcr.io/actions/actions-runner:2.337.0"}
+	if got := Superseded(rebuilds(), nil, "2.338.0"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Superseded without containers = %q, want %q", got, want)
+	}
+	// boxrunner shell commits the kept container, labels and all, and removes
+	// the copy when the shell exits; before its container starts, nothing uses it.
+	inspect := docker.ImageSummary{ID: "sha256:i337", RepoTags: []string{"boxrunner/inspect:box-1-web-3f9a2c"}, Labels: map[string]string{"boxrunner.image": "2.337.0+3f9a2c0b1d4e", "boxrunner.base": "sha256:j337"}, Size: 2600}
+	want = []string{"sha256:w336", "ghcr.io/actions/actions-runner:2.336.0", "ghcr.io/actions/actions-runner:2.337.0"}
+	if got := Superseded(append(rebuilds(), inspect), kept, "2.338.0"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Superseded while boxrunner shell opens a copy = %q, want %q", got, want)
+	}
+	noClasses := append(rebuilds()[:4], docker.ImageSummary{ID: "sha256:j337", Labels: map[string]string{"boxrunner.image": "2.337.0+3f9a2c0b1d4e"}, Size: 1490})
+	want = []string{"sha256:j337", "ghcr.io/actions/actions-runner:2.336.0", "ghcr.io/actions/actions-runner:2.337.0"}
+	if got := Superseded(noClasses, []docker.Container{{ImageID: "sha256:j338"}}, "2.338.0"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Superseded of a box without class images = %q, want %q", got, want)
+	}
+}
+
+// Each image's size includes the image it was built from, so the sum of the
+// sizes would count the runner image's layers several times.
+func TestDiskUse(t *testing.T) {
+	if got := DiskUse(rebuilds()); got != 7470 {
+		t.Errorf("DiskUse = %d, want 7470", got)
+	}
+	all := rebuilds()
+	if got := DiskUse([]docker.ImageSummary{all[0], all[3], all[4]}); got != 2500 {
+		t.Errorf("DiskUse of one rebuild's images = %d, want 2500", got)
 	}
 }

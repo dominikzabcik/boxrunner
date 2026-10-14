@@ -70,7 +70,7 @@ func TestServeAndFetch(t *testing.T) {
 
 func TestPrint(t *testing.T) {
 	snap := Snapshot{
-		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0"},
+		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
 		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
 		ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 1}},
@@ -85,7 +85,7 @@ func TestPrint(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
-	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  disk 41.2 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB
 
 If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
