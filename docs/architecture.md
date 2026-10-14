@@ -105,7 +105,7 @@ gh run cancel <run id> -R <owner/name>
 gh run rerun <run id> -R <owner/name>
 ```
 
-`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after it starts without containers to adopt, or after a session left open blocked it, `boxrunner status` points here.
+`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after a box that never ran a job starts, or after a session left open blocked the agent, `boxrunner status` points here. A restart of a box that has run jobs does not.
 
 Before retiring a box on purpose, run `sudo boxrunner uninstall` on it. Stopping the agent closes the sessions and removes the runners that took no job, so GitHub hands their jobs to the next session and nothing is stranded. Uninstall then removes every container, running jobs included, so let those finish first or re-run them on the new box.
 

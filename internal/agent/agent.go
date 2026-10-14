@@ -74,6 +74,10 @@ type Agent struct {
 	// started and adoptedNone belong to the scheduler goroutine.
 	started     time.Time
 	adoptedNone bool
+	// ranBefore is set once before any goroutine starts: the job log has
+	// entries, so this box has run jobs and a start without containers is a
+	// restart, not a new box taking over from a dead one.
+	ranBefore bool
 
 	mu       sync.Mutex
 	snapshot status.Snapshot
@@ -109,6 +113,7 @@ func Run(ctx context.Context, o Options) error {
 	if err := os.MkdirAll(filepath.Dir(a.JobsLog), 0o755); err != nil {
 		return err
 	}
+	a.ranBefore = hasEntries(a.JobsLog)
 	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String())
 
 	go func() {
@@ -515,7 +520,7 @@ func (a *Agent) publish(s scheduler.State) {
 		Box: a.Config.Box, Version: a.Version,
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
-		Started: a.started, FreshStart: a.adoptedNone || a.Worker.SessionBlocked(),
+		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
 	}
 	warm := scheduler.Warm(s)
 	active := map[string]int{}
@@ -659,4 +664,9 @@ func (a *Agent) listen(ctx context.Context, key scheduler.Key) error {
 		ScaleSet: key, ScaleSetID: ss.ID, Owner: a.Config.Box, Capacity: class.Max,
 		Worker: a.Worker, Queue: a.queue, Events: a.events, Log: a.Log,
 	})
+}
+
+func hasEntries(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
 }

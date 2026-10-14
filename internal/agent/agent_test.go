@@ -526,3 +526,21 @@ func TestMirrorOnlyForDockerClasses(t *testing.T) {
 		t.Errorf("without a docker class, containers = %v", got)
 	}
 }
+
+// Only a box without job history reads a start without containers as a new
+// box that may have taken over from a dead one.
+func TestHasEntries(t *testing.T) {
+	dir := t.TempDir()
+	empty, full := filepath.Join(dir, "empty.jsonl"), filepath.Join(dir, "full.jsonl")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(`{"repo":"octo/site"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{filepath.Join(dir, "missing.jsonl"): false, empty: false, full: true} {
+		if got := hasEntries(path); got != want {
+			t.Errorf("hasEntries(%s) = %v, want %v", filepath.Base(path), got, want)
+		}
+	}
+}

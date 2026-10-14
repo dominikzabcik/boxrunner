@@ -32,9 +32,9 @@ type Snapshot struct {
 	Jobs      []Job       `json:"jobs,omitempty"`
 	// Started is when the agent started.
 	Started time.Time `json:"started,omitzero"`
-	// FreshStart means the agent found no containers to adopt, or a session
-	// an earlier owner left open: jobs a box that died had acquired may be
-	// stranded at GitHub.
+	// FreshStart means a box that never ran a job found no containers to
+	// adopt, or a session an earlier owner left open: jobs a box that died had
+	// acquired may be stranded at GitHub.
 	FreshStart bool `json:"freshStart,omitempty"`
 }
 
