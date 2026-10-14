@@ -22,6 +22,11 @@ RUN apt-get update -qq \
 RUN for tool in node npm npx; do ln -sf /home/runner/externals/node24/bin/$tool /usr/local/bin/$tool; done \
 	&& node --version
 
+# npm install --global works without sudo, as on GitHub's runners: global
+# packages land in the runner's home, whose bin directory is on the PATH.
+ENV NPM_CONFIG_PREFIX=/home/runner/.npm-global
+ENV PATH=/home/runner/.npm-global/bin:$PATH
+
 # setup-node, setup-python and friends install into the tool cache.
 RUN install -d -o runner -g runner /opt/hostedtoolcache
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
