@@ -163,7 +163,8 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if strings.HasPrefix(r.URL.Path, "/v1/") {
+		// Heartbeats run on their own clock, so the call lists below leave them out.
+		if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/heartbeat" {
 			g.mu.Lock()
 			g.calls = append(g.calls, strings.TrimSpace(fmt.Sprintf("%s %s %s", r.Method, r.URL.RequestURI(), body)))
 			g.mu.Unlock()
