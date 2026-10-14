@@ -77,17 +77,55 @@ describe('POST /classes/pause and /classes/resume', () => {
 });
 
 describe('POST /box-token', () => {
-	it('shows a new token once with the command for the box, and the old token stops working', async () => {
-		const { token, post } = await ready();
-		const response = await post('/box-token');
-		const html = await response.text();
-		const fresh = tokenIn(html);
-		expect(response.status).toBe(200);
-		expect(response.headers.get('cache-control')).toBe('no-store');
-		expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
-		expect(html).toContain(`<pre><code>sudo boxrunner install --token ${fresh}</code></pre>`);
+	it('replaces the token and sends the browser to a page that shows the new one once', async () => {
+		const { token, view, post } = await ready();
+		const replaced = await post('/box-token');
+		const location = replaced.headers.get('location')!;
+		expect(replaced.status).toBe(303);
+		expect(replaced.headers.get('cache-control')).toBe('no-store');
+		expect(location).toMatch(/^\/box-token\/[A-Za-z0-9_-]{43}$/);
 		await expectError(await agent(token)('GET', '/v1/repos'), 401, 'unauthorized');
-		expect((await agent(fresh!)('GET', '/v1/repos')).status).toBe(200);
+
+		const shown = await view(location);
+		const html = await shown.text();
+		const fresh = tokenIn(html)!;
+		expect(shown.status).toBe(200);
+		expect(shown.headers.get('cache-control')).toBe('no-store');
+		expect(html).toContain(`<pre><code>sudo boxrunner install --token ${fresh}</code></pre>`);
+		expect((await agent(fresh)('GET', '/v1/repos')).status).toBe(200);
+
+		const reloaded = await view(location);
+		const again = await reloaded.text();
+		expect(reloaded.status).toBe(410);
+		expect(reloaded.headers.get('cache-control')).toBe('no-store');
+		expect(tokenIn(again)).toBeUndefined();
+		expect(again).toContain('<h1>This box token was already shown</h1>');
+		expect(again).toContain('<p><a href="/#token">Replace it on the dashboard</a></p>');
+		expect((await agent(fresh)('GET', '/v1/repos')).status).toBe(200);
+	});
+
+	it('shows the new token only within a minute', async () => {
+		const { view, post } = await ready();
+		const late = (await post('/box-token')).headers.get('location')!;
+		time('2026-10-14T10:01:00Z');
+		const expired = await view(late);
+		expect(expired.status).toBe(410);
+		expect(await expired.text()).toContain('<h1>This box token was already shown</h1>');
+
+		const onTime = (await post('/box-token')).headers.get('location')!;
+		time('2026-10-14T10:01:59Z');
+		expect((await view(onTime)).status).toBe(200);
+	});
+
+	it('shows the new token only to a signed-in browser, at the address it was sent to', async () => {
+		const { view, post } = await ready();
+		const location = (await post('/box-token')).headers.get('location')!;
+		const signedOut = await send(location);
+		expect(signedOut.status).toBe(401);
+		expect(await signedOut.text()).toContain('<h1>Sign in first</h1>');
+		expect((await view(`/box-token/${'A'.repeat(43)}`)).status).toBe(410);
+		expect((await view(location.replace('/box-token/', '/setup/token/'))).status).toBe(410);
+		expect((await view(location)).status).toBe(200);
 	});
 
 	it('keeps the token without a session or without the CSRF token', async () => {
