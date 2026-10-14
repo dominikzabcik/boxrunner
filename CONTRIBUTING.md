@@ -61,7 +61,7 @@ Any Ubuntu 24.04 VM or spare server will do. On a Mac, [OrbStack](https://orbsta
 ## Pull requests
 
 - One change per pull request, with tests that call the code the way its users do and compare against literal expected values.
-- Title in the [Conventional Commits](https://www.conventionalcommits.org/) form, `fix(agent): …` or `feat(worker): …`, since it becomes the squashed commit and the changelog line.
+- Title as a plain sentence that says what changes, such as "Open a failed job's shell under the job's runtime", since it becomes the squashed commit on `main`. The changelog is written by hand at each release.
 - Say what changed for someone running boxrunner, and how you tested it.
 - Comments explain why, not what.
 
