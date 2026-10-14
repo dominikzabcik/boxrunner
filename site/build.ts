@@ -95,6 +95,8 @@ async function render(doc: Doc): Promise<Rendered> {
 		gfm: true,
 		walkTokens(token) {
 			if (token.type === 'link') token.href = link(token.href, doc.src);
+			// The README shows Cloudflare's button image; the site serves its own copy, so the CSP stays 'self'.
+			if (token.type === 'image' && token.href === 'https://deploy.workers.cloudflare.com/button') token.href = '/deploy-to-cloudflare.svg';
 		},
 		renderer: {
 			heading({ tokens, depth }) {
@@ -298,6 +300,7 @@ for (const name of readdirSync(join(site, 'fonts'))) {
 }
 const withFonts = (html: string) => [...fontNames].reduce((out, [from, to]) => out.replaceAll(from, to), html);
 cpSync(join(site, 'favicon.svg'), join(dist, 'favicon.svg'));
+cpSync(join(site, 'deploy-to-cloudflare.svg'), join(dist, 'deploy-to-cloudflare.svg'));
 
 const browser = await chromium.launch();
 try {

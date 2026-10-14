@@ -1,6 +1,7 @@
 {
-	// Assets only: no Worker script. Not deployed yet, and no route or custom domain is set here.
+	// Assets only: no Worker script. Deployed with site/deploy.sh.
 	"name": "boxrunner-site",
+	"routes": [{ "pattern": "boxrunner.zabcik.me", "custom_domain": true }],
 	"compatibility_date": "2026-10-01",
 	"assets": {
 		"directory": "./dist",
