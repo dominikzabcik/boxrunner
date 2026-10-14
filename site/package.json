@@ -8,8 +8,8 @@
     "serve": "bun serve.ts"
   },
   "devDependencies": {
-    "marked": "18.0.14",
-    "mermaid": "11.17.2",
+    "marked": "18.1.0",
+    "mermaid": "12.1.0",
     "playwright-core": "1.63.0"
   }
 }
