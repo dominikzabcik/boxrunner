@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
+	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	"github.com/sigstore/sigstore-go/pkg/verify"
@@ -59,15 +60,32 @@ var (
 )
 
 // Signer is the identity in the certificate that signs a runner version's
-// provenance: the release workflow on the release branch of its minor
-// version, such as releases/m338 for 2.338.0. Binding the branch to the
-// version keeps a registry from passing off an older release's image.
-func Signer(version string) (string, error) {
+// provenance: actions/runner's release workflow, run in actions/runner on
+// the release branch of the version's minor release, such as releases/m338
+// for 2.338.0. Binding the branch to the version keeps a registry from
+// passing off an older release's image.
+func Signer(version string) (verify.CertificateIdentity, error) {
 	m := versionPattern.FindStringSubmatch(version)
 	if m == nil {
-		return "", fmt.Errorf("runner version %q is not major.minor.patch", version)
+		return verify.CertificateIdentity{}, fmt.Errorf("runner version %q is not major.minor.patch", version)
 	}
-	return "https://github.com/actions/runner/.github/workflows/release.yml@refs/heads/releases/m" + m[1], nil
+	ref := "refs/heads/releases/m" + m[1]
+	// The SAN names the workflow file, which another repository could call
+	// if it ever allowed workflow_call; the source repository cannot be
+	// borrowed that way.
+	san, err := verify.NewSANMatcher("https://github.com/actions/runner/.github/workflows/release.yml@"+ref, "")
+	if err != nil {
+		return verify.CertificateIdentity{}, err
+	}
+	iss, err := verify.NewIssuerMatcher(issuer, "")
+	if err != nil {
+		return verify.CertificateIdentity{}, err
+	}
+	return verify.NewCertificateIdentity(san, iss, certificate.Extensions{
+		SourceRepositoryURI: "https://github.com/actions/runner",
+		SourceRepositoryRef: ref,
+		RunnerEnvironment:   "github-hosted",
+	})
 }
 
 // Check returns the digest the registry gives the runner image tagged
@@ -105,7 +123,7 @@ func (c Checker) Check(ctx context.Context, version string) (string, error) {
 	return "", &Refused{ref, "no attestation verifies: " + strings.Join(reasons, "; ")}
 }
 
-func check(trusted root.TrustedMaterial, raw json.RawMessage, digest, signer string) error {
+func check(trusted root.TrustedMaterial, raw json.RawMessage, digest string, signer verify.CertificateIdentity) error {
 	var b bundle.Bundle
 	if err := b.UnmarshalJSON(raw); err != nil {
 		return err
@@ -114,12 +132,8 @@ func check(trusted root.TrustedMaterial, raw json.RawMessage, digest, signer str
 	if err != nil {
 		return err
 	}
-	id, err := verify.NewShortCertificateIdentity(issuer, "", signer, "")
-	if err != nil {
-		return err
-	}
 	sum, _ := hex.DecodeString(strings.TrimPrefix(digest, "sha256:"))
-	result, err := v.Verify(&b, verify.NewPolicy(verify.WithArtifactDigest("sha256", sum), verify.WithCertificateIdentity(id)))
+	result, err := v.Verify(&b, verify.NewPolicy(verify.WithArtifactDigest("sha256", sum), verify.WithCertificateIdentity(signer)))
 	if err != nil {
 		return err
 	}
