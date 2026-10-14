@@ -61,6 +61,7 @@ type Options struct {
 	Tick           time.Duration
 	HeartbeatEvery time.Duration
 	SysboxDir      string
+	CgroupDir      string
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
@@ -115,6 +116,7 @@ func Run(ctx context.Context, o Options) error {
 	o.Tick = cmp.Or(o.Tick, decideEvery)
 	o.HeartbeatEvery = cmp.Or(o.HeartbeatEvery, heartbeatEvery)
 	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
+	o.CgroupDir = cmp.Or(o.CgroupDir, layout.CgroupDir)
 	a := &Agent{
 		Options: o,
 		queue:   &queue.Client{HTTP: &http.Client{Timeout: 90 * time.Second}, UserAgent: "boxrunner/" + o.Version},
@@ -176,9 +178,10 @@ func Run(ctx context.Context, o Options) error {
 }
 
 // converge re-applies what install set up and a reboot or Docker restart
-// could have lost: the network, the registry mirror for classes with Docker
-// and the firewall rules.
+// could have lost: the idle slice's cpu.idle, the network, the registry
+// mirror for classes with Docker and the firewall rules.
 func (a *Agent) converge(ctx context.Context) error {
+	a.idleSlice(ctx)
 	if _, ok, err := a.Docker.Network(ctx, layout.Network); err != nil {
 		return err
 	} else if !ok {
@@ -202,6 +205,32 @@ func (a *Agent) converge(ctx context.Context) error {
 		return fmt.Errorf("firewall: %w", err)
 	}
 	return nil
+}
+
+// idleSlice starts the idle slice and sets its cpu.idle to 1. systemd does
+// that for CPUWeight=idle only from version 252, and a new cgroup starts at 0,
+// so the agent sets it after every reboot and restart of the slice.
+func (a *Agent) idleSlice(ctx context.Context) {
+	file := filepath.Join(a.CgroupDir, layout.IdleSlice, "cpu.idle")
+	if b, err := os.ReadFile(file); err == nil && strings.TrimSpace(string(b)) == "1" {
+		return
+	}
+	err := func() error {
+		if out, err := a.Run(ctx, "", "systemctl", "start", layout.IdleSlice); err != nil {
+			return fmt.Errorf("systemctl start %s: %w: %s", layout.IdleSlice, err, out)
+		}
+		// Not os.WriteFile: where the kernel has no cpu.idle, creating it
+		// fails as "permission denied", which hides why.
+		f, err := os.OpenFile(file, os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		_, err = f.WriteString("1")
+		return errors.Join(err, f.Close())
+	}()
+	if err != nil {
+		a.Log.Error("the idle slice is not idle; run boxrunner doctor", "err", err)
+	}
 }
 
 func (a *Agent) raise(err error) {
@@ -380,6 +409,9 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 		return
 	}
 	r.ID = minted.ID
+	if class.Priority == config.Idle {
+		a.idleSlice(ctx)
+	}
 	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror))
 	if err == nil {
 		err = a.Docker.Start(ctx, id)

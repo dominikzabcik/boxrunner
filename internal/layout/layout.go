@@ -18,6 +18,7 @@ const (
 	// an underscore to stay at the top level (docs/decisions.md).
 	IdleSlice     = "boxrunner_idle.slice"
 	IdleSlicePath = "/etc/systemd/system/boxrunner_idle.slice"
+	CgroupDir     = "/sys/fs/cgroup"
 	DockerSocket  = "/var/run/docker.sock"
 	Network       = "boxrunner"
 	Bridge        = "boxrunner0"

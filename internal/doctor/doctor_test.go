@@ -3,6 +3,8 @@ package doctor
 import (
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -61,6 +63,33 @@ func TestDockerInJobs(t *testing.T) {
 	for _, c := range cases {
 		if got := DockerInJobs(c.code, c.logs, addr); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: DockerInJobs =\n%+v\nwant\n%+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestIdleSlice(t *testing.T) {
+	root := t.TempDir()
+	os.Mkdir(filepath.Join(root, "boxrunner_idle.slice"), 0o755)
+	cgroup := "/boxrunner_idle.slice/docker-3f9a.scope"
+	cases := []struct {
+		name    string
+		cgroup  string
+		cpuIdle string
+		want    Result
+	}{
+		{"idle", cgroup, "1\n", Result{"idle slice", true, "container runs in /boxrunner_idle.slice, cpu.idle 1"}},
+		{"not idle", cgroup, "0\n", Result{"idle slice", false, "container runs in /boxrunner_idle.slice, cpu.idle 0; restart boxrunner to set it"}},
+		{"kernel without cpu.idle", cgroup, "", Result{"idle slice", false, "this kernel (5.10.0-35-amd64) has no cpu.idle, which Linux 5.15 added, so idle jobs do not run as SCHED_IDLE; install a newer kernel"}},
+		{"another slice", "/system.slice/docker-3f9a.scope", "1\n", Result{"idle slice", false, "container runs in /system.slice, not /boxrunner_idle.slice"}},
+	}
+	for _, c := range cases {
+		file := filepath.Join(root, "boxrunner_idle.slice", "cpu.idle")
+		os.Remove(file)
+		if c.cpuIdle != "" {
+			os.WriteFile(file, []byte(c.cpuIdle), 0o644)
+		}
+		if got := IdleSlice(root, c.cgroup, "5.10.0-35-amd64"); got != c.want {
+			t.Errorf("%s: IdleSlice = %+v, want %+v", c.name, got, c.want)
 		}
 	}
 }
