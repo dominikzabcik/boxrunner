@@ -91,6 +91,16 @@ describe('POST /v1/heartbeat', () => {
 		expect(totals.today).toEqual({ jobs: 1, minutes: 2, dollars: 0.01 });
 	});
 
+	it('accepts a job an older agent logged without its queue time, and shows no wait for it', async () => {
+		const { call, dashboard } = await ready();
+		const old = { ...job('box-1-boxrunner-bbbbbb', '2026-10-14T09:00:00Z', '2026-10-14T09:00:10Z', '2026-10-14T09:02:10Z'), queued: null };
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [old] }))).status).toBe(204);
+		const { jobs } = (await dashboard()) as unknown as { jobs: { runner: string; queued: string | null; waitSeconds: number | null }[] };
+		expect(jobs.map(({ runner, queued, waitSeconds }) => ({ runner, queued, waitSeconds }))).toEqual([
+			{ runner: 'box-1-boxrunner-bbbbbb', queued: null, waitSeconds: null },
+		]);
+	});
+
 	it('rounds each job up to whole minutes, as GitHub bills them', async () => {
 		const { call, dashboard } = await ready();
 		await call(

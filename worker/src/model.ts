@@ -115,14 +115,14 @@ export type Priority = 'normal' | 'idle';
 /** Times are milliseconds since the epoch. */
 export type BoxRunner = { name: RunnerName; repo: RepoName; className: ClassName; state: RunnerState; since: number };
 
-/** A job one of the box's runners finished; `startedAt` is null when it was canceled before it started. */
+/** A job one of the box's runners finished; `startedAt` is null when it was canceled before it started, `queuedAt` when an older agent did not record it. */
 export type FinishedJob = {
 	runner: RunnerName;
 	repo: RepoName;
 	className: ClassName;
 	name: string;
 	result: string;
-	queuedAt: number;
+	queuedAt: number | null;
 	startedAt: number | null;
 	finishedAt: number;
 };
@@ -216,7 +216,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						className: need(parse.className(value.class), `${at}.class`),
 						name: need(label(200)(value.name), `${at}.name`),
 						result: need(matching(/^[a-z_]{1,32}$/)(value.result), `${at}.result`),
-						queuedAt: need(instant(value.queued), `${at}.queued`),
+						queuedAt: value.queued === null || value.queued === undefined ? null : need(instant(value.queued), `${at}.queued`),
 						startedAt: value.started === null ? null : need(instant(value.started), `${at}.started`),
 						finishedAt: need(instant(value.finished), `${at}.finished`),
 					};

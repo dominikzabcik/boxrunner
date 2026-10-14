@@ -165,7 +165,7 @@ Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The ag
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
 | `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more |
 | `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state |
-| `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started |
+| `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it |
 
 Times are RFC 3339. Repositories and classes are stored as the box sends them: the box is trusted with its own state, so the Worker does not check them against `GET /v1/repos` or `CLASSES`. Fields the Worker does not know are ignored, so a newer agent can add some. A malformed field gets `400 bad_request` naming it, as in `"runners[0].state" is missing or malformed.`
 

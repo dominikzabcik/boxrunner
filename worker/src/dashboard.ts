@@ -30,7 +30,7 @@ export type Dashboard = {
 		class: string;
 		name: string;
 		result: string;
-		queued: string;
+		queued: string | null;
 		started: string | null;
 		finished: string;
 		secondsSinceFinished: number;
@@ -98,11 +98,11 @@ export function dashboardData(store: Store, classes: Classes, now: number): Dash
 			class: job.className,
 			name: job.name,
 			result: job.result,
-			queued: iso(job.queuedAt),
+			queued: job.queuedAt === null ? null : iso(job.queuedAt),
 			started: job.startedAt === null ? null : iso(job.startedAt),
 			finished: iso(job.finishedAt),
 			secondsSinceFinished: secondsBetween(job.finishedAt, now),
-			waitSeconds: job.startedAt === null ? null : secondsBetween(job.queuedAt, job.startedAt),
+			waitSeconds: job.startedAt === null || job.queuedAt === null ? null : secondsBetween(job.queuedAt, job.startedAt),
 			durationSeconds: job.startedAt === null ? 0 : secondsBetween(job.startedAt, job.finishedAt),
 			minutes: job.minutes,
 		})),
