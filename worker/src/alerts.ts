@@ -18,6 +18,11 @@ export function alertText(down: boolean, fallback: boolean, lastSeen: number | u
  * the message from `text` instead; Slack and Discord ignore them. Answers why
  * the post failed, or null. The answer never holds the address.
  */
+/** A fetch error's message may quote the URL, whose path is the secret for Discord and Slack. */
+function redact(message: string, webhook: URL): string {
+	return message.replaceAll(webhook.href, '<webhook>').replaceAll(webhook.pathname, '<path>');
+}
+
 export async function postAlert(webhook: URL, text: string): Promise<string | null> {
 	let response: Response;
 	try {
@@ -29,7 +34,7 @@ export async function postAlert(webhook: URL, text: string): Promise<string | nu
 		});
 	} catch (error) {
 		if (error instanceof Error && error.name === 'TimeoutError') return `${webhook.host} did not answer within ${timeoutMs / 1000} seconds`;
-		return `${webhook.host} could not be reached: ${error instanceof Error ? error.message : String(error)}`;
+		return `${webhook.host} could not be reached: ${redact(error instanceof Error ? error.message : String(error), webhook)}`;
 	}
 	if (response.ok) {
 		await response.body?.cancel();

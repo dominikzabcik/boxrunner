@@ -261,7 +261,7 @@ describe('alerts', () => {
 	it('retries a failed post after 1 minute, then 2, and shows why on the dashboard', async () => {
 		const github = await fakeGitHub();
 		const hook = fakeWebhook(github);
-		hook.answers.push(400, new Error('Network connection lost.'));
+		hook.answers.push(400, new Error(`fetch ${webhook} failed: Network connection lost.`));
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		await withEnv({ ALERT_WEBHOOK: webhook }, async () => {
 			const { beat, fire, nextAlarm, dashboard } = await ready(github);
@@ -276,7 +276,7 @@ describe('alerts', () => {
 
 			at('10:11:00');
 			await fire();
-			expect(warn).toHaveBeenLastCalledWith('Could not send the down alert (attempt 2): hooks.test could not be reached: Network connection lost.');
+			expect(warn).toHaveBeenLastCalledWith('Could not send the down alert (attempt 2): hooks.test could not be reached: fetch <webhook> failed: Network connection lost.');
 			expect(await nextAlarm()).toBe(iso('10:13:00'));
 
 			at('10:13:00');
