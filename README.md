@@ -16,7 +16,11 @@ beside 4 busy jobs at normal priority             2.10 s   +390%   6.91 s   +396
 
 You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; amd64 or arm64) and a free Cloudflare account.
 
-1. **Deploy the Worker.** From a clone of this repository:
+1. **Deploy the Worker.** With one click, where Cloudflare asks for a setup secret (keep it, the setup page asks for it):
+
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dominikzabcik/boxrunner/tree/main/worker)
+
+   Or from a clone of this repository:
    ```sh
    cd worker && bun install
    bunx wrangler deploy
@@ -27,7 +31,7 @@ You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; am
 2. **Create the GitHub App.** Open `https://<your worker>/setup`, enter the setup secret and confirm on GitHub. Install the App on the private repositories whose jobs should run on your box.
 3. **Install the agent.** The setup page shows the command, which looks like this:
    ```sh
-   curl -fsSL https://github.com/dominikzabcik/boxrunner/releases/latest/download/install.sh \
+   curl -fsSL https://boxrunner.zabcik.me/install.sh \
      | sudo sh -s -- --worker https://<your worker> --token <box token>
    ```
 4. **Use it.** In a workflow, `runs-on: boxrunner`, or `runs-on: boxrunner-light` for jobs that should only use idle cores.

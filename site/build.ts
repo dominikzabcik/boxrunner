@@ -352,6 +352,12 @@ try {
   Cache-Control: ${html}
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=300
+/v*/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=31536000, immutable
 `,
 	);
 

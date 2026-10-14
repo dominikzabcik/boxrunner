@@ -4,8 +4,8 @@ import { convertManifest, GitHubError } from './github';
 import { alert, escape, messagePage as message, page as htmlPage, readCookie, type Page } from './page';
 import type { SetupRoute } from './routes';
 
-/** Placeholder until the installer is published; the one place its address lives. */
-const installerUrl = 'https://boxrunner.invalid/install.sh';
+/** The one place the installer's address lives. */
+const installerUrl = 'https://boxrunner.zabcik.me/install.sh';
 
 const cookie = '__Host-boxrunner-setup';
 const nonceLifetime = 60 * 60 * 1000;

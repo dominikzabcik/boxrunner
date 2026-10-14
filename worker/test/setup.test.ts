@@ -92,7 +92,7 @@ describe('GET /setup/callback', () => {
 		expect(response.status).toBe(200);
 		expect(html).toContain('<a href="https://github.com/apps/boxrunner-test/installations/new">');
 		expect(html).toContain(
-			`<pre><code>curl -fsSL https://boxrunner.invalid/install.sh | sudo sh -s -- --worker ${origin} --token ${token}</code></pre>`,
+			`<pre><code>curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh -s -- --worker ${origin} --token ${token}</code></pre>`,
 		);
 		expect(response.headers.get('set-cookie')).toBe('__Host-boxrunner-setup=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0');
 		expect((await agent(token)('GET', '/v1/repos')).status).toBe(200);
