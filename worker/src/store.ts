@@ -5,6 +5,7 @@ import {
 	dayOf,
 	startOfDay,
 	type App,
+	type BoxName,
 	type BoxStatus,
 	type ClassName,
 	type FinishedJob,
@@ -12,6 +13,7 @@ import {
 	type Login,
 	type Pause,
 	type ScaleSetId,
+	type SessionId,
 } from './model';
 
 /** Jobs, their daily totals and boxes that stopped reporting are kept this many days. */
@@ -33,6 +35,13 @@ CREATE TABLE IF NOT EXISTS repo_scale_sets (
 	id INTEGER NOT NULL,
 	PRIMARY KEY (repo_id, class),
 	UNIQUE (repo_id, id)
+);
+CREATE TABLE IF NOT EXISTS session_holders (
+	repo_id INTEGER NOT NULL,
+	scale_set_id INTEGER NOT NULL,
+	session_id TEXT NOT NULL,
+	box TEXT NOT NULL,
+	PRIMARY KEY (repo_id, scale_set_id)
 );
 CREATE TABLE IF NOT EXISTS cache (
 	key TEXT PRIMARY KEY,
@@ -128,9 +137,9 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets, every cached token, the session key and the pauses, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key and the pauses, so setup can run again. */
 	reset() {
-		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes;');
+		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes;');
 	}
 
 	/** Fills in the OAuth client id and owner of an App set up before the Worker kept them. */
@@ -200,6 +209,38 @@ export class Store {
 
 	forgetScaleSet(repoId: number, id: ScaleSetId) {
 		this.sql.exec('DELETE FROM repo_scale_sets WHERE repo_id = ? AND id = ?', repoId, id);
+		this.sql.exec('DELETE FROM session_holders WHERE repo_id = ? AND scale_set_id = ?', repoId, id);
+	}
+
+	holdSession(repoId: number, id: ScaleSetId, sessionId: SessionId, box: BoxName) {
+		this.sql.exec(
+			'INSERT OR REPLACE INTO session_holders (repo_id, scale_set_id, session_id, box) VALUES (?, ?, ?, ?)',
+			repoId,
+			id,
+			sessionId.toLowerCase(),
+			box,
+		);
+	}
+
+	releaseSession(repoId: number, id: ScaleSetId, sessionId: SessionId) {
+		this.sql.exec('DELETE FROM session_holders WHERE repo_id = ? AND scale_set_id = ? AND session_id = ?', repoId, id, sessionId);
+	}
+
+	/**
+	 * The box other than `asker` that opened the scale set's session, if it
+	 * reported since `seenSince`. A box that stopped reporting may have died
+	 * with its session open, which GitHub releases on its own.
+	 */
+	sessionHolder(repoId: number, id: ScaleSetId, asker: BoxName, seenSince: number): BoxName | undefined {
+		return this.sql
+			.exec<{ box: string }>(
+				'SELECT h.box FROM session_holders h JOIN boxes b ON b.name = h.box WHERE h.repo_id = ? AND h.scale_set_id = ? AND h.box != ? AND b.seen_at >= ?',
+				repoId,
+				id,
+				asker,
+				seenSince,
+			)
+			.toArray()[0]?.box as BoxName | undefined;
 	}
 
 	cached(key: string, now: number): string | undefined {

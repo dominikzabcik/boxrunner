@@ -20,6 +20,8 @@ export class ApiError extends Error {
 		readonly code: ErrorCode,
 		message: string,
 		readonly headers: Record<string, string> = {},
+		/** Fields the error's body carries besides `error` and `message`. */
+		readonly fields: Record<string, string> = {},
 	) {
 		super(message);
 	}
@@ -33,7 +35,7 @@ export const noContent = () => new Response(null, { status: 204, headers: apiHea
 
 export const errorResponse = (error: ApiError) =>
 	Response.json(
-		{ error: error.code, message: error.message },
+		{ ...error.fields, error: error.code, message: error.message },
 		{ status: errorStatus[error.code], headers: { ...apiHeaders, ...error.headers } },
 	);
 

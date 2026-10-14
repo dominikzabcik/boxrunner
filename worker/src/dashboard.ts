@@ -6,7 +6,7 @@ import { retentionDays, type Store } from './store';
 /** GitHub's published price for its standard (2-core) Linux runner. */
 export const dollarsPerMinute = 0.006;
 /** The agent reports every 30 seconds; four missed heartbeats mean the box is off. */
-const offlineAfterSeconds = 120;
+export const offlineAfterSeconds = 120;
 const recentJobCount = 30;
 
 type Totals = { jobs: number; minutes: number; dollars: number };
