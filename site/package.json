@@ -8,9 +8,9 @@
     "serve": "bun serve.ts"
   },
   "devDependencies": {
-    "marked": "18.0.14",
+    "marked": "18.1.0",
     "mermaid": "11.17.2",
-    "playwright-core": "1.63.0"
+    "playwright-core": "1.64.0"
   },
   "overrides": {
     "katex": "0.18.2"
