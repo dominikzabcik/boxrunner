@@ -202,6 +202,8 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			fmt.Fprintf(w, `{"count":1,"value":%s}`, body)
 		case r.URL.Path == "/releases/latest":
 			http.Redirect(w, r, "/releases/tag/v2.338.0", http.StatusFound)
+		case r.URL.Path == "/v1/heartbeat":
+			w.WriteHeader(204)
 		default:
 			t.Errorf("fake github: unexpected %s %s", r.Method, r.URL)
 		}
