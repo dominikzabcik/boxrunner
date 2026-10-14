@@ -28,15 +28,16 @@ func (a *Agent) heartbeat(ctx context.Context) {
 		if err != nil {
 			a.Log.Warn("reading the job log", "err", err)
 		}
-		a.mu.Lock()
-		snap := a.snapshot
-		a.mu.Unlock()
+		snap := a.current()
 		if snap.Box == "" {
 			// The scheduler has not published its first look yet.
 			err = nil
 		} else {
 			var reply worker.HeartbeatReply
 			reply, err = a.Worker.SendHeartbeat(ctx, fitHeartbeat(heartbeatBody(snap, jobs), heartbeatLimit))
+			if err == nil {
+				a.heartbeatOK.Store(time.Now().UnixNano())
+			}
 			if err == nil && !slices.Equal(reply.Paused, paused) {
 				paused = reply.Paused
 				select {

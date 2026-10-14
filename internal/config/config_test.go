@@ -378,3 +378,34 @@ func TestParseMaxDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMetrics(t *testing.T) {
+	file := func(lines string) string {
+		return lines + "\nworker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	}
+	for lines, want := range map[string]string{
+		``:                           "invalid AddrPort",
+		`metrics = "127.0.0.1:9464"`: "127.0.0.1:9464",
+		`metrics = "[::1]:9464"`:     "[::1]:9464",
+		"metrics = \"0.0.0.0:9464\"\nmetrics_public = true":    "0.0.0.0:9464",
+		"metrics = \"192.0.2.10:9464\"\nmetrics_public = true": "192.0.2.10:9464",
+	} {
+		got, err := Parse([]byte(file(lines)), "")
+		if err != nil || got.Metrics.String() != want {
+			t.Errorf("Parse(%s) metrics = %s, %v; want %s", lines, got.Metrics, err, want)
+		}
+	}
+	for lines, want := range map[string]string{
+		`metrics = "0.0.0.0:9464"`:   "metrics: 0.0.0.0:9464 can be reached from other machines, which then read the names of your repositories; use 127.0.0.1, or set metrics_public = true",
+		`metrics = "[::]:9464"`:      "metrics: [::]:9464 can be reached from other machines, which then read the names of your repositories; use 127.0.0.1, or set metrics_public = true",
+		`metrics = "localhost:9464"`: `metrics: "localhost:9464" must be an IP address and port, such as 127.0.0.1:9464`,
+		`metrics = "127.0.0.1"`:      `metrics: "127.0.0.1" must be an IP address and port, such as 127.0.0.1:9464`,
+		`metrics = "127.0.0.1:0"`:    `metrics: "127.0.0.1:0" must be an IP address and port, such as 127.0.0.1:9464`,
+		`metrics_public = true`:      "metrics_public: set without metrics",
+	} {
+		_, err := Parse([]byte(file(lines)), "")
+		if want = "config:\n" + want; err == nil || err.Error() != want {
+			t.Errorf("Parse(%s) error = %v\nwant %s", lines, err, want)
+		}
+	}
+}

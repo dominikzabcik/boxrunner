@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -48,6 +49,10 @@ type Snapshot struct {
 	// Draining means `boxrunner drain` closed the sessions: the agent starts
 	// no runner until `boxrunner resume`.
 	Draining bool `json:"draining,omitempty"`
+	// Finished counts the jobs that finished since the agent started.
+	Finished []Tally `json:"finished,omitempty"`
+	// Heartbeat is when the Worker last took a heartbeat.
+	Heartbeat time.Time `json:"heartbeat,omitzero"`
 }
 
 // Drained is true once a draining agent has closed every session and no job
@@ -145,16 +150,76 @@ type Job struct {
 }
 
 // Wait is how long the job queued before a runner took it.
-func (j Job) Wait() time.Duration { return span(j.Queued, j.Started) }
+func (j Job) Wait() time.Duration {
+	d, _ := span(j.Queued, j.Started)
+	return d
+}
 
 // Took is how long the job ran.
-func (j Job) Took() time.Duration { return span(j.Started, j.Finished) }
+func (j Job) Took() time.Duration {
+	d, _ := span(j.Started, j.Finished)
+	return d
+}
 
-func span(from, to time.Time) time.Duration {
+// span is the time from one moment to a later one, and false when either is
+// unknown or they are out of order.
+func span(from, to time.Time) (time.Duration, bool) {
 	if from.IsZero() || to.IsZero() || to.Before(from) {
-		return 0
+		return 0, false
 	}
-	return to.Sub(from)
+	return to.Sub(from), true
+}
+
+// Tally counts the finished jobs of one repository, class and result.
+type Tally struct {
+	Repo   string `json:"repo"`
+	Class  string `json:"class"`
+	Result string `json:"result"`
+	Jobs   uint64 `json:"jobs"`
+	// Took and Wait leave out the jobs whose times GitHub did not send.
+	Took Histogram `json:"took"`
+	Wait Histogram `json:"wait"`
+}
+
+// Buckets are the upper bounds, in seconds, of a Histogram's buckets: from a
+// warm runner's start to GitHub's six-hour limit on a job.
+var Buckets = [...]float64{1, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600}
+
+// Histogram counts durations in Buckets. Counts[i] holds those over the
+// bound before Buckets[i] and up to it; the last holds those over every
+// bound.
+type Histogram struct {
+	Counts [len(Buckets) + 1]uint64 `json:"counts"`
+	// Sum is in seconds.
+	Sum float64 `json:"sum"`
+}
+
+func (h *Histogram) add(d time.Duration) {
+	i, _ := slices.BinarySearch(Buckets[:], d.Seconds())
+	h.Counts[i]++
+	h.Sum += d.Seconds()
+}
+
+// Count returns the tallies, sorted by repository, class and result, with j
+// counted. It leaves tallies as they were, so a snapshot that holds them can
+// be read while the agent counts the next job.
+func Count(tallies []Tally, j Job) []Tally {
+	i, found := slices.BinarySearchFunc(tallies, j, func(t Tally, j Job) int {
+		return cmp.Or(cmp.Compare(t.Repo, j.Repo), cmp.Compare(t.Class, j.Class), cmp.Compare(t.Result, j.Result))
+	})
+	tallies = slices.Clone(tallies)
+	if !found {
+		tallies = slices.Insert(tallies, i, Tally{Repo: j.Repo, Class: j.Class, Result: j.Result})
+	}
+	t := &tallies[i]
+	t.Jobs++
+	if d, ok := span(j.Started, j.Finished); ok {
+		t.Took.add(d)
+	}
+	if d, ok := span(j.Queued, j.Started); ok {
+		t.Wait.add(d)
+	}
+	return tallies
 }
 
 // waitText shows a queue wait, or "?" for a job logged before boxrunner knew

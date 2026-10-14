@@ -240,3 +240,26 @@ The Worker runs 0.2.0. Redeploy it from 0.2.2: see docs/upgrading.md.
 		t.Errorf("current, with a Worker that names no version:\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestCount(t *testing.T) {
+	site := Job{Repo: "octo/site", Class: "boxrunner", Result: "succeeded", Queued: t0, Started: t0.Add(8 * time.Second), Finished: t0.Add(68 * time.Second)}
+	slow := Job{Repo: "octo/site", Class: "boxrunner", Result: "succeeded", Queued: t0, Started: t0.Add(5 * time.Second), Finished: t0.Add(7 * time.Hour)}
+	// A job logged before boxrunner knew when it queued.
+	docs := Job{Repo: "octo/docs", Class: "boxrunner", Result: "failed", Started: t0, Finished: t0.Add(30 * time.Second)}
+	first := Count(nil, site)
+	got := Count(Count(first, slow), docs)
+	want := []Tally{
+		{Repo: "octo/docs", Class: "boxrunner", Result: "failed", Jobs: 1,
+			Took: Histogram{Counts: [14]uint64{3: 1}, Sum: 30}},
+		{Repo: "octo/site", Class: "boxrunner", Result: "succeeded", Jobs: 2,
+			Took: Histogram{Counts: [14]uint64{4: 1, 13: 1}, Sum: 60 + 25195},
+			Wait: Histogram{Counts: [14]uint64{1: 1, 2: 1}, Sum: 13}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Count =\n%+v\nwant\n%+v", got, want)
+	}
+	if want := []Tally{{Repo: "octo/site", Class: "boxrunner", Result: "succeeded", Jobs: 1,
+		Took: Histogram{Counts: [14]uint64{4: 1}, Sum: 60}, Wait: Histogram{Counts: [14]uint64{2: 1}, Sum: 8}}}; !reflect.DeepEqual(first, want) {
+		t.Errorf("Count changed the tallies it was given: %+v", first)
+	}
+}

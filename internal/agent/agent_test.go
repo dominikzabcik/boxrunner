@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -275,6 +276,8 @@ type harness struct {
 	done   chan error
 	// cgroup holds the idle slice's cpu.idle, 0 at first.
 	cgroup string
+	// metrics is where the agent serves metrics, none when zero.
+	metrics netip.AddrPort
 
 	mu        sync.Mutex
 	systemctl []string
@@ -301,6 +304,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	for _, f := range change {
 		f(&cfg.Classes[0], h)
 	}
+	cfg.Metrics = h.metrics
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
 	d, err := docker.Dial(context.Background(), socket)
@@ -903,5 +907,59 @@ func TestStatusVersions(t *testing.T) {
 		s, err := status.Fetch(context.Background(), h.socket)
 		got = [2]string{s.Worker, s.Latest}
 		return err == nil && got == [2]string{"0.1.0", "0.2.2"}
+	})
+}
+
+func TestMetrics(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := netip.MustParseAddrPort(l.Addr().String())
+	l.Close()
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.metrics = addr })
+	defer h.stop(t)
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501,"queueTime":"2026-10-13T21:00:00Z"}`)
+	var name string
+	waitFor(t, "a running job container", func() bool {
+		for n, c := range h.docker.snapshot() {
+			name = n
+			return c.State == "running"
+		}
+		return false
+	})
+	h.github.queue <- message(2, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q}`, name))
+	h.github.queue <- message(3, 0, fmt.Sprintf(`{"messageType":"JobCompleted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"result":"succeeded","jobDisplayName":"test",
+		"queueTime":"2026-10-13T21:00:00Z","runnerAssignTime":"2026-10-13T21:00:08Z","finishTime":"2026-10-13T21:03:00Z"}`, name))
+
+	want := []string{
+		`boxrunner_agent_info{box="box-1",version="0.1.0"} 1`,
+		`gha_completed_jobs_total{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 1`,
+		`gha_job_execution_duration_seconds_sum{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 172`,
+		`boxrunner_job_queue_duration_seconds_sum{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 8`,
+		`boxrunner_class_max_runners{class="boxrunner"} 1`,
+		`boxrunner_draining 0`,
+	}
+	var body string
+	defer func() {
+		if t.Failed() {
+			t.Logf("the last metrics:\n%s", body)
+		}
+	}()
+	waitFor(t, "the finished job and a heartbeat in the metrics", func() bool {
+		resp, err := http.Get("http://" + addr.String() + "/metrics")
+		if err != nil {
+			return false
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		body = string(b)
+		lines := strings.Split(body, "\n")
+		for _, line := range want {
+			if !slices.Contains(lines, line) {
+				return false
+			}
+		}
+		return !slices.Contains(lines, "boxrunner_heartbeat_last_success_timestamp_seconds 0")
 	})
 }

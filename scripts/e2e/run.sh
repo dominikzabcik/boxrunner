@@ -58,11 +58,24 @@ done
 expect "$work/worker.log" '^POST /v1/heartbeat 200$'
 systemctl is-active --quiet boxrunner.service || fail "boxrunner.service is not active"
 
+step "the agent serves metrics on every address, and doctor shows jobs cannot reach them"
+sudo sed -i '1i metrics_public = true' /etc/boxrunner/config.toml
+sudo sed -i '1i metrics = "0.0.0.0:9464"' /etc/boxrunner/config.toml
+sudo systemctl restart boxrunner.service
+for _ in $(seq 60); do
+	curl -fsS -o "$work/metrics.txt" http://127.0.0.1:9464/metrics 2>/dev/null &&
+		grep -q '^boxrunner_heartbeat_last_success_timestamp_seconds [1-9]' "$work/metrics.txt" && break
+	sleep 1
+done
+expect "$work/metrics.txt" "^boxrunner_agent_info\{box=\"[a-z0-9-]+\",version=\"$version\"\} 1$" \
+	"^boxrunner_worker_info\{version=\"$version\"\} 1$" '^boxrunner_class_max_runners\{class="boxrunner"\} [0-9]+$' \
+	'^boxrunner_draining 0$' '^boxrunner_disk_free_bytes [1-9][0-9]*$' '^boxrunner_heartbeat_last_success_timestamp_seconds [1-9]'
+
 step "doctor checks the box (systemd $(systemctl --version | awk 'NR == 1 { print $2 }'))"
 sudo boxrunner doctor | tee "$work/doctor.txt" || fail "doctor exited with $?"
 expect "$work/doctor.txt" '^ok +idle slice +container runs in /boxrunner_idle.slice, cpu.idle 1$' '^ok +config ' '^ok +cgroup driver +systemd' '^ok +firewall rules +in place for IPv4 and IPv6' \
 	'^ok +host +the host at .* is unreachable from jobs' '^ok +metadata +169.254.169.254 is unreachable from jobs' \
-	'^ok +private ' '^ok +github ' "^ok +worker +$worker accepts the token; 0 repositories, classes boxrunner, boxrunner-light$" \
+	'^ok +private ' '^ok +metrics +the metrics port at [0-9.]+:9464 is unreachable from jobs$' '^ok +github ' "^ok +worker +$worker accepts the token; 0 repositories, classes boxrunner, boxrunner-light$" \
 	"^ok +isolation boxrunner +$isolation" "^ok +isolation boxrunner-light +$isolation"
 if [ "$mode" = docker ]; then
 	expect "$work/doctor.txt" '^ok +sysbox ' '^ok +docker in jobs ' '^ok +registry mirror '

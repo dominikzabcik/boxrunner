@@ -295,6 +295,7 @@ func Versions(agent, latest string, latestErr error, workerVersion string, worke
 const probeScript = `probe() { timeout 3 bash -c "exec 3<>/dev/tcp/$2/$3" 2>/dev/null; echo "$1 $?"; }
 probe host %s 22
 %s
+%s
 probe metadata 169.254.169.254 80
 probe github github.com 443
 `
@@ -316,10 +317,20 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	if gw, err := defaultGateway(); err == nil && gw.IsPrivate() {
 		private = fmt.Sprintf("probe private %s 80", gw)
 	}
+	// A job has its own loopback; it reaches the host at the gateway or at an
+	// address the host has.
+	metrics, metricsAt := "", ""
+	if addr := c.Config.Metrics; c.ConfigErr == nil && addr.IsValid() {
+		metricsAt = gateway
+		if !addr.Addr().IsLoopback() && !addr.Addr().IsUnspecified() {
+			metricsAt = addr.Addr().String()
+		}
+		metrics = fmt.Sprintf("probe metrics %s %d", metricsAt, addr.Port())
+	}
 	// A doctor that was interrupted leaves its container behind.
 	d.Remove(ctx, "boxrunner-doctor")
 	id, err := d.Create(ctx, docker.ContainerSpec{
-		Name: "boxrunner-doctor", Image: layout.Image, Cmd: []string{"bash", "-c", fmt.Sprintf(probeScript, gateway, private)}, Tty: true,
+		Name: "boxrunner-doctor", Image: layout.Image, Cmd: []string{"bash", "-c", fmt.Sprintf(probeScript, gateway, private, metrics)}, Tty: true,
 		CgroupParent: layout.IdleSlice, Network: layout.Network, NanoCPUs: 1e9, Memory: 256 << 20, PidsLimit: 64,
 	})
 	if docker.NotFound(err) {
@@ -374,6 +385,9 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 		blocked("private", "the private network's gateway")
 	} else {
 		add("private", true, "skipped: the default gateway is not a private address; the rules above cover private ranges")
+	}
+	if metrics != "" {
+		blocked("metrics", fmt.Sprintf("the metrics port at %s", net.JoinHostPort(metricsAt, strconv.Itoa(int(c.Config.Metrics.Port())))))
 	}
 	blocked("metadata", "169.254.169.254")
 	add("github", codes["github"] == 0, "github.com:443 from a job container (exit %d)", codes["github"])

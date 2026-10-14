@@ -33,6 +33,8 @@ max = 2
 | `worker` | required | Your Worker's URL. Must be HTTPS. |
 | `box` | the hostname's first label | Lower-case letters, digits and dashes. It names the box's runners and sessions at GitHub. |
 | `disk_floor` | `10GB` | No runner starts while Docker's data directory, or Sysbox's `/var/lib/sysbox` when it sits on another filesystem, has less free space than this. Below half of it, the agent stops the job container that wrote the most, counting the images and containers of a job's own Docker. |
+| `metrics` | none | An IP address and port, such as `127.0.0.1:9464`, where the agent serves [Prometheus metrics](#metrics). |
+| `metrics_public` | `false` | Allows `metrics` to be an address other machines can reach. |
 
 The box token lives in `/etc/boxrunner/token`, readable by root only.
 
@@ -139,3 +141,59 @@ RUN npx -y playwright@1.56.0 install --with-deps chromium
 ```
 
 The job image starts as root, and its entrypoint runs the job as `runner`. A class Dockerfile can end with `USER runner`, but then the entrypoint cannot start Docker, so a class with `docker = true` must end as root (`USER root`) and keep the entrypoint. The directory that holds the Dockerfile is the build context. The agent passes the job image as `BASE` and tags the result `boxrunner/class-<name>:local`. It rebuilds the class image when the job image is rebuilt for a new runner release, and when any file in that directory changes. After a rebuild it removes the old class image, unless a container still uses it.
+
+## Metrics
+
+With `metrics` set, the agent serves Prometheus metrics at `/metrics` on that address, in the text format, version 0.0.4. Without it, the agent opens no port.
+
+```toml
+metrics = "127.0.0.1:9464"
+```
+
+A Prometheus on the box scrapes it with:
+
+```yaml
+scrape_configs:
+  - job_name: boxrunner
+    static_configs:
+      - targets: ["127.0.0.1:9464"]
+```
+
+The values come from the same snapshot as `sudo boxrunner status`, which the agent refreshes at least every five seconds. Counters and histograms start at zero when the agent starts, as actions-runner-controller's do when its listener restarts; `rate()` and `increase()` handle that.
+
+### Who can read them
+
+The endpoint has no authentication, and the metrics name your repositories, classes, box and versions. So `metrics` must be a loopback address unless the config also sets `metrics_public = true`. Before you set it, prefer a scraper on the box that forwards the samples, or an SSH tunnel to `127.0.0.1:9464`. If another machine must scrape the port directly, listen on the one address it reaches, such as a VPN address, rather than `0.0.0.0`, and let only that machine in through the host's firewall. boxrunner does not open the port in any firewall.
+
+Jobs cannot reach the port, whatever the address. boxrunner's firewall drops everything the host receives from the job bridge, on every address and port, except DNS and the [registry mirror](#docker-inside-jobs), and a job's `127.0.0.1` is its own container. `sudo boxrunner doctor` tries the metrics port from a job container and fails if anything answers.
+
+### The metrics
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `boxrunner_class_runners` | gauge | `class`, `phase` | Runners of the class in each phase: `requested`, `starting`, `running`, `removing` or `exited`. |
+| `boxrunner_class_max_runners` | gauge | `class` | The class's `max`. |
+| `boxrunner_class_held` | gauge | `class` | 1 while the class holds its starts because its runners exit before taking a job, else 0. |
+| `gha_assigned_jobs` | gauge | `name`, `organization`, `repository` | Jobs GitHub assigned to the scale set. |
+| `gha_completed_jobs_total` | counter | `name`, `organization`, `repository`, `job_result` | Jobs that finished since the agent started. |
+| `gha_job_execution_duration_seconds` | histogram | `name`, `organization`, `repository`, `job_result` | From when a runner took the job to when it finished. |
+| `boxrunner_job_queue_duration_seconds` | histogram | `name`, `organization`, `repository`, `job_result` | From when the job was queued to when a runner took it, counted when the job finishes. |
+| `boxrunner_disk_free_bytes` | gauge | | Free space on Docker's or Sysbox's filesystem, whichever has less. |
+| `boxrunner_disk_floor_bytes` | gauge | | The `disk_floor`. |
+| `boxrunner_images_bytes` | gauge | | What the job, class and runner images take after the last prune; absent until measured. |
+| `boxrunner_runner_image_info` | gauge | `version` | 1, with the Actions runner version the job image was built from; absent until built. |
+| `boxrunner_agent_info` | gauge | `box`, `version` | 1, with the agent's version. |
+| `boxrunner_worker_info` | gauge | `version` | 1, with the Worker's version; absent until the Worker answers with one. |
+| `boxrunner_draining` | gauge | | 1 while the box drains after `sudo boxrunner drain`, else 0. |
+| `boxrunner_heartbeat_last_success_timestamp_seconds` | gauge | | When the Worker last took a heartbeat, in seconds since 1970; 0 before the first. |
+
+Three metrics mean the same as [actions-runner-controller's listener metrics](https://docs.github.com/en/actions/tutorials/use-actions-runner-controller/deploy-runner-scale-sets#enabling-metrics) and take their names and labels ([source](https://github.com/actions/actions-runner-controller/blob/f0d0b1d4399189c42954262be5defb22edc94a44/cmd/ghalistener/metrics/metrics.go)): `gha_assigned_jobs`, `gha_completed_jobs_total` and `gha_job_execution_duration_seconds`. In them, `name` is the class, which is the scale set's name, as in ARC, `organization` the repository's owner and `repository` its name: `octo/site` is `organization="octo"`, `repository="site"`. They leave out the labels boxrunner has no value for (`enterprise`, `namespace`, `event_name`) and the job's name and workflow, which would add a series for every job. The others have names of their own because they differ: ARC's `gha_job_startup_duration_seconds` counts from when the scale set got the job, not from when the job was queued, and its `gha_max_runners` is a scale set's, while a class's `max` holds for all its repositories together.
+
+The durations are histograms, not summaries. A summary computes its quantiles on the box, over a window it chooses, and quantiles from several boxes or repositories cannot be added up. A histogram is a set of counters that Prometheus adds up and turns into any quantile with `histogram_quantile`, and it is what ARC uses. The buckets, in seconds, are 1, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200 and 21600, which is GitHub's six-hour limit on a job.
+
+For example, the time that nine jobs in ten waited for a runner over the last day, per class, and a box whose heartbeats stopped:
+
+```promql
+histogram_quantile(0.9, sum by (name, le) (increase(boxrunner_job_queue_duration_seconds_bucket[1d])))
+time() - boxrunner_heartbeat_last_success_timestamp_seconds > 300
+```

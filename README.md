@@ -133,7 +133,7 @@ sequenceDiagram
 
 </details>
 
-The [architecture](docs/architecture.md) explains each part and what it holds, and the [decisions](docs/decisions.md) record the measurements behind them. The [configuration](docs/config.md) covers classes, limits and custom job images.
+The [architecture](docs/architecture.md) explains each part and what it holds, and the [decisions](docs/decisions.md) record the measurements behind them. The [configuration](docs/config.md) covers classes, limits, custom job images and Prometheus metrics.
 
 ## Compared with
 

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/listener"
+	"github.com/dominikzabcik/boxrunner/internal/metrics"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
 	"github.com/dominikzabcik/boxrunner/internal/release"
@@ -84,9 +86,10 @@ type Agent struct {
 	// resync asks supervise to list the repositories now, not at its next tick.
 	resync chan struct{}
 
-	// started and adoptedNone belong to the scheduler goroutine.
+	// started, adoptedNone and finished belong to the scheduler goroutine.
 	started     time.Time
 	adoptedNone bool
+	finished    []status.Tally
 	// ranBefore is set once before any goroutine starts: the job log has
 	// entries, so this box has run jobs and a start without containers is a
 	// restart, not a new box taking over from a dead one.
@@ -98,6 +101,8 @@ type Agent struct {
 	imageDisk atomic.Int64
 	// latest is boxrunner's latest release, once checkRelease found it.
 	latest atomic.Pointer[string]
+	// heartbeatOK is when the Worker last took a heartbeat, in Unix nanoseconds.
+	heartbeatOK atomic.Int64
 	// draining mirrors DrainFile; drainMu orders the changes to both.
 	draining atomic.Bool
 	drainMu  sync.Mutex
@@ -151,6 +156,17 @@ func Run(ctx context.Context, o Options) error {
 			a.Log.Error("status socket", "err", err)
 		}
 	}()
+	if addr := a.Config.Metrics; addr.IsValid() {
+		if l, err := net.Listen("tcp", addr.String()); err != nil {
+			a.Log.Error("serving metrics", "addr", addr, "err", err)
+		} else {
+			go func() {
+				if err := metrics.Serve(ctx, l, a.current); err != nil {
+					a.Log.Error("serving metrics", "addr", addr, "err", err)
+				}
+			}()
+		}
+	}
 	go a.observe(ctx)
 	go a.heartbeat(ctx)
 	go a.checkImage(ctx)
@@ -618,12 +634,13 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 	if finished.IsZero() {
 		finished = time.Now()
 	}
-	err := status.Append(a.JobsLog, status.Job{
+	job := status.Job{
 		Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Runner: r.Name,
 		Workflow: j.WorkflowRef, Name: j.DisplayName, Result: j.Result,
 		Queued: j.QueueTime, Started: j.RunnerAssignTime, Finished: finished,
-	})
-	if err != nil {
+	}
+	a.finished = status.Count(a.finished, job)
+	if err := status.Append(a.JobsLog, job); err != nil {
 		a.Log.Warn("writing the job log", "err", err)
 	}
 	a.Log.Info("job finished", "repo", r.ScaleSet.Repo, "class", r.ScaleSet.Class, "job", j.DisplayName, "result", j.Result)
@@ -636,7 +653,10 @@ func (a *Agent) publish(s scheduler.State) {
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
-		Draining: s.Draining,
+		Draining: s.Draining, Finished: a.finished,
+	}
+	if ns := a.heartbeatOK.Load(); ns != 0 {
+		snap.Heartbeat = time.Unix(0, ns)
 	}
 	if latest := a.latest.Load(); latest != nil {
 		snap.Latest = *latest
@@ -670,10 +690,15 @@ func (a *Agent) publish(s scheduler.State) {
 	a.mu.Unlock()
 }
 
-func (a *Agent) status() status.Snapshot {
+// current is the last snapshot the scheduler published.
+func (a *Agent) current() status.Snapshot {
 	a.mu.Lock()
-	snap := a.snapshot
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	return a.snapshot
+}
+
+func (a *Agent) status() status.Snapshot {
+	snap := a.current()
 	jobs, err := status.Recent(a.JobsLog, 20)
 	if err != nil {
 		a.Log.Warn("reading the job log", "err", err)
