@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0
+
+**Security**
+- The job image is built only from an actions/runner image whose digest CI verified. A daily workflow checks each runner release's build attestation (signed by actions/runner's release workflow on the matching `releases/m<minor>` branch) and publishes `runner-digests.json`, and the agent builds `FROM …@sha256:<digest>` only while the tag still points to that digest. A release not yet in the list falls back to the newest one that is. The digest shows in `status`, `doctor` and the dashboard (#50). Verifying on each box instead would have grown the agent from 8 to 20 MB and 72 modules (#71).
+- `doctor` and the dashboard warn when a served private repository runs workflows from fork pull requests without approval, or gives them write tokens or secrets (#51).
+
+**Seeing what happens**
+- Optional Prometheus metrics: `metrics = "127.0.0.1:9464"` serves runners, assigned and completed jobs, job duration and queue time, disk and versions. ARC's names where they mean the same; jobs cannot reach the port (#54).
+- The alert webhook also posts when a repository's jobs wait with no runner starting, naming the likely cause (a paused class, a draining or silent box, a class held after failing runners, a class at its max), and the dashboard lists those waits (#47).
+- With the App's `workflow_job` event turned on, the dashboard lists jobs nobody here runs: a `runs-on` that is not a class, a repository the Worker does not serve, a paused class (#48, docs/unserved-jobs.md).
+
+**Fixes**
+- The agent waits for its status socket to close before it exits, so a stopped agent leaves no socket behind (#69).
+
+**Project**
+- A logo: a box holding one main job and the idle jobs in the space it leaves, drawn with every icon by docs/art/build.py.
+- Dependabot's grouped updates take minor and patch versions only; each major comes as its own pull request.
+
 ## v0.4.0
 
 **Fixes**
