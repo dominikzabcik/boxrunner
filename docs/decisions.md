@@ -77,6 +77,16 @@ The job image adds the Docker Compose plugin, which GitHub's Ubuntu image also h
 
 A class's `warm` list keeps one idle runner ready for each named repository, so its jobs skip the container start. It is opt-in per repository because the reason above still holds: a personal account with many repositories cannot keep one idle runner each on a small box, and every warm runner holds one of the class's `max` places for as long as it waits. A warm runner never takes the place a waiting job needs: the scheduler refills a warm runner only after every waiting job of the class has a place, and the configuration refuses a `warm` list that would fill `max` while the class serves other repositories. A warm runner is not evicted when another repository's job waits; removing a registered runner and starting it again later would cost the cold start warm runners exist to avoid. Runners of one scale set are interchangeable, so the scheduler does not track which runner is warm; while the scale set has more runners than jobs, its newest runner without a job is the warm one.
 
+## Fallback flips a repository variable
+
+A workflow cannot say "this label, or GitHub's runners if nobody serves it": every label in `runs-on` must match. So the choice has to be made before GitHub queues the job, from something `runs-on` can read: `github`, `needs`, `strategy`, `matrix`, `vars` and `inputs`. Three ways were weighed:
+
+- **The Worker sets a repository variable (chosen).** The Worker already knows when heartbeats stop. It sets `BOXRUNNER_DOWN` in every served repository and deletes it when the box is back, and a workflow reads `vars.BOXRUNNER_DOWN` in `runs-on`. It costs nothing while the box is up. It needs the App's Variables permission, which existing installations must approve, so it is opt-in (`FALLBACK_MINUTES`) and the setup manifest does not ask for it.
+- **A first job on GitHub's runner asks the Worker** which label to use, and the real jobs read its output through `needs`. It needs no new permission, but every run on a private repository pays a billed minute and a hosted runner's start, also while the box is healthy. That spends the free minutes boxrunner exists to save, and when they run out with a $0 spending limit, the first job cannot run and nothing runs. It would also need a Worker endpoint that answers without the box token.
+- **Documentation only**: flip the variable by hand with `gh variable set`. It needs no code and no permission, but nobody flips it at 3 a.m. The docs keep it as the way to do it without the permission.
+
+The Worker wakes itself with a Durable Object alarm rather than a cron trigger. A cron trigger in `wrangler.jsonc` would run in every deployment, opted in or not, and take one of the free plan's five cron triggers per account. The alarm is set only while fallback is on and fires once every `FALLBACK_MINUTES` while the box reports. The variable goes back to the box only after two minutes of heartbeats without a gap, so a box that keeps crashing does not take jobs between crashes. Jobs GitHub already queued for the box's label stay there: GitHub picks the runner at queue time, and the App has no Actions permission to cancel and re-run them.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.
