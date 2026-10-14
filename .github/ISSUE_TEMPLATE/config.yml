@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/dominikzabcik/boxrunner/discussions
+    about: Ask, share a setup, or propose a design change.
+  - name: Security vulnerability
+    url: https://github.com/dominikzabcik/boxrunner/security/advisories/new
+    about: Report it privately, not as an issue.

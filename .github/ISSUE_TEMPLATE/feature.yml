@@ -1,0 +1,16 @@
+name: Feature request
+description: Something boxrunner should do
+labels: ["kind/feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: Your idea, if you have one. Larger design changes are best discussed in Discussions first.
