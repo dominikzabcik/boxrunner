@@ -153,6 +153,56 @@ func New(o Options) *Client {
 	return c
 }
 
+// Heartbeat is the box's state for the dashboard (docs/api.md).
+type Heartbeat struct {
+	Box     string            `json:"box"`
+	Version string            `json:"version"`
+	Image   string            `json:"image"`
+	Disk    HeartbeatDisk     `json:"disk"`
+	Classes []HeartbeatClass  `json:"classes"`
+	Runners []HeartbeatRunner `json:"runners"`
+	Jobs    []HeartbeatJob    `json:"jobs"`
+}
+
+type HeartbeatDisk struct {
+	Free  int64 `json:"free"`
+	Floor int64 `json:"floor"`
+}
+
+type HeartbeatClass struct {
+	Name     string `json:"name"`
+	Priority string `json:"priority"`
+	Max      int    `json:"max"`
+}
+
+type HeartbeatRunner struct {
+	Name  string    `json:"name"`
+	Repo  string    `json:"repo"`
+	Class string    `json:"class"`
+	State string    `json:"state"`
+	Since time.Time `json:"since"`
+}
+
+type HeartbeatJob struct {
+	Runner   string     `json:"runner"`
+	Repo     string     `json:"repo"`
+	Class    string     `json:"class"`
+	Name     string     `json:"name"`
+	Result   string     `json:"result"`
+	Queued   *time.Time `json:"queued"`
+	Started  *time.Time `json:"started"`
+	Finished time.Time  `json:"finished"`
+}
+
+// SendHeartbeat makes one attempt: the next heartbeat follows anyway.
+func (c *Client) SendHeartbeat(ctx context.Context, hb Heartbeat) error {
+	body, err := json.Marshal(hb)
+	if err != nil {
+		return err
+	}
+	return c.once(ctx, "heartbeat", http.MethodPost, c.base.JoinPath("/v1/heartbeat").String(), body, nil)
+}
+
 func (c *Client) Repos(ctx context.Context) (Repos, error) {
 	var out Repos
 	err := c.do(ctx, "list repositories", http.MethodGet, "/v1/repos", nil, nil, &out)

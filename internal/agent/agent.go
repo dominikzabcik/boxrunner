@@ -107,6 +107,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 	go a.observe(ctx)
+	go a.heartbeat(ctx)
 	go a.checkImage(ctx)
 	supervised := make(chan struct{})
 	go func() {
