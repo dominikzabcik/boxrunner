@@ -144,8 +144,7 @@ section.ch { padding-block: clamp(72px, 11vw, 140px); border-top: 1px solid var(
 @media (max-width: 620px) { .lane { grid-template-columns: 1fr 70px; } .lane .track { grid-column: 1 / -1; grid-row: 2; } }
 .track { height: 14px; background: var(--deep); border-radius: 999px; overflow: hidden; border: 1px solid var(--rule); }
 .fill { height: 100%; width: var(--w); border-radius: 999px; background: var(--c); transform-origin: left; }
-.js .race.pending .fill { transform: scaleX(0); }
-.race .fill { transition: transform 2.6s cubic-bezier(.3,.6,.2,1); }
+.race .fill { transform-origin: left; }
 .lane .t { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .lane .who { color: var(--dim); }
 
@@ -174,6 +173,19 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   .stage, .hero .stage { min-height: 260px; order: -1; }
   .hero .copy { padding-top: 84px; }
 }
+
+/* the job feed under the hero */
+.feed { position: relative; z-index: 1; display: grid; gap: 10px; padding-block: 8px 28px; overflow: hidden; -webkit-mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+.feed .row { display: flex; gap: 10px; list-style: none; margin: 0; padding: 0; width: max-content; will-change: transform; }
+.job { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; background: var(--deep); border: 1px solid var(--rule); border-radius: 999px; padding: 8px 14px; font: 13px/1 var(--f-mono); color: var(--dim); }
+.job b { color: var(--ink); font-weight: 500; }
+.job .dot { width: 8px; height: 8px; border-radius: 2px; }
+.job .dot.n { background: var(--normal); }
+.job .dot.i { background: repeating-linear-gradient(135deg, var(--idle) 0 2px, transparent 2px 4px); outline: 1px solid var(--idle); }
+.job em { font-style: normal; font-weight: 600; }
+.job em.ok { color: var(--ok); } .job em.failed { color: var(--key); }
+/* scroll-lit headings */
+.wd { transition: opacity .25s linear; }
 </style>
 
 <nav class="top gutter" aria-label="Site">
@@ -210,15 +222,16 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 </header>
 
 <main>
-  <section class="ch gutter" id="cores" data-scene="cores">
+  <div class="feed" aria-label="Jobs a box like yours runs in a day">
+    <ul class="row" data-dir="-1"><li class="job"><i class="dot n"></i><b>Check, build and test</b><span>octo/site</span><span>11m30s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Analyze (javascript-typescript)</b><span>octo/site</span><span>4m07s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Deploy preview</b><span>octo/site</span><span>1m12s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>e2e (webkit)</b><span>octo/shop</span><span>2m51s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Link check</b><span>octo/docs</span><span>48s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>go test -race ./...</b><span>octo/api</span><span>1m05s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Analyze (actions)</b><span>octo/api</span><span>3m23s</span><em class="ok">✓</em></li></ul>
+    <ul class="row" data-dir="1"><li class="job"><i class="dot n"></i><b>docker build</b><span>octo/shop</span><span>2m10s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>Lighthouse</b><span>octo/site</span><span>3m40s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Production check</b><span>octo/site</span><span>22s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>e2e (chromium)</b><span>octo/shop</span><span>2m02s</span><em class="failed">✗</em></li><li class="job"><i class="dot i"></i><b>Profile README</b><span>octo/site</span><span>31s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>services: postgres</b><span>octo/api</span><span>39s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Dependabot auto-merge</b><span>octo/docs</span><span>12s</span><em class="ok">✓</em></li></ul>
+  </div>
+  <section class="ch gutter" id="cores">
     <div class="measure">
-      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Priority classes</div>
         <h2>Your <span class="n">tests</span> keep every core. <span class="i">The rest</span> waits its turn.</h2>
         <p class="sub">Light jobs run in an idle-priority class, scheduled by Linux's SCHED_IDLE: they use any core your main job is not using, and give it back the instant it wants it. Flip the switch to see the same box without it.</p>
-      </div>
-        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="scope reveal">
         <canvas id="lanes" role="img" aria-label="Four CPU cores over time: a normal-priority job takes cores in bursts, idle-priority jobs fill the gaps"></canvas>
@@ -238,15 +251,12 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     </div>
   </section>
 
-  <section class="ch gutter" id="key" data-scene="key">
+  <section class="ch gutter" id="key">
     <div class="measure">
-      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Key custody</div>
         <h2>The <span class="k">key</span> stays in your Worker. The box gets tokens that expire.</h2>
         <p class="sub">The GitHub App can administer your repositories, so its private key lives only in a Cloudflare Worker you deploy. The box can ask for one thing: a runner for one job.</p>
-      </div>
-        <div class="stage" aria-hidden="true"></div>
       </div>
       <p class="caption mono reveal"><span class="k">●</span> the vault holds your key &nbsp; <span class="n">●</span> tokens travel to your box &nbsp; <span class="n">●</span> one job's container forms and dissolves</p>
       <div class="vault">
@@ -260,15 +270,12 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     </div>
   </section>
 
-  <section class="ch gutter" id="install" data-scene="install">
+  <section class="ch gutter" id="install">
     <div class="measure">
-      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Install</div>
         <h2>One line on the box. Then minutes stop costing money.</h2>
         <p class="sub">Deploy the Worker with one click, open its setup page, run the line it gives you. The installer checks the binary's checksum and its build attestation before anything runs.</p>
-      </div>
-        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="pair">
         <div class="term"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div><pre id="term" aria-label="Installing boxrunner and checking its status"></pre></div>
@@ -286,15 +293,12 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     </div>
   </section>
 
-  <section class="ch gutter" id="proof" data-scene="install">
+  <section class="ch gutter" id="proof">
     <div class="measure">
-      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Why it exists</div>
         <h2>A personal site spent 2,000 free minutes in twelve days.</h2>
         <p class="sub">Lighthouse, Playwright and CodeQL on every pull request. A 4-core ARM VPS that was already paid for now runs all of it, faster.</p>
-      </div>
-        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="race pending" id="race">
         <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill" style="--w:100%;--c:var(--faint)"></div></div><span class="t">~15 min</span></div>
@@ -306,12 +310,9 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
   <section class="ch gutter" id="not">
     <div class="measure">
-      <div class="intro">
       <div class="head reveal">
         <div class="kicker">When not to use it</div>
         <h2>Honest limits.</h2>
-      </div>
-        
       </div>
       <div class="nots">
         <div class="not"><strong>Public repositories</strong><span>Anyone who can open a pull request could run code on your box. The Worker refuses them.</span></div>
@@ -323,8 +324,8 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   </section>
 </main>
 
-<footer class="gutter" data-scene="hero">
-  <div class="measure split">
+<footer class="gutter">
+  <div class="measure">
    <div class="foot">
     <h2>Your box is waiting.</h2>
     <div class="install">
@@ -333,7 +334,6 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     </div>
     <div class="meta"><span>Apache-2.0</span><span>Go agent · Cloudflare Worker</span><span>amd64 · arm64</span><span>Built by Dominik Žabčík</span></div>
    </div>
-   <div class="stage" aria-hidden="true"></div>
   </div>
 </footer>
 <div class="toast" id="toast" role="status">Copied</div>
@@ -549,11 +549,6 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     if (caret) { const c = document.createElement('span'); c.className = 'caret'; term.appendChild(c); }
   }
   renderTerm(total, true);
-  let typed = false;
-  new IntersectionObserver(([e], o) => {
-    if (!e.isIntersecting || typed || reduce) return; typed = true; o.disconnect();
-    let i = 0; (function tick() { i += 5; renderTerm(i, true); if (i < total) setTimeout(tick, 14); })();
-  }, { threshold: .25 }).observe(term);
   const mins = document.getElementById('mins'), fmt = new Intl.NumberFormat('en-US'), usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
   function bill() { const m = +mins.value, cost = Math.max(0, m - 2000) * 0.006; document.getElementById('minsOut').textContent = fmt.format(m); document.getElementById('ghCost').textContent = usd.format(cost); document.getElementById('kept').textContent = usd.format(cost); }
   mins.addEventListener('input', bill); bill();
@@ -565,14 +560,59 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     e.target.querySelectorAll?.('[data-count]').forEach(count);
   }), { threshold: .15 });
   if (!reduce) document.querySelectorAll('.reveal').forEach((el) => { const r = el.getBoundingClientRect(); if (r.top > innerHeight) { el.classList.add('pending'); io.observe(el); } });
-  const race = document.getElementById('race');
-  if (reduce || race.getBoundingClientRect().top < innerHeight) race.classList.remove('pending'); else io.observe(race);
   function count(el) {
     if (reduce) return; const to = +el.dataset.count, t0 = performance.now();
     (function step(now) { const k = Math.min(1, (now - t0) / 1400), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt.format(Math.round(to * e)); if (k < 1) requestAnimationFrame(step); })(t0);
   }
   const statIo = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { count(e.target); statIo.unobserve(e.target); } }), { threshold: .6 });
   document.querySelectorAll('[data-count]').forEach((el) => { if (el.getBoundingClientRect().top > innerHeight) statIo.observe(el); });
+
+
+  // ---------------- Scroll: lit headings, a scrubbed terminal, the race, the feed ----------------
+  const headings = [...document.querySelectorAll('.ch h2')];
+  for (const h of headings) {
+    const walk = (node) => {
+      for (const child of [...node.childNodes]) {
+        if (child.nodeType === 3) {
+          const frag = document.createDocumentFragment();
+          for (const part of child.textContent.split(/(\s+)/)) {
+            if (!part) continue;
+            if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); continue; }
+            const w = document.createElement('span'); w.className = 'wd'; w.textContent = part; frag.appendChild(w);
+          }
+          child.replaceWith(frag);
+        } else walk(child);
+      }
+    };
+    walk(h);
+    h.words = [...h.querySelectorAll('.wd')];
+  }
+  const feedRows = [...document.querySelectorAll('.feed .row')];
+  for (const row of feedRows) row.innerHTML += row.innerHTML;
+  const offsets = feedRows.map(() => 0);
+  const raceFills = [...document.querySelectorAll('#race .fill')];
+  document.getElementById('race').classList.remove('pending');
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  let typedTo = -1, lastY = scrollY, vel = 0, lastFrame = performance.now();
+  function onFrame(now) {
+    const vh = innerHeight, dt = Math.min(.05, (now - lastFrame) / 1000); lastFrame = now;
+    vel += ((scrollY - lastY) - vel) * .2; lastY = scrollY;
+    for (const h of headings) {
+      const r = h.getBoundingClientRect(), p = clamp01((vh * .9 - r.top) / (vh * .45)), lit = p * h.words.length;
+      h.words.forEach((w, i) => { w.style.opacity = .14 + .86 * clamp01(lit - i); });
+    }
+    const tr = term.getBoundingClientRect(), tp = clamp01((vh * .95 - tr.top) / (vh * .6)), chars = Math.round(tp * total);
+    if (chars !== typedTo) { typedTo = chars; renderTerm(chars, true); }
+    const rr = document.getElementById('race').getBoundingClientRect(), rp = clamp01((vh * .95 - rr.top) / (vh * .55));
+    raceFills.forEach((f) => { f.style.transform = `scaleX(${rp})`; });
+    feedRows.forEach((row, i) => {
+      const half = row.scrollWidth / 2, dir = +row.dataset.dir;
+      offsets[i] = (offsets[i] + dir * (28 + Math.abs(vel) * 9) * dt) % half;
+      row.style.transform = `translateX(${dir < 0 ? offsets[i] : offsets[i] - half}px)`;
+    });
+    requestAnimationFrame(onFrame);
+  }
+  if (!reduce) requestAnimationFrame(onFrame);
 
   // ---------------- Copy ----------------
   const toast = document.getElementById('toast');
