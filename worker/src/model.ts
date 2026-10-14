@@ -107,6 +107,22 @@ export function splitPaused(classes: readonly ClassName[], pauses: readonly Paus
 	return { serving: classes.filter((name) => !paused.has(name)), paused: classes.filter((name) => paused.has(name)) };
 }
 
+export type FallbackConfig = { ok: true; afterMs: number | null } | { ok: false; problem: string };
+
+/**
+ * Reads the optional `FALLBACK_MINUTES` variable: how long the box may stay
+ * silent before its jobs go to GitHub's runners. Empty turns fallback off.
+ */
+export function parseFallback(value: string | undefined): FallbackConfig {
+	const text = (value ?? '').trim();
+	if (text === '') return { ok: true, afterMs: null };
+	const minutes = /^\d{1,4}$/.test(text) ? Number(text) : Number.NaN;
+	if (!(minutes >= 2 && minutes <= 1440)) {
+		return { ok: false, problem: `FALLBACK_MINUTES is "${text}", not a whole number of minutes from 2 to 1440` };
+	}
+	return { ok: true, afterMs: minutes * 60_000 };
+}
+
 /** Reads the optional `ADMINS` variable: logins besides the App's owner that may sign in, compared case-insensitively. */
 export function mayOpenDashboard(owner: string | null, admins: string | undefined): (login: Login) => boolean {
 	const allowed = new Set(

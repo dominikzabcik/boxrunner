@@ -180,6 +180,8 @@ Times are RFC 3339. Repositories and classes are stored as the box sends them: t
 
 The body must fit in 16 KB like every other call. Fifty jobs with long repository and job names can pass that, so the agent leaves out the oldest jobs until it fits.
 
+With [fallback](fallback.md) on, the time a heartbeat arrives also decides when the Worker sends jobs to GitHub's runners and back. A heartbeat never waits for GitHub: a Durable Object alarm makes those calls.
+
 The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
 
 ## What the Worker checks on every call
@@ -191,7 +193,7 @@ The box token, compared in constant time. Then, on every call but `POST /v1/hear
 - The scale set id belongs to that repository and was created for one of the Worker's classes.
 - Before a session opens, is refreshed or a runner is minted: the repository is still private, read fresh from GitHub. If it turned public, the Worker deletes every scale set it made for the repository and answers `410 repo_ineligible`; if deleting fails, it answers `502 github_error` and deletes on the next call. An archived repository or one the App left also gets `410 repo_ineligible`.
 - When `GET /v1/repos` reads the list fresh (at most once a minute), the Worker deletes the scale sets of every repository it holds them for and no longer serves. Where the App was removed it cannot delete them and only forgets them; any other failure waits for the next listing.
-- Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners.
+- Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners, `actions_variables: write` to set or delete the [fallback](fallback.md) variable.
 
 ## Talking to the queue
 

@@ -1,4 +1,5 @@
 import type { AppKey } from './crypto';
+import { idle, type Fallback } from './fallback';
 import {
 	billedMinutes,
 	dayOf,
@@ -52,6 +53,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 	job TEXT NOT NULL,
 	finished_at INTEGER NOT NULL,
 	minutes INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fallback (
+	singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+	state TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_by_finish ON jobs (finished_at);
 CREATE TABLE IF NOT EXISTS job_days (
@@ -250,6 +255,20 @@ export class Store {
 		this.sql.exec('DELETE FROM jobs WHERE finished_at < ?', startOfDay(firstKeptDay));
 		this.sql.exec('DELETE FROM job_days WHERE day < ?', firstKeptDay);
 		this.sql.exec('DELETE FROM boxes WHERE seen_at < ?', startOfDay(firstKeptDay));
+	}
+
+	/** When a box last reported, or undefined before any did. */
+	lastSeen(): number | undefined {
+		return this.sql.exec<{ seen: number | null }>('SELECT MAX(seen_at) AS seen FROM boxes').toArray()[0]?.seen ?? undefined;
+	}
+
+	fallback(): Fallback {
+		const state = this.sql.exec<{ state: string }>('SELECT state FROM fallback').toArray()[0]?.state;
+		return state === undefined ? idle : (JSON.parse(state) as Fallback);
+	}
+
+	saveFallback(state: Fallback) {
+		this.sql.exec('INSERT OR REPLACE INTO fallback (singleton, state) VALUES (1, ?)', JSON.stringify(state));
 	}
 
 	boxes(): StoredBox[] {

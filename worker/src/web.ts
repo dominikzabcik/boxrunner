@@ -48,7 +48,7 @@ export async function handleWeb(box: Box, request: Request, route: WebRoute): Pr
 }
 
 function dashboardJson(box: Box, session: Session, now: number) {
-	const data = dashboardData(box.store, box.classes(), now);
+	const data = dashboardData(box.store, box.classes(), box.fallback(), now);
 	return { ...data, html: renderLive(data, session.csrf) };
 }
 
@@ -205,7 +205,7 @@ function dashboardPage(box: Box, session: Session, now: number) {
 <p class="hint" id="refreshing" hidden>Updates every 10 seconds.</p>
 <noscript><p class="hint">Reload the page to update it.</p></noscript>
 <div id="live">
-${renderLive(dashboardData(box.store, box.classes(), now), session.csrf)}
+${renderLive(dashboardData(box.store, box.classes(), box.fallback(), now), session.csrf)}
 </div>
 <section aria-labelledby="token">
 <h2 id="token">Box token</h2>

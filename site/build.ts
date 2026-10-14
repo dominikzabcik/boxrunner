@@ -25,6 +25,7 @@ const DOCS: Doc[] = [
 	{ slug: '', src: 'README.md' },
 	{ slug: 'architecture', src: 'docs/architecture.md' },
 	{ slug: 'config', src: 'docs/config.md' },
+	{ slug: 'fallback', src: 'docs/fallback.md' },
 	{ slug: 'api', src: 'docs/api.md' },
 	{ slug: 'dashboard', src: 'docs/dashboard.md' },
 	{ slug: 'decisions', src: 'docs/decisions.md' },
