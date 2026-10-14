@@ -59,7 +59,7 @@ if [ -z "$vars" ]; then ok "no repository variables (no workflow points at a sel
 
 # Run logs become public with the repository and name the runner and its machine.
 selfhosted=$(gh run list -R "$repo" -L 500 --json databaseId -q '.[].databaseId' | while read -r id; do
-	gh api "repos/$repo/actions/runs/$id/jobs" -q '.jobs[] | select(.runner_group_name != "GitHub Actions" and .runner_name != null) | .runner_name'
+	gh api "repos/$repo/actions/runs/$id/jobs" -q '.jobs[] | select(.runner_group_name != "GitHub Actions" and (.runner_name // "") != "") | .runner_name'
 done | wc -l | tr -d ' ')
 if [ "$selfhosted" = 0 ]; then ok "no workflow run logs from self-hosted runners"; else bad "$selfhosted job logs from self-hosted runners; delete those runs"; fi
 
