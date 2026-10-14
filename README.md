@@ -77,6 +77,19 @@ sequenceDiagram
 
 The [architecture](docs/architecture.md) explains each part and what it holds, and the [decisions](docs/decisions.md) record the measurements behind them. The [configuration](docs/config.md) covers classes, limits and custom job images.
 
+## Compared with
+
+| | boxrunner | [Zoomies](https://github.com/eyupio/zoomies) | [runscaler](https://github.com/ysya/runscaler) | [GARM](https://github.com/cloudbase/garm) | [ARC](https://github.com/actions/actions-runner-controller) |
+|---|---|---|---|---|---|
+| Runs on | one Linux box you own | your hosts: a controller and agents | a Docker host or Apple Silicon Mac | many clouds, LXD, Incus, Kubernetes | Kubernetes |
+| Where the GitHub credential lives | App key in a Cloudflare Worker; the box holds only a scoped token | App key in the controller | personal access token on the host | App key or token in the GARM server | App key or token in the cluster |
+| One environment per job | container | container | container or macOS VM | per provider | pod |
+| Priority between jobs | strict idle class (SCHED_IDLE) | guaranteed shares, idle CPU lent out | none | none | none |
+| Docker inside jobs | own daemon under Sysbox, no privileges, opt-in | Docker-in-Docker, opt-in | Docker-in-Docker or the host's socket, opt-in | per provider | privileged sidecar |
+| License | Apache-2.0 | AGPL-3.0 | MIT | Apache-2.0 | Apache-2.0 |
+
+Checked against each project's README on October 14, 2026. Corrections are welcome.
+
 ## When not to use it
 
 - **Public repositories.** Anyone who can open a pull request could run code on your box. The Worker refuses them.
