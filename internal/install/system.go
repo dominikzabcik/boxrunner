@@ -174,6 +174,8 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		return d, command("systemctl", "restart", layout.UnitName)
 	case StopUnit:
 		return d, command("systemctl", "disable", "--now", layout.UnitName)
+	case StopSlice:
+		return d, command("systemctl", "stop", layout.IdleSlice)
 	case RemoveContainers:
 		if err := needDocker(); err != nil {
 			return d, err

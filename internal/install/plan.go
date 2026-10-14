@@ -76,6 +76,7 @@ type (
 	EnableUnit       struct{}
 	RestartUnit      struct{}
 	StopUnit         struct{}
+	StopSlice        struct{}
 	RemoveContainers struct{}
 	RemoveNetwork    struct{}
 	RemoveFirewall   struct{}
@@ -100,6 +101,7 @@ func (BuildImage) String() string       { return "build the job image " + layout
 func (EnableUnit) String() string       { return "enable and start " + layout.UnitName }
 func (RestartUnit) String() string      { return "restart " + layout.UnitName }
 func (StopUnit) String() string         { return "stop and disable " + layout.UnitName + " (closes sessions)" }
+func (StopSlice) String() string        { return "stop " + layout.IdleSlice }
 func (RemoveContainers) String() string { return "remove the job containers" }
 func (RemoveNetwork) String() string    { return "remove the Docker network " + layout.Network }
 func (RemoveFirewall) String() string   { return "remove the firewall rules" }
@@ -256,6 +258,10 @@ func PlanUninstall(o Observed) []Step {
 	}
 	if o.Firewall != firewall.Absent {
 		steps = append(steps, RemoveFirewall{})
+	}
+	if _, ok := o.Paths[layout.IdleSlicePath]; ok {
+		// A slice stays loaded and active after its unit file is deleted.
+		steps = append(steps, StopSlice{})
 	}
 	reload := false
 	for _, p := range []string{layout.UnitPath, layout.IdleSlicePath, layout.ConfigDir, layout.StateDir, layout.Binary} {

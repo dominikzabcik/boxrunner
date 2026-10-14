@@ -187,6 +187,7 @@ func TestPlanUninstall(t *testing.T) {
 		"remove the Docker network boxrunner",
 		"remove the job image boxrunner/runner:local",
 		"remove the firewall rules",
+		"stop boxrunner_idle.slice",
 		"remove /etc/systemd/system/boxrunner.service",
 		"remove /etc/systemd/system/boxrunner_idle.slice",
 		"remove /etc/boxrunner",
