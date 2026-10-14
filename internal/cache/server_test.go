@@ -290,6 +290,7 @@ func TestMatching(t *testing.T) {
 		{prToken, "tools-", nil, "tools-2"},
 		{prToken, "deps-a", nil, "deps-a"},
 		{prToken, "x", []string{"tools-1"}, "tools-1"},
+		{runtimeToken("100", "refs/heads/main:1", "refs/pull/7/merge:3"), "tools-", nil, "tools-2"},
 		{otherToken, "deps-a", []string{"deps-", "tools-"}, ""},
 	} {
 		if got, _ := b.restore(c.token, c.key, "v1", c.restore...); got != c.want {
@@ -309,6 +310,12 @@ func TestScopes(t *testing.T) {
 	if _, archive := b.restore(prToken, "k", "v1"); archive != "from the pull request" {
 		t.Errorf("the pull request restored %q", archive)
 	}
+	// cache-mode write-only: the job saves but restores nothing.
+	writeOnly := runtimeToken("100", "refs/heads/main:2")
+	if key, _ := b.restore(writeOnly, "k", "v1"); key != "" {
+		t.Errorf("a write-only token restored %q", key)
+	}
+	// cache-mode read, and low-trust triggers such as issue_comment on main.
 	readOnly := runtimeToken("100", "refs/heads/main:1")
 	status, out := b.call(readOnly, "CreateCacheEntry", map[string]string{"key": "k2", "version": "v1"})
 	if status != http.StatusForbidden || out["msg"] != "cache write denied: the token has no writable scope" {

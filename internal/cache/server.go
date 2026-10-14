@@ -98,10 +98,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 
 func (s *Server) Handler() http.Handler {
 	proxy := &httputil.ReverseProxy{
-		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(s.Upstream)
-			r.Out.Host = s.Upstream.Host
-		},
+		Rewrite:  func(r *httputil.ProxyRequest) { r.SetURL(s.Upstream) },
 		ErrorLog: slog.NewLogLogger(s.Log.Handler(), slog.LevelWarn),
 	}
 	mux := http.NewServeMux()

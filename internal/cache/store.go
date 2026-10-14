@@ -392,13 +392,16 @@ func writable(c Claims) (string, bool) {
 }
 
 // readable are the scopes a job may restore from, the writable one first.
+// A token for cache-mode write-only can write a scope it cannot read.
 func readable(c Claims) []string {
 	var scopes []string
-	if s, ok := writable(c); ok {
-		scopes = append(scopes, s)
-	}
 	for _, s := range c.Scopes {
-		if s.Permission&Read != 0 && !slices.Contains(scopes, s.Name) {
+		if s.Permission&Read == 0 || slices.Contains(scopes, s.Name) {
+			continue
+		}
+		if w, _ := writable(c); s.Name == w {
+			scopes = slices.Insert(scopes, 0, s.Name)
+		} else {
 			scopes = append(scopes, s.Name)
 		}
 	}
