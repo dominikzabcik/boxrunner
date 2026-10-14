@@ -16,6 +16,19 @@ export type BoxName = Brand<string, 'BoxName'>;
 /** A private repository the App is installed on, as GitHub names it. */
 export type Repo = { name: RepoName; id: number; installationId: number };
 
+/** A private repository's settings for workflows from fork pull requests (Settings, Actions, General). */
+export type ForkPullRequests = { runWorkflows: boolean; requireApproval: boolean; sendWriteTokens: boolean; sendSecrets: boolean };
+
+/** Each setting that lets fork pull requests run unchecked on the box or with more than a read token, and how to change it. */
+export function forkProblems(settings: ForkPullRequests): { problem: string; fix: string }[] {
+	if (!settings.runWorkflows) return [];
+	const problems: { problem: string; fix: string }[] = [];
+	if (!settings.requireApproval) problems.push({ problem: 'without approval', fix: 'turn on “Require approval for fork pull request workflows”' });
+	if (settings.sendWriteTokens) problems.push({ problem: 'with write tokens', fix: 'turn off “Send write tokens to workflows from pull requests”' });
+	if (settings.sendSecrets) problems.push({ problem: 'with secrets', fix: 'turn off “Send secrets to workflows from pull requests”' });
+	return problems;
+}
+
 /** A scale set the Worker created or adopted, for one repository and class. */
 export type OwnedScaleSet = { repo: Repo; className: ClassName; id: ScaleSetId };
 

@@ -8,6 +8,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+/** What GitHub answers for a private repository whose fork pull requests run no workflows. */
+const noForkWorkflows = { runWorkflows: false, requireApproval: false, sendWriteTokens: false, sendSecrets: false };
+
 async function ready(): Promise<{ github: FakeGitHub; call: Agent; token: string }> {
 	const github = await fakeGitHub();
 	const token = await setUp(github);
@@ -88,8 +91,8 @@ describe('GET /v1/repos', () => {
 		const response = await call('GET', '/v1/repos');
 		expect(await response.json()).toEqual({
 			repos: [
-				{ name: 'octo/site', id: 123 },
-				{ name: 'octo/docs', id: 124 },
+				{ name: 'octo/site', id: 123, forkPullRequests: noForkWorkflows },
+				{ name: 'octo/docs', id: 124, forkPullRequests: noForkWorkflows },
 			],
 			classes: ['boxrunner', 'boxrunner-light'],
 			paused: [],
@@ -99,6 +102,79 @@ describe('GET /v1/repos', () => {
 		expect(github.calls.find((c) => c.path === '/app/installations/501/access_tokens')?.body).toEqual({
 			permissions: { metadata: 'read' },
 		});
+	});
+});
+
+describe('fork pull request settings in GET /v1/repos', () => {
+	const forkPath = (repo: string) => `/repos/${repo}/actions/permissions/fork-pr-workflows-private-repos`;
+	const repos = async (call: Agent) => ((await (await call('GET', '/v1/repos')).json()) as { repos: { name: string; forkPullRequests: unknown }[] }).repos;
+	const settingsOf = async (call: Agent) => Object.fromEntries((await repos(call)).map((repo) => [repo.name, repo.forkPullRequests]));
+
+	it("returns each repository's settings, read with a token for that repository and administration: read", async () => {
+		const { github, call } = await ready();
+		github.forkSettings.set(123, {
+			run_workflows_from_fork_pull_requests: true,
+			send_write_tokens_to_workflows: false,
+			send_secrets_and_variables: true,
+			require_approval_for_fork_pr_workflows: false,
+		});
+		expect(await settingsOf(call)).toEqual({
+			'octo/site': { runWorkflows: true, requireApproval: false, sendWriteTokens: false, sendSecrets: true },
+			'octo/docs': noForkWorkflows,
+		});
+		const narrowed = github.calls.filter((c) => c.path === '/app/installations/501/access_tokens' && c.body && 'repository_ids' in (c.body as object));
+		expect(narrowed.map((c) => c.body)).toEqual([
+			{ repository_ids: [123], permissions: { administration: 'read' } },
+			{ repository_ids: [124], permissions: { administration: 'read' } },
+		]);
+	});
+
+	it('reads them at most once an hour per repository', async () => {
+		const { github, call } = await ready();
+		time('2026-10-14T10:00:00Z');
+		await call('GET', '/v1/repos');
+		github.forkSettings.set(123, {
+			run_workflows_from_fork_pull_requests: true,
+			send_write_tokens_to_workflows: true,
+			send_secrets_and_variables: false,
+			require_approval_for_fork_pr_workflows: true,
+		});
+		time('2026-10-14T10:59:00Z');
+		expect((await settingsOf(call))['octo/site']).toEqual(noForkWorkflows);
+		expect([github.count('GET', '/installation/repositories'), github.count('GET', forkPath('octo/site'))]).toEqual([2, 1]);
+		time('2026-10-14T11:00:01Z');
+		expect((await settingsOf(call))['octo/site']).toEqual({ runWorkflows: true, requireApproval: true, sendWriteTokens: true, sendSecrets: false });
+		expect(github.count('GET', forkPath('octo/site'))).toBe(2);
+	});
+
+	it('reads five repositories per listing and the rest at the next one', async () => {
+		const { github, call } = await ready();
+		for (let id = 200; id < 205; id++) github.repos.push({ full_name: `octo/repo-${id}`, id, private: true, archived: false, installed: true });
+		const first = await settingsOf(call);
+		expect(Object.values(first).filter((settings) => settings === null)).toHaveLength(2);
+		expect(github.count('GET', /\/fork-pr-workflows-private-repos$/)).toBe(5);
+		const second = await settingsOf(call);
+		expect(Object.values(second).filter((settings) => settings === null)).toHaveLength(0);
+		expect(github.count('GET', /\/fork-pr-workflows-private-repos$/)).toBe(7);
+	});
+
+	it('answers the listing when a read fails, keeps what it read before and tries again ten minutes later', async () => {
+		const { github, call } = await ready();
+		time('2026-10-14T10:00:00Z');
+		github.failures.set(forkPath('octo/site'), { status: 500 });
+		const response = await call('GET', '/v1/repos');
+		expect(response.status).toBe(200);
+		expect(((await response.json()) as { repos: { forkPullRequests: unknown }[] }).repos.map((repo) => repo.forkPullRequests)).toEqual([null, noForkWorkflows]);
+		github.failures.delete(forkPath('octo/site'));
+		time('2026-10-14T10:09:00Z');
+		expect((await settingsOf(call))['octo/site']).toBeNull();
+		time('2026-10-14T10:10:01Z');
+		expect((await settingsOf(call))['octo/site']).toEqual(noForkWorkflows);
+
+		github.failures.set(forkPath('octo/site'), { status: 502 });
+		time('2026-10-14T11:10:02Z');
+		expect((await settingsOf(call))['octo/site']).toEqual(noForkWorkflows);
+		expect(github.count('GET', forkPath('octo/site'))).toBe(3);
 	});
 });
 
@@ -403,7 +479,7 @@ describe('repositories that stop being private', () => {
 		await expectError(await mint(call, id, 'runner-b'), 410, 'repo_ineligible', 'octo/site is public, so this Worker no longer serves it.');
 		expect([github.scaleSets.has(scaleSetKey(123, id)), github.scaleSets.has(scaleSetKey(123, light))]).toEqual([false, false]);
 		expect(github.count('POST', `/_apis/runtime/runnerscalesets/${id}/generatejitconfig`)).toBe(1);
-		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124 }]);
+		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124, forkPullRequests: noForkWorkflows }]);
 		await expectError(
 			await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner: 'box-1' }),
 			410,
@@ -420,7 +496,7 @@ describe('repositories that stop being private', () => {
 
 		github.repos.find((repo) => repo.full_name === 'octo/site')!.private = false;
 		vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
-		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124 }]);
+		expect(((await (await call('GET', '/v1/repos')).json()) as { repos: unknown[] }).repos).toEqual([{ name: 'octo/docs', id: 124, forkPullRequests: noForkWorkflows }]);
 		expect([scaleSetKey(123, id), scaleSetKey(123, light), scaleSetKey(124, docs)].map((key) => github.scaleSets.has(key))).toEqual([
 			false,
 			false,

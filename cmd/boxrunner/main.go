@@ -344,7 +344,7 @@ func doctorCmd(ctx context.Context) error {
 		}
 		fmt.Printf("%s  %-15s %s\n", mark, r.Name, r.Detail)
 	}
-	for _, r := range checks.Releases(ctx) {
+	for _, r := range append(checks.Forks(ctx), checks.Releases(ctx)...) {
 		mark := "ok  "
 		if !r.OK {
 			mark = "warn"

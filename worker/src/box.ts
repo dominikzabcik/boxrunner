@@ -13,6 +13,7 @@ import {
 	type ClassName,
 	type Classes,
 	type FallbackConfig,
+	type ForkPullRequests,
 	type Login,
 	type Repo,
 	type RepoName,
@@ -24,6 +25,11 @@ const minute = 60_000;
 /** The App JWT and the Actions admin token both live ten minutes; a minute of margin covers clock drift. */
 const tokenLifetime = 9 * minute;
 const repoListLifetime = minute;
+const forkSettingsLifetime = 60 * minute;
+const forkSettingsRetry = 10 * minute;
+/** Each read takes two GitHub calls; the cap keeps one listing well under a Worker's subrequest limit, however many repositories it serves. */
+const forkReadsPerListing = 5;
+const forkKey = (repoId: number) => `forks:${repoId}`;
 
 /**
  * Each box token may spend `burst` requests at once, then one every
@@ -220,6 +226,37 @@ export class Box {
 				this.store.forgetScaleSet(repoId, id);
 			}
 		}
+	}
+
+	/**
+	 * Reads the fork pull request settings of up to `forkReadsPerListing`
+	 * repositories whose last read is over an hour old, or ten minutes after
+	 * a failed one, then answers what is known for each, null before a read
+	 * succeeded. A failed read never fails the listing that asked.
+	 */
+	async forkPullRequests(app: App, repos: Repo[]): Promise<(ForkPullRequests | null)[]> {
+		await this.once('forks', async () => {
+			const now = Date.now();
+			const due = repos.filter((repo) => this.store.cached(forkKey(repo.id), now) === undefined).slice(0, forkReadsPerListing);
+			await Promise.all(
+				due.map(async (repo) => {
+					try {
+						const token = await this.narrowToken(app, repo, { administration: 'read' });
+						const settings = await github.forkPullRequests(token, repo.name);
+						this.store.cache(forkKey(repo.id), JSON.stringify(settings), Date.now() + forkSettingsLifetime);
+					} catch (error) {
+						if (!(error instanceof github.GitHubError)) throw error;
+						this.store.cache(forkKey(repo.id), this.store.lastCached(forkKey(repo.id)) ?? 'null', Date.now() + forkSettingsRetry);
+					}
+				}),
+			);
+		});
+		return repos.map((repo) => this.lastForkPullRequests(repo.id));
+	}
+
+	/** The settings as last read, without asking GitHub. */
+	lastForkPullRequests(repoId: number): ForkPullRequests | null {
+		return JSON.parse(this.store.lastCached(forkKey(repoId)) ?? 'null') as ForkPullRequests | null;
 	}
 
 	async servedRepo(app: App, name: RepoName): Promise<Repo> {

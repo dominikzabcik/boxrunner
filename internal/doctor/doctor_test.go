@@ -11,6 +11,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/status"
+	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
 
 func TestParseProbes(t *testing.T) {
@@ -249,5 +250,65 @@ func TestDraining(t *testing.T) {
 	want := []Result{{"draining", false, "the agent opens no sessions and starts no runners; resume with: sudo boxrunner resume"}}
 	if got := Draining(status.Snapshot{Draining: true}); !reflect.DeepEqual(got, want) {
 		t.Errorf("Draining = %+v, want %+v", got, want)
+	}
+}
+
+func TestForks(t *testing.T) {
+	settings := func(run, approval, write, secrets bool) *worker.ForkPullRequests {
+		return &worker.ForkPullRequests{RunWorkflows: run, RequireApproval: approval, SendWriteTokens: write, SendSecrets: secrets}
+	}
+	all := []config.Class{{Name: "boxrunner"}}
+	cases := []struct {
+		name    string
+		repos   []worker.Repo
+		classes []config.Class
+		want    []Result
+	}{
+		{
+			name: "fork workflows off, or on with approval and a read token",
+			repos: []worker.Repo{
+				{Name: "octo/site", ForkPullRequests: settings(false, false, true, true)},
+				{Name: "octo/docs", ForkPullRequests: settings(true, true, false, false)},
+			},
+			classes: all,
+			want:    []Result{{"fork PRs", true, "no repository runs workflows from fork pull requests without approval, with write tokens or with secrets"}},
+		},
+		{
+			name: "without approval, with write tokens and secrets",
+			repos: []worker.Repo{
+				{Name: "octo/site", ForkPullRequests: settings(true, false, true, true)},
+				{Name: "octo/docs", ForkPullRequests: settings(true, true, false, true)},
+				{Name: "octo/api"},
+			},
+			classes: all,
+			want: []Result{
+				{"fork PRs", false, `octo/site runs workflows from fork pull requests without approval, with write tokens and with secrets; in its settings, under Actions, General, Fork pull request workflows, turn on "Require approval for fork pull request workflows", turn off "Send write tokens to workflows from pull requests" and turn off "Send secrets to workflows from pull requests", or turn off "Run workflows from fork pull requests"`},
+				{"fork PRs", false, `octo/docs runs workflows from fork pull requests with secrets; in its settings, under Actions, General, Fork pull request workflows, turn off "Send secrets to workflows from pull requests", or turn off "Run workflows from fork pull requests"`},
+			},
+		},
+		{
+			name:    "a repository no class of this box serves",
+			repos:   []worker.Repo{{Name: "octo/site", ForkPullRequests: settings(true, false, false, false)}, {Name: "octo/docs", ForkPullRequests: settings(false, false, false, false)}},
+			classes: []config.Class{{Name: "boxrunner", Repos: []string{"octo/docs"}}},
+			want:    []Result{{"fork PRs", true, "no repository runs workflows from fork pull requests without approval, with write tokens or with secrets"}},
+		},
+		{
+			name:    "some not read yet",
+			repos:   []worker.Repo{{Name: "octo/site", ForkPullRequests: settings(false, false, false, false)}, {Name: "octo/docs"}},
+			classes: all,
+			want:    []Result{{"fork PRs", true, "no repository runs workflows from fork pull requests without approval, with write tokens or with secrets; 1 not read yet"}},
+		},
+		{
+			name:    "none read, or a Worker that does not read them",
+			repos:   []worker.Repo{{Name: "octo/site"}},
+			classes: all,
+			want:    []Result{{"fork PRs", true, "the Worker has not read the repositories' fork pull request settings yet; a Worker older than this check never does"}},
+		},
+		{name: "no repositories", classes: all},
+	}
+	for _, c := range cases {
+		if got := Forks(c.repos, c.classes); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: Forks =\n%+v\nwant\n%+v", c.name, got, c.want)
+		}
 	}
 }

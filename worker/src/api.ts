@@ -148,8 +148,9 @@ async function heartbeat(context: Context) {
 /** `classes` leaves out the paused ones, so an agent that does not know `paused` stops serving them too. */
 async function repos({ box, app, classes }: Context) {
 	const repos = await box.repos(app);
+	const forks = await box.forkPullRequests(app, repos);
 	const { serving, paused } = splitPaused(classes, box.store.pauses());
-	return json({ repos: repos.map(({ name, id }) => ({ name, id })), classes: serving, paused });
+	return json({ repos: repos.map(({ name, id }, i) => ({ name, id, forkPullRequests: forks[i] })), classes: serving, paused });
 }
 
 async function ensureScaleSet(context: Context) {

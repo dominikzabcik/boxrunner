@@ -106,6 +106,30 @@ describe('GET / signed in', () => {
 		expect(await (await view()).text()).toContain('<ul>\n<li>octo/site</li>\n<li>octo/docs</li>\n</ul>');
 		expect(((await (await view('/dashboard.json')).json()) as { repos: string[] }).repos).toEqual(['octo/site', 'octo/docs']);
 	});
+
+	it('warns beside a repository whose fork pull requests run workflows without approval or with write tokens or secrets', async () => {
+		const { github, call, view } = await ready();
+		github.forkSettings.set(123, {
+			run_workflows_from_fork_pull_requests: true,
+			send_write_tokens_to_workflows: true,
+			send_secrets_and_variables: true,
+			require_approval_for_fork_pr_workflows: false,
+		});
+		github.forkSettings.set(124, {
+			run_workflows_from_fork_pull_requests: true,
+			send_write_tokens_to_workflows: false,
+			send_secrets_and_variables: false,
+			require_approval_for_fork_pr_workflows: true,
+		});
+		await call('GET', '/v1/repos');
+		expect(await (await view()).text()).toContain(
+			'<ul>\n<li>octo/site: <span class="alert">runs workflows from fork pull requests without approval, with write tokens and with secrets.</span> In its settings, under Actions, General, Fork pull request workflows, turn on “Require approval for fork pull request workflows”, turn off “Send write tokens to workflows from pull requests” and turn off “Send secrets to workflows from pull requests”, or turn off “Run workflows from fork pull requests”.</li>\n<li>octo/docs</li>\n</ul>\n<p class="hint">A workflow from a fork pull request runs the fork’s code on your box, and a fork can belong to anyone who can read the repository.</p>',
+		);
+		expect(((await (await view('/dashboard.json')).json()) as { forkPullRequests: unknown }).forkPullRequests).toEqual({
+			'octo/site': { runWorkflows: true, requireApproval: false, sendWriteTokens: true, sendSecrets: true },
+			'octo/docs': { runWorkflows: true, requireApproval: true, sendWriteTokens: false, sendSecrets: false },
+		});
+	});
 });
 
 describe('GET /dashboard.json', () => {
@@ -166,6 +190,7 @@ describe('GET /dashboard.json', () => {
 			totals: { today: { jobs: 1, minutes: 3, dollars: 0.02 }, last30Days: { jobs: 1, minutes: 3, dollars: 0.02 } },
 			dollarsPerMinute: 0.006,
 			repos: null,
+			forkPullRequests: {},
 			classes: ['boxrunner', 'boxrunner-light'],
 			classesProblem: null,
 			paused: [],

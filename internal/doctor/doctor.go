@@ -188,6 +188,74 @@ func Held(snap status.Snapshot, now time.Time) []Result {
 	return results
 }
 
+// Forks warns about each repository this box serves whose fork pull requests
+// run workflows without approval, or with write tokens or secrets: a fork's
+// code then runs on the box unchecked. Run it after All, which reports a Worker
+// that does not answer. A result that is not OK is a warning.
+func (c Checks) Forks(ctx context.Context) []Result {
+	if c.ConfigErr != nil || c.Worker == nil {
+		return nil
+	}
+	repos, err := c.Worker.Repos(ctx)
+	if err != nil {
+		return nil
+	}
+	return Forks(repos.Repos, c.Config.Classes)
+}
+
+// Forks words the results of Checks.Forks for the repositories one of
+// classes serves.
+func Forks(repos []worker.Repo, classes []config.Class) []Result {
+	var results []Result
+	served, unread := 0, 0
+	for _, repo := range repos {
+		if !slices.ContainsFunc(classes, func(k config.Class) bool { return k.Serves(repo.Name) }) {
+			continue
+		}
+		served++
+		s := repo.ForkPullRequests
+		if s == nil {
+			unread++
+			continue
+		}
+		if !s.RunWorkflows {
+			continue
+		}
+		var what, fixes []string
+		if !s.RequireApproval {
+			what, fixes = append(what, "without approval"), append(fixes, `turn on "Require approval for fork pull request workflows"`)
+		}
+		if s.SendWriteTokens {
+			what, fixes = append(what, "with write tokens"), append(fixes, `turn off "Send write tokens to workflows from pull requests"`)
+		}
+		if s.SendSecrets {
+			what, fixes = append(what, "with secrets"), append(fixes, `turn off "Send secrets to workflows from pull requests"`)
+		}
+		if len(what) > 0 {
+			results = append(results, Result{"fork PRs", false, fmt.Sprintf(
+				`%s runs workflows from fork pull requests %s; in its settings, under Actions, General, Fork pull request workflows, %s, or turn off "Run workflows from fork pull requests"`,
+				repo.Name, joined(what), joined(fixes))})
+		}
+	}
+	switch {
+	case len(results) > 0 || served == 0:
+		return results
+	case unread == served:
+		return []Result{{"fork PRs", true, "the Worker has not read the repositories' fork pull request settings yet; a Worker older than this check never does"}}
+	case unread > 0:
+		return []Result{{"fork PRs", true, fmt.Sprintf("no repository runs workflows from fork pull requests without approval, with write tokens or with secrets; %d not read yet", unread)}}
+	}
+	return []Result{{"fork PRs", true, "no repository runs workflows from fork pull requests without approval, with write tokens or with secrets"}}
+}
+
+// joined writes "a", "a and b", "a, b and c".
+func joined(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
 // Releases compares this agent and its Worker with boxrunner's latest release.
 // Run it after All, which has the Worker answer. A result that is not OK is a
 // warning: the box works, but a newer release is out or the check could not run.

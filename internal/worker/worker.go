@@ -132,6 +132,18 @@ func Fatal(err error) bool {
 type Repo struct {
 	Name string `json:"name"`
 	ID   int64  `json:"id"`
+	// ForkPullRequests is nil until the Worker has read the settings, and
+	// from a Worker that does not read them.
+	ForkPullRequests *ForkPullRequests `json:"forkPullRequests"`
+}
+
+// ForkPullRequests are a private repository's settings for workflows from
+// fork pull requests, under Settings, Actions, General.
+type ForkPullRequests struct {
+	RunWorkflows    bool `json:"runWorkflows"`
+	RequireApproval bool `json:"requireApproval"`
+	SendWriteTokens bool `json:"sendWriteTokens"`
+	SendSecrets     bool `json:"sendSecrets"`
 }
 
 type Repos struct {

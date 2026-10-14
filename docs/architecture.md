@@ -163,6 +163,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - which box opened or last refreshed each scale set's session, until that box closes it
 - the classes paused on the dashboard, with who paused each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
+- each served repository's fork pull request settings, read at most once an hour
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)
 - with [fallback](fallback.md) or [alerts](alerts.md) on, whether every box is down, whether every served repository's `BOXRUNNER_DOWN` variable says so and what the last alert said
 
@@ -191,7 +192,7 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 
 | Endpoint | Does |
 |---|---|
-| `GET /v1/repos` | Private repositories the App is installed on, the classes to serve and the paused ones |
+| `GET /v1/repos` | Private repositories the App is installed on, with their fork pull request settings, the classes to serve and the paused ones |
 | `POST /v1/scalesets` | Find or create the scale set for a repository and one of the Worker's classes |
 | `POST /v1/sessions` | Open a session; returns the queue URL and session token |
 | `PATCH /v1/sessions/:id` | Refresh a session |
@@ -214,7 +215,7 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 | `boxrunner resume` | Opens the sessions again after a drain |
 | `boxrunner status` | Whether the box drains, classes, runners and their jobs, recent jobs with queue wait and duration, the disk boxrunner's images take, classes that hold their starts because their runners fail before taking a job, the Worker's release and whether a newer release than the agent's or the Worker's is out |
 | `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
-| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it. It fails while the box drains, shows whether Docker's live-restore is on, and warns when the agent or the Worker is behind boxrunner's latest release. |
+| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it. It fails while the box drains, shows whether Docker's live-restore is on, and warns when the agent or the Worker is behind boxrunner's latest release, and when a repository the box serves runs workflows from fork pull requests without approval, with write tokens or with secrets. |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, registry mirror and its cache, network, rules, slice and files. Docker and Sysbox stay. |
 
 The agent does not deploy the Worker. Deploy it with the Deploy to Cloudflare button or with `bunx wrangler deploy` from `worker/`, and redeploy it the same way to upgrade it, as [upgrading](upgrading.md) says.

@@ -52,12 +52,18 @@ func fake(t *testing.T, replies ...reply) (*Client, *[]request, *[]time.Duration
 }
 
 func TestRepos(t *testing.T) {
-	c, seen, _ := fake(t, reply{200, `{"repos":[{"name":"octo/site","id":123}],"classes":["boxrunner"],"paused":["boxrunner-light"]}`})
+	c, seen, _ := fake(t, reply{200, `{"repos":[{"name":"octo/site","id":123},` +
+		`{"name":"octo/docs","id":124,"forkPullRequests":{"runWorkflows":true,"requireApproval":false,"sendWriteTokens":false,"sendSecrets":true}},` +
+		`{"name":"octo/api","id":125,"forkPullRequests":null}],"classes":["boxrunner"],"paused":["boxrunner-light"]}`})
 	got, err := c.Repos(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Repos{Repos: []Repo{{Name: "octo/site", ID: 123}}, Classes: []string{"boxrunner"}, Paused: []string{"boxrunner-light"}}
+	want := Repos{Repos: []Repo{
+		{Name: "octo/site", ID: 123},
+		{Name: "octo/docs", ID: 124, ForkPullRequests: &ForkPullRequests{RunWorkflows: true, SendSecrets: true}},
+		{Name: "octo/api", ID: 125},
+	}, Classes: []string{"boxrunner"}, Paused: []string{"boxrunner-light"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %+v", got)
 	}
