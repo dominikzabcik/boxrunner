@@ -9,7 +9,7 @@ LABEL boxrunner.runner-version=${RUNNER_VERSION}
 USER root
 RUN apt-get update -qq \
 	&& DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-		build-essential ca-certificates curl git jq python3 python3-pip python3-venv unzip zstd >/dev/null \
+		build-essential ca-certificates curl git jq python3 python3-pip python3-venv shellcheck unzip zstd >/dev/null \
 	&& rm -rf /var/lib/apt/lists/*
 
 # GitHub's Ubuntu image has node on the PATH, and tools such as CodeQL's

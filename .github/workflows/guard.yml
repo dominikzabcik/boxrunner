@@ -15,7 +15,7 @@ concurrency:
 jobs:
   leaks:
     name: Leaks
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,10 +26,14 @@ jobs:
       - name: Gitleaks over every commit
         env:
           VERSION: 8.30.1
-          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
-          curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
-          echo "${SHA256}  gitleaks.tgz" | sha256sum -c -
+          case "$RUNNER_ARCH" in
+            X64) arch=x64 sha=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            ARM64) arch=arm64 sha=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+            *) echo "no gitleaks build pinned for $RUNNER_ARCH"; exit 1 ;;
+          esac
+          curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_${arch}.tar.gz"
+          echo "${sha}  gitleaks.tgz" | sha256sum -c -
           tar xzf gitleaks.tgz gitleaks
           ./gitleaks git --redact --no-banner .
 
@@ -44,7 +48,7 @@ jobs:
 
   workflows:
     name: Workflow security
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -52,7 +56,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
-        with:
-          version: 1.30.1
-          advanced-security: false
+      # zizmor's own action runs it in Docker; jobs on boxrunner have none.
+      - name: zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet zizmor==1.30.1
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --format plain .github/workflows
