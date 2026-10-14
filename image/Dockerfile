@@ -27,6 +27,17 @@ RUN for tool in node npm npx; do ln -sf /home/runner/externals/node24/bin/$tool 
 ENV NPM_CONFIG_PREFIX=/home/runner/.npm-global
 ENV PATH=/home/runner/.npm-global/bin:$PATH
 
+# The Compose plugin, as on GitHub's Ubuntu image, next to the image's buildx.
+RUN case "$(dpkg --print-architecture)" in \
+		amd64) arch=x86_64 sum=db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576 ;; \
+		arm64) arch=aarch64 sum=732e3a84c1a0f67256ce80bc2598a24546b10ca05f9faa97efceb1171ece2ef7 ;; \
+		*) echo "no Compose binary for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+	esac \
+	&& curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/download/v5.5.1/docker-compose-linux-${arch}" \
+	&& echo "${sum}  /usr/local/lib/docker/cli-plugins/docker-compose" | sha256sum -c - \
+	&& chmod 755 /usr/local/lib/docker/cli-plugins/docker-compose \
+	&& docker compose version
+
 # setup-node, setup-python and friends install into the tool cache.
 RUN install -d -o runner -g runner /opt/hostedtoolcache
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
