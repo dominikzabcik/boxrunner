@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.2
+
+**Security**
+- Built with Go 1.26.9. v0.2.0 and v0.2.1 were built with Go 1.26.8, whose standard library has known vulnerabilities in `net/http`, `crypto/tls`, `mime/multipart` and `html/template` that the agent's code reaches (govulncheck). `go.mod` now names the toolchain, and CI and the release job run govulncheck, so a release with a known vulnerability in its binaries is not published.
+
+**Dashboard**
+- Pause and resume a class, and replace the box token, from the dashboard (#17). A paused class starts no new runners on any box; running jobs finish.
+
 ## v0.2.1
 
 **Fixes**
