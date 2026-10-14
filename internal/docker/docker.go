@@ -182,6 +182,15 @@ func (c *Client) Remove(ctx context.Context, id string) error {
 	return err
 }
 
+// Stop sends the container SIGTERM and kills it after grace.
+func (c *Client) Stop(ctx context.Context, id string, grace time.Duration) error {
+	err := c.call(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop?t="+strconv.Itoa(int(grace.Seconds())), "", nil, nil)
+	if NotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // Wait blocks until the container stops and returns its exit code.
 func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 	var out struct {

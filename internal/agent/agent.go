@@ -311,11 +311,20 @@ func (a *Agent) remove(ctx context.Context, r scheduler.Runner, deregister bool)
 			a.Log.Warn("removing the runner at GitHub failed", "runner", r.Name, "err", err)
 		}
 	}
+	if r.Phase == scheduler.Running {
+		// SIGTERM makes the runner cancel its job and tell GitHub; a killed
+		// runner leaves the job "in progress" until GitHub gives up on it.
+		if err := a.Docker.Stop(ctx, r.Name, stopGrace); err != nil {
+			a.Log.Warn("stopping the container failed", "runner", r.Name, "err", err)
+		}
+	}
 	if err := a.Docker.Remove(ctx, r.Name); err != nil {
 		a.Log.Warn("removing the container failed", "runner", r.Name, "err", err)
 	}
 	a.post(scheduler.Removed{Runner: r.Name})
 }
+
+const stopGrace = 30 * time.Second
 
 func (a *Agent) build(ctx context.Context, version string) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)

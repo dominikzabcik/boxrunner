@@ -118,8 +118,10 @@ Description=boxrunner agent: GitHub Actions jobs in fresh containers
 After=docker.service network-online.target
 Wants=network-online.target
 Requires=docker.service
+# Restarts by hand count too. 30 in ten minutes leaves room for maintenance,
+# while a crash loop (one start every 5 s) still stops within three minutes.
 StartLimitIntervalSec=10min
-StartLimitBurst=5
+StartLimitBurst=30
 
 [Service]
 ExecStart=/usr/local/bin/boxrunner run
