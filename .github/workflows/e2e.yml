@@ -8,10 +8,12 @@ on:
     paths:
       - cmd/**
       - internal/agent/**
+      - internal/cache/**
       - internal/install/**
       - internal/firewall/**
       - internal/doctor/**
       - internal/layout/**
+      - image/**
       - install.sh
       - scripts/build-release.sh
       - scripts/e2e/**
@@ -45,7 +47,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The cache test needs a runtime token that GitHub signed, and only
+      # JavaScript actions get one.
+      - name: Hand the job's runtime token to the cache test
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/runtime-token`, process.env.ACTIONS_RUNTIME_TOKEN, { mode: 0o600 });
+            fs.writeFileSync(`${process.env.RUNNER_TEMP}/results-url`, process.env.ACTIONS_RESULTS_URL);
       - name: Install, doctor, install again, uninstall
         env:
           MODE: ${{ matrix.mode }}
-        run: scripts/e2e/run.sh "$MODE"
+        run: RUNTIME_TOKEN_FILE="$RUNNER_TEMP/runtime-token" RESULTS_URL_FILE="$RUNNER_TEMP/results-url" scripts/e2e/run.sh "$MODE"
