@@ -356,7 +356,7 @@ try {
 		"frame-ancestors 'none'",
 		'upgrade-insecure-requests',
 	].join('; ');
-	const permissions = ['accelerometer', 'autoplay', 'bluetooth', 'browsing-topics', 'camera', 'clipboard-read', 'display-capture', 'encrypted-media', 'fullscreen', 'geolocation', 'gyroscope', 'hid', 'idle-detection', 'magnetometer', 'microphone', 'midi', 'payment', 'picture-in-picture', 'publickey-credentials-get', 'screen-wake-lock', 'serial', 'usb', 'xr-spatial-tracking']
+	const permissions = ['accelerometer', 'autoplay', 'browsing-topics', 'camera', 'clipboard-read', 'display-capture', 'encrypted-media', 'fullscreen', 'geolocation', 'gyroscope', 'hid', 'idle-detection', 'magnetometer', 'microphone', 'midi', 'payment', 'picture-in-picture', 'publickey-credentials-get', 'screen-wake-lock', 'serial', 'usb', 'xr-spatial-tracking']
 		.map((f) => `${f}=()`)
 		.concat('clipboard-write=(self)')
 		.join(', ');
