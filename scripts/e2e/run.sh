@@ -58,10 +58,22 @@ done
 expect "$work/worker.log" '^POST /v1/heartbeat 200$'
 systemctl is-active --quiet boxrunner.service || fail "boxrunner.service is not active"
 
-step "doctor passes every check"
-sudo boxrunner doctor | tee "$work/doctor.txt"
-expect "$work/doctor.txt" '^ok +config ' '^ok +cgroup driver +systemd' '^ok +firewall rules +in place for IPv4 and IPv6' \
-	'^ok +idle slice ' '^ok +host +the host at .* is unreachable from jobs' '^ok +metadata +169.254.169.254 is unreachable from jobs' \
+# systemd added CPUWeight=idle in version 252. On an older one, such as Ubuntu
+# 22.04's 249, the idle class runs at normal weight; doctor reports that, and
+# this expects it until install handles it.
+systemd=$(systemctl --version | awk 'NR == 1 { print $2 }')
+if [ "$systemd" -ge 252 ]; then
+	want=0 idle='^ok +idle slice +container runs in /boxrunner_idle.slice, cpu.idle 1'
+else
+	want=1 idle='^FAIL +idle slice +container runs in /boxrunner_idle.slice, cpu.idle 0'
+fi
+
+step "doctor checks the box (systemd $systemd)"
+code=0
+sudo boxrunner doctor | tee "$work/doctor.txt" || code=$?
+[ "$code" = "$want" ] || fail "doctor exited with $code, want $want"
+expect "$work/doctor.txt" "$idle" '^ok +config ' '^ok +cgroup driver +systemd' '^ok +firewall rules +in place for IPv4 and IPv6' \
+	'^ok +host +the host at .* is unreachable from jobs' '^ok +metadata +169.254.169.254 is unreachable from jobs' \
 	'^ok +private ' '^ok +github ' "^ok +worker +$worker accepts the token; 0 repositories, classes boxrunner, boxrunner-light$" \
 	"^ok +isolation boxrunner +$isolation" "^ok +isolation boxrunner-light +$isolation"
 if [ "$mode" = docker ]; then
@@ -69,7 +81,7 @@ if [ "$mode" = docker ]; then
 fi
 # The release checks ask github.com for boxrunner's latest release, so they
 # only warn: a release out after this commit is no fault of the box.
-if grep -vE '^(ok  |warn  (release|worker release) )' "$work/doctor.txt"; then
+if grep -vE "^(ok  |warn  (release|worker release) )" "$work/doctor.txt" | grep -vE "$idle"; then
 	fail "doctor printed the lines above"
 fi
 

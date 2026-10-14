@@ -43,18 +43,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # GitHub's images run Docker with the cgroupfs driver and a cgroup parent
-      # of their own. install refuses that and says to switch, as a person would.
-      - name: Switch Docker to the systemd cgroup driver
-        run: |
-          sudo cat /etc/docker/daemon.json || true
-          if [ "$(docker info --format '{{.CgroupDriver}}')" != systemd ]; then
-            { sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}'; } |
-              jq '."exec-opts" = ["native.cgroupdriver=systemd"] | del(."cgroup-parent")' >"$RUNNER_TEMP/daemon.json"
-            sudo install -m 644 "$RUNNER_TEMP/daemon.json" /etc/docker/daemon.json
-            sudo systemctl restart docker
-          fi
-          test "$(docker info --format '{{.CgroupDriver}}')" = systemd
       - name: Install, doctor, install again, uninstall
         env:
           MODE: ${{ matrix.mode }}
