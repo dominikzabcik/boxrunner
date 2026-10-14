@@ -36,6 +36,13 @@ const (
 	// listens on the bridge's gateway address only.
 	Mirror     = "boxrunner-mirror"
 	MirrorPort = 5000
+	// CachePort is where the agent serves the Actions cache to jobs, on the
+	// bridge's gateway address only.
+	CachePort = 5001
+	// CacheDir holds the Actions cache's archives.
+	CacheDir = "/var/lib/boxrunner/cache"
+	// EnvCache gives jobs of a class with cache = true the cache's URL.
+	EnvCache = "BOXRUNNER_CACHE"
 
 	LabelBox        = "boxrunner.box"
 	LabelRunner     = "boxrunner.runner"
