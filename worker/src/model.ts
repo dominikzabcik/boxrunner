@@ -332,3 +332,60 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 		throw error;
 	}
 }
+
+// ---- Webhook: GitHub's workflow_job event ----
+
+/** A job as GitHub's `workflow_job` event describes it. `queuedAt` is when GitHub created it. */
+export type QueuedJob = {
+	id: number;
+	repo: RepoName;
+	private: boolean;
+	archived: boolean;
+	labels: string[];
+	name: string;
+	workflow: string | null;
+	/** The job's page on github.com. */
+	url: string;
+	queuedAt: number;
+};
+
+/** What happened to the job: queued, taken by a runner or gone from the queue without one (finished, canceled or held for an environment's approval). */
+export type JobEvent = { change: 'queued' | 'started' | 'gone'; job: QueuedJob };
+
+const changes: Partial<Record<string, JobEvent['change']>> = { queued: 'queued', in_progress: 'started', completed: 'gone', waiting: 'gone' };
+
+const flag = (value: unknown) => (typeof value === 'boolean' ? value : undefined);
+
+const jobUrl = (value: unknown) =>
+	typeof value === 'string' && value.length <= 512 && /^https:\/\/github\.com\/[^\s"<>]+$/.test(value) ? value : undefined;
+
+/** Parses a `workflow_job` delivery; `event` is null for an action the Worker does not track. Unknown fields are ignored. */
+export function parseJobEvent(body: unknown): { ok: true; event: JobEvent | null } | { ok: false; field: string } {
+	try {
+		const payload = record(body, 'payload');
+		const change = typeof payload.action === 'string' ? changes[payload.action] : undefined;
+		if (change === undefined) return { ok: true, event: null };
+		const job = record(payload.workflow_job, 'workflow_job');
+		const repository = record(payload.repository, 'repository');
+		return {
+			ok: true,
+			event: {
+				change,
+				job: {
+					id: need(typeof job.id === 'number' ? positiveInteger(job.id) : undefined, 'workflow_job.id'),
+					repo: need(parse.repo(repository.full_name), 'repository.full_name'),
+					private: need(flag(repository.private), 'repository.private'),
+					archived: need(flag(repository.archived), 'repository.archived'),
+					labels: list(job.labels, 'workflow_job.labels', 32).map((value, i) => need(label(100)(value), `workflow_job.labels[${i}]`)),
+					name: need(label(200)(job.name), 'workflow_job.name'),
+					workflow: job.workflow_name === null || job.workflow_name === undefined ? null : need(label(200)(job.workflow_name), 'workflow_job.workflow_name'),
+					url: need(jobUrl(job.html_url), 'workflow_job.html_url'),
+					queuedAt: need(instant(job.created_at), 'workflow_job.created_at'),
+				},
+			},
+		};
+	} catch (error) {
+		if (error instanceof Malformed) return { ok: false, field: error.message };
+		throw error;
+	}
+}

@@ -45,23 +45,25 @@ const formText = (data: FormData | undefined, name: string) => {
 async function start(request: Request, secret: string, origin: string) {
 	const data = await form(request);
 	const name = formText(data, 'name').trim();
+	const unserved = formText(data, 'unserved') === 'on';
 	if (!(await sameSecret(formText(data, 'secret'), secret))) {
-		return formPage(401, name || defaultAppName(), 'That is not the setup secret.');
+		return formPage(401, name || defaultAppName(), 'That is not the setup secret.', unserved);
 	}
 	if (!appNamePattern.test(name)) {
-		return formPage(400, name, 'The App name must be 1 to 34 letters, digits, spaces, dots, dashes or underscores.');
+		return formPage(400, name, 'The App name must be 1 to 34 letters, digits, spaces, dots, dashes or underscores.', unserved);
 	}
 	const nonce = `${Date.now()}.${randomToken()}`;
 	const state = await hmac(secret, nonce);
+	// The hook points at /webhook even while inactive, so turning it on later in the App's settings takes only its Active box.
 	const manifest = {
 		name,
 		url: origin,
 		redirect_url: `${origin}/setup/callback`,
 		callback_urls: [`${origin}/login/callback`],
 		public: false,
-		hook_attributes: { url: origin, active: false },
-		default_permissions: { administration: 'write', metadata: 'read' },
-		default_events: [],
+		hook_attributes: { url: `${origin}/webhook`, active: unserved },
+		default_permissions: { administration: 'write', metadata: 'read', ...(unserved ? { actions: 'read' } : {}) },
+		default_events: unserved ? ['workflow_job'] : [],
 	};
 	return page({
 		status: 200,
@@ -160,7 +162,7 @@ const secretField = `<label for="secret">Setup secret</label>
 <input id="secret" name="secret" type="password" required autocomplete="current-password" aria-describedby="secret-hint">
 <p class="hint" id="secret-hint">The SETUP_SECRET you set when you deployed this Worker.</p>`;
 
-function formPage(status: number, name: string, error?: string) {
+function formPage(status: number, name: string, error?: string, unserved = false) {
 	return page({
 		status,
 		title: 'Set up boxrunner',
@@ -172,6 +174,8 @@ ${secretField}
 <label for="name">App name</label>
 <input id="name" name="name" required maxlength="34" value="${escape(name)}" aria-describedby="name-hint">
 <p class="hint" id="name-hint">App names are unique across all of GitHub, so the suggestion ends in a random suffix.</p>
+<label><input type="checkbox" name="unserved" value="on"${unserved ? ' checked' : ''} aria-describedby="unserved-hint"> Report jobs that wait for a runner nobody here runs</label>
+<p class="hint" id="unserved-hint">Adds the Actions permission (read) and the <code>workflow_job</code> event, so the dashboard can list jobs whose <code>runs-on</code> or repository this Worker does not serve. You can add them later.</p>
 <button type="submit">Create the GitHub App</button>
 </form>`,
 	});

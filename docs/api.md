@@ -208,6 +208,24 @@ With [fallback](fallback.md) or [alerts](alerts.md) on, the time a heartbeat arr
 
 The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
 
+## `POST /webhook`
+
+GitHub's webhook deliveries for the App, when [unserved jobs](unserved-jobs.md) are on. The agent never calls it, and it follows GitHub's conventions instead of the ones above: no box token, no `Boxrunner-Version` and no budget, since a delivery without the right signature changes nothing. Its answers carry the same headers and error shape.
+
+**Order of checks.** A webhook secret, `WEBHOOK_SECRET` or the one setup kept (`503 not_configured`), a body of at most 256 KB, by `Content-Length` and by the bytes read (`400 bad_request`), then `X-Hub-Signature-256`, `sha256=` and the hex HMAC-SHA256 of the body with that secret, compared in constant time (`401 unauthorized`).
+
+A signed delivery whose `X-GitHub-Event` is not `workflow_job`, `ping` included, answers 204 and changes nothing. A `workflow_job` delivery answers 204, or `400 bad_request` naming a field it cannot read, as in `"workflow_job.labels" is missing or malformed.`. The Worker reads these fields and ignores the rest:
+
+| Field | Rule |
+|---|---|
+| `action` | `queued`, `in_progress`, `completed` or `waiting`; any other action answers 204 and changes nothing |
+| `workflow_job.id` | A whole number of 1 or more |
+| `workflow_job.labels` | At most 32, each 1 to 100 characters |
+| `workflow_job.name`, `workflow_job.workflow_name` | 1 to 200 characters; `workflow_name` may be `null` |
+| `workflow_job.html_url` | An `https://github.com/` address of at most 512 characters |
+| `workflow_job.created_at` | RFC 3339 |
+| `repository.full_name`, `repository.private`, `repository.archived` | `owner/name` and two booleans |
+
 ## What the Worker checks on every call
 
 The box token, compared in constant time. Then, on every call but `POST /v1/heartbeat`, which only reports the box's own state:

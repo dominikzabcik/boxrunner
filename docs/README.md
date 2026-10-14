@@ -9,6 +9,7 @@ The same pages, with a sidebar, are at [boxrunner.zabcik.me/docs](https://boxrun
 | [Upgrading](upgrading.md) | A newer release is out, or `status` says so. It covers the agent and the Worker. |
 | [Fallback](fallback.md) | You want jobs to run on GitHub's runners while the box is down. |
 | [Alerts](alerts.md) | You want to hear when the box goes silent and when it is back, or when jobs wait with no runner. |
+| [Unserved jobs](unserved-jobs.md) | You want the dashboard to list jobs GitHub queued for a label or repository no box here serves. |
 | [Dashboard](dashboard.md) | You want to see boxes, runners and recent jobs in the browser. |
 | [Worker API](api.md) | You change the agent or the Worker; both sides test against it. |
 | [Decisions](decisions.md) | You wonder why it is built this way. Each entry names its measurement. |

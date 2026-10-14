@@ -3,12 +3,13 @@ import { handleApi } from './api';
 import { Box } from './box';
 import { check } from './fallback';
 import { notFound } from './http';
-import { isSetup, isWeb, match, type Route } from './routes';
+import { isSetup, isWeb, isWebhook, match, type Route } from './routes';
 import { handleSetup } from './setup';
 import { Store } from './store';
+import { handleWebhook } from './unserved';
 import { handleWeb } from './web';
 
-/** The one Durable Object that holds the App, the box token's hash, the scale sets, the token cache, what the box reports and whether its jobs fall back to GitHub's runners. */
+/** The one Durable Object that holds the App, the box token's hash, the scale sets, the token cache, what the box reports, the jobs GitHub says wait and whether its jobs fall back to GitHub's runners. */
 export class BoxObject extends DurableObject<Env> {
 	private readonly box: Box;
 
@@ -20,6 +21,7 @@ export class BoxObject extends DurableObject<Env> {
 	handle(request: Request, route: Route): Promise<Response> {
 		if (isSetup(route)) return handleSetup(this.box, request, route);
 		if (isWeb(route)) return handleWeb(this.box, request, route);
+		if (isWebhook(route)) return handleWebhook(this.box, request);
 		return handleApi(this.box, request, route);
 	}
 

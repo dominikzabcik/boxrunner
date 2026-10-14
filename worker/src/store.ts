@@ -10,11 +10,14 @@ import {
 	type ClassName,
 	type FinishedJob,
 	type Heartbeat,
+	type JobEvent,
 	type Login,
 	type Pause,
+	type QueuedJob,
 	type ScaleSetId,
 	type SessionId,
 } from './model';
+import { keptJobs, keptMs } from './unserved';
 
 /** Jobs, their daily totals and boxes that stopped reporting are kept this many days. */
 export const retentionDays = 30;
@@ -72,6 +75,12 @@ CREATE TABLE IF NOT EXISTS job_days (
 	day INTEGER PRIMARY KEY,
 	jobs INTEGER NOT NULL,
 	minutes INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS queued_jobs (
+	id INTEGER PRIMARY KEY,
+	state TEXT NOT NULL,
+	queued_at INTEGER NOT NULL,
+	job TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS paused_classes (
 	class TEXT PRIMARY KEY,
@@ -143,9 +152,11 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key and the pauses, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key, the pauses and the queued jobs from the webhook, so setup can run again. */
 	reset() {
-		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes;');
+		this.sql.exec(
+			'DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes; DELETE FROM queued_jobs;',
+		);
 	}
 
 	/** Fills in the OAuth client id and owner of an App set up before the Worker kept them. */
@@ -333,6 +344,43 @@ export class Store {
 			.exec<{ job: string; minutes: number }>('SELECT job, minutes FROM jobs ORDER BY finished_at DESC, runner LIMIT ?', limit)
 			.toArray()
 			.map((row) => ({ ...(JSON.parse(row.job) as FinishedJob), minutes: row.minutes }));
+	}
+
+	/** When GitHub's last signed webhook delivery arrived, kept beside the cache so a reset forgets it. */
+	noteDelivery(at: number) {
+		this.cache('webhook:delivered', String(at), at);
+	}
+
+	lastDelivery(): number | undefined {
+		const at = this.lastCached('webhook:delivered');
+		return at === undefined ? undefined : Number(at);
+	}
+
+	/**
+	 * Keeps a job from `queued` until a runner takes it, then until it is gone,
+	 * so a `queued` delivery that arrives after `in_progress` does not list it
+	 * again. All but the newest `keptJobs` go.
+	 */
+	recordJob({ change, job }: JobEvent) {
+		if (change === 'gone') this.sql.exec('DELETE FROM queued_jobs WHERE id = ?', job.id);
+		else {
+			this.sql.exec(
+				`INSERT INTO queued_jobs (id, state, queued_at, job) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO ${change === 'started' ? "UPDATE SET state = 'started'" : 'NOTHING'}`,
+				job.id,
+				change,
+				job.queuedAt,
+				JSON.stringify(job),
+			);
+		}
+		this.sql.exec('DELETE FROM queued_jobs WHERE id NOT IN (SELECT id FROM queued_jobs ORDER BY queued_at DESC, id DESC LIMIT ?)', keptJobs);
+	}
+
+	/** Jobs no runner has taken, queued within the last day, oldest first. */
+	queuedJobs(now: number): QueuedJob[] {
+		return this.sql
+			.exec<{ job: string }>("SELECT job FROM queued_jobs WHERE state = 'queued' AND queued_at >= ? ORDER BY queued_at, id", now - keptMs)
+			.toArray()
+			.map((row) => JSON.parse(row.job) as QueuedJob);
 	}
 
 	daysFrom(firstDay: number): DayTotal[] {

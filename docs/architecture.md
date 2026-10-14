@@ -110,7 +110,7 @@ gh run cancel <run id> -R <owner/name>
 gh run rerun <run id> -R <owner/name>
 ```
 
-`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself, because the App has no Actions permission. For half an hour after a box that never ran a job starts, or after a session left open blocked the agent, `boxrunner status` points here. A session that another box holds and still serves from does not count. A restart of a box that has run jobs does not.
+`gh run rerun`, with or without `--failed`, does not take a run that is still queued, so cancel it first. The agent cannot list the stranded runs itself: listing runs needs the App's Actions permission, which no token the box gets carries. With [unserved jobs](unserved-jobs.md) on, the dashboard lists them once they have waited 10 minutes. For half an hour after a box that never ran a job starts, or after a session left open blocked the agent, `boxrunner status` points here. A session that another box holds and still serves from does not count. A restart of a box that has run jobs does not.
 
 Before retiring a box on purpose, run `sudo boxrunner uninstall` on it. Stopping the agent closes the sessions and removes the runners that took no job, so GitHub hands their jobs to the next session and nothing is stranded. Uninstall then removes every container, running jobs included, so let those finish first or re-run them on the new box.
 
@@ -182,12 +182,15 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 - each served repository's fork pull request settings, read at most once an hour
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)
+- with [unserved jobs](unserved-jobs.md) on, up to 200 jobs that GitHub's `workflow_job` event says are queued or running, and when its last delivery arrived
 - with [fallback](fallback.md) or [alerts](alerts.md) on, whether every box is down, whether every served repository's `BOXRUNNER_DOWN` variable says so and what the last alert said
 - which scale sets have jobs waiting with no runner, since when, and the box that reported them
 
 The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories.
 
 The optional `FALLBACK_MINUTES` variable turns on [fallback to GitHub's runners](fallback.md). When no heartbeat arrived for that long, a Durable Object alarm sets the Actions variable `BOXRUNNER_DOWN` in every served repository, and workflows that read it in `runs-on` run on GitHub's runners. Once the box has reported for two minutes without a gap, the Worker deletes it. Heartbeats never call GitHub; the alarm does, with a token narrowed to one repository and `actions_variables: write`, a permission the App has only when its owner added it.
+
+The App's `workflow_job` event, when its owner turns it on, feeds [unserved jobs](unserved-jobs.md): `POST /webhook` checks each delivery's signature with the webhook secret and keeps the queued jobs the dashboard may list. These include jobs no box was ever assigned, which no heartbeat carries. Nothing else reads them.
 
 The optional `ALERT_WEBHOOK` secret turns on [alerts](alerts.md). The same alarm, with the same notion of down, posts one message to that address when the box goes down and one when it is back. It also posts when a scale set's jobs have waited that long with no runner on the way, and when they no longer wait. Heartbeats decide both, from the scale sets with assigned jobs and the runners each box reports. While fallback is off, `ALERT_MINUTES` (10 by default) decides when the box is down.
 
@@ -196,7 +199,7 @@ The optional `ALERT_WEBHOOK` secret turns on [alerts](alerts.md). The same alarm
 Setup happens in the browser, and nobody copies a private key.
 
 1. **Deploy.** Deploy the Worker with the Deploy to Cloudflare button, which copies the `stable` branch's Worker into a repository of yours and asks for `SETUP_SECRET`, or with `bunx wrangler deploy` from a clone and `wrangler secret put SETUP_SECRET`. [Upgrading](upgrading.md) says how to redeploy each.
-2. **Create the App.** Open `/setup` and enter the setup secret, which the form posts rather than putting it in a URL. The page sends GitHub an App manifest with a `state` value that the Worker signs and ties to a cookie. GitHub creates the App under your account and redirects back. The Worker checks `state`, converts the code and keeps the key. The key never reaches your browser, your box or boxrunner's site.
+2. **Create the App.** Open `/setup` and enter the setup secret, which the form posts rather than putting it in a URL. The page sends GitHub an App manifest with a `state` value that the Worker signs and ties to a cookie. A box on the form adds the Actions permission (read) and the `workflow_job` event for [unserved jobs](unserved-jobs.md). GitHub creates the App under your account and redirects back. The Worker checks `state`, converts the code and keeps the key. The key never reaches your browser, your box or boxrunner's site.
 3. **Install the App** on the repositories that should use the box.
 4. **Install the agent.** The page shows a box token once, with the command that installs the agent.
 

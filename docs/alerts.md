@@ -93,7 +93,7 @@ A post that fails or takes more than 10 seconds is retried after 1, 2, 4, 8 minu
 
 ## What it does not see
 
-A down alert means every box stopped reporting. A box that reports but starts no runners, for example because Docker on it is broken, shows up as waiting jobs instead, once a job is assigned to it. A job that waits for a class or repository no box listens to sends no alert: no box has been assigned it, so no heartbeat carries it.
+A down alert means every box stopped reporting. A box that reports but starts no runners, for example because Docker on it is broken, shows up as waiting jobs instead, once a job is assigned to it. A job that waits for a class or repository no box listens to sends no alert: no box has been assigned it, so no heartbeat carries it. With [unserved jobs](unserved-jobs.md) on, the dashboard lists it.
 
 ## Turn it off
 

@@ -17,6 +17,7 @@ p, label { max-width: 36rem; }
 .hint { color: var(--muted); font-size: 0.9rem; margin-top: 0.25rem; }
 label { display: block; font-weight: 600; margin-top: 1.25rem; }
 input { display: block; width: 100%; box-sizing: border-box; margin-top: 0.25rem; padding: 0.5rem; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 4px; }
+input[type=checkbox] { display: inline; width: auto; margin: 0 0.5rem 0 0; }
 button, .button { display: inline-block; margin-top: 1.5rem; padding: 0.6rem 1rem; font: inherit; font-weight: 600; color: var(--bg); background: var(--fg); border: 0; border-radius: 4px; cursor: pointer; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 a { color: var(--accent); }
