@@ -178,7 +178,7 @@ Issues, fixes and docs are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md), and 
 <br>
 
 <p align="center">
-  <a href="https://boxrunner.zabcik.me"><img src="site/favicon.svg" width="36" height="36" alt="boxrunner"></a>
+  <a href="https://boxrunner.zabcik.me"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/art/logo-lockup-dark.svg"><img src="docs/art/logo-lockup-light.svg" height="28" alt="boxrunner"></picture></a>
   <br>
   <sub>Licensed under the <a href="LICENSE">Apache License 2.0</a> · <a href="https://boxrunner.zabcik.me">boxrunner.zabcik.me</a></sub>
 </p>

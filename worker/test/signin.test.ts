@@ -29,7 +29,7 @@ describe('GET / without a session', () => {
 		expect(response.status).toBe(200);
 		expect(html).toContain('<a class="button" href="/login">Sign in with GitHub</a>');
 		expect(response.headers.get('content-security-policy')).toMatch(
-			/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'$/,
+			/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'$/,
 		);
 	});
 

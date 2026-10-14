@@ -16,7 +16,7 @@ describe('GET /setup before setup', () => {
 		expect(html).toContain('<input id="secret" name="secret" type="password"');
 		expect(response.headers.get('x-frame-options')).toBe('DENY');
 		expect(response.headers.get('content-security-policy')).toMatch(
-			/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; form-action 'self' https:\/\/github\.com; base-uri 'none'; frame-ancestors 'none'$/,
+			/^default-src 'none'; style-src 'sha256-[A-Za-z0-9+/=]+'; img-src data:; form-action 'self' https:\/\/github\.com; base-uri 'none'; frame-ancestors 'none'$/,
 		);
 	});
 });
@@ -35,7 +35,7 @@ describe('POST /setup', () => {
 		const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]!;
 		expect(script).toBe("document.getElementById('manifest').submit();");
 		expect(response.headers.get('content-security-policy')).toBe(
-			`default-src 'none'; style-src 'sha256-${await sha256(style)}'; script-src 'sha256-${await sha256(script)}'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'`,
+			`default-src 'none'; style-src 'sha256-${await sha256(style)}'; img-src data:; script-src 'sha256-${await sha256(script)}'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'`,
 		);
 	});
 

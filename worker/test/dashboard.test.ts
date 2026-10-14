@@ -76,7 +76,7 @@ describe('GET / signed in', () => {
 		expect(await (await view()).text()).toContain('<dt>Disk</dt><dd class="alert">4.0 GB free, floor 10.0 GB, so no runner starts</dd>');
 	});
 
-	it('allows exactly its own inline style and script, fetches only from its own origin, and is never framed or indexed', async () => {
+	it('allows exactly its own inline style, script and favicon, fetches only from its own origin, and is never framed or indexed', async () => {
 		const { view } = await ready();
 		const response = await view();
 		const html = await response.text();
@@ -84,11 +84,12 @@ describe('GET / signed in', () => {
 		const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1]!;
 		expect(script).toContain("fetch('/dashboard.json', { cache: 'no-store' })");
 		expect(response.headers.get('content-security-policy')).toBe(
-			`default-src 'none'; style-src 'sha256-${await sha256(style)}'; script-src 'sha256-${await sha256(script)}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+			`default-src 'none'; style-src 'sha256-${await sha256(style)}'; img-src data:; script-src 'sha256-${await sha256(script)}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
 		);
 		expect(response.headers.get('x-frame-options')).toBe('DENY');
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(html).toContain('<meta name="robots" content="noindex">');
+		expect(html).toContain('<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E');
 	});
 
 	it('never calls GitHub', async () => {

@@ -17,6 +17,8 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#070a10">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <style>
@@ -58,8 +60,7 @@ button, input { font: inherit; color: inherit; }
 nav.top { position: absolute; inset: env(safe-area-inset-top, 0px) 0 auto 0; z-index: 3; }
 nav.top .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; }
 .mark { font: 500 15px/1 var(--f-mono); letter-spacing: .02em; display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
-.mark i { width: 14px; height: 14px; border: 1.5px solid var(--ink); display: inline-block; position: relative; }
-.mark i::after { content: ""; position: absolute; inset: 3px; background: var(--normal); }
+.mark svg { width: 18px; height: 18px; flex: none; }
 nav.top ul { display: flex; gap: clamp(12px, 3vw, 28px); list-style: none; margin: 0; padding: 0; font-size: 14px; color: var(--dim); }
 nav.top a { text-decoration: none; }
 nav.top a:hover { color: var(--ink); }
@@ -216,7 +217,7 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
 <nav class="top gutter" aria-label="Site">
   <div class="row measure">
-    <a class="mark" href="#top"><i aria-hidden="true"></i>boxrunner</a>
+    <a class="mark" href="#top"><!--mark-->boxrunner</a>
     <ul>
       <li class="in-page"><a href="#cores">Priorities</a></li>
       <li class="in-page"><a href="#key">Security</a></li>
