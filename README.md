@@ -155,6 +155,14 @@ Checked against each project's README on October 14, 2026. Corrections are welco
 - **Many machines or autoscaling across hosts.** Several boxes can share a Worker only by splitting classes or repositories ([config](docs/config.md#several-boxes)). [GARM](https://github.com/cloudbase/garm) and [Actions Runner Controller](https://github.com/actions/actions-runner-controller) manage fleets.
 - **Untrusted code.** Jobs share the host's kernel, like all containers.
 
+## Upgrade
+
+```sh
+sudo boxrunner upgrade
+```
+
+It installs the latest release on the box, checked like the first install, and restarts the agent. The Worker is upgraded separately; [upgrading](docs/upgrading.md) says how for a Worker deployed with the button or with Wrangler. `sudo boxrunner status` and the dashboard say when a newer release is out.
+
 ## Uninstall
 
 ```sh

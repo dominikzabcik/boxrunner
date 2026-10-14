@@ -47,6 +47,7 @@ describe('POST /v1/heartbeat', () => {
 		const cases: [Record<string, unknown>, string][] = [
 			[{ box: 'box 1' }, 'box'],
 			[{ version: 'v0.2' }, 'version'],
+			[{ latest: 'v0.2.2' }, 'latest'],
 			[{ disk: { free: -1, floor: 0 } }, 'disk.free'],
 			[{ classes: [{ name: 'boxrunner', priority: 'high', max: 1 }] }, 'classes[0].priority'],
 			[{ classes: [{ name: 'boxrunner', priority: 'idle', max: 0 }] }, 'classes[0].max'],

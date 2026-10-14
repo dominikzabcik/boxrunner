@@ -81,6 +81,9 @@ type Observed struct {
 	Containers     int
 	UnitEnabled    bool
 	UnitActive     bool
+	// AgentReplaced means the running agent's binary was replaced after it
+	// started, as install.sh does before it runs install.
+	AgentReplaced bool
 }
 
 type Step interface{ String() string }
@@ -324,7 +327,7 @@ func Plan(d Desired, o Observed) []Step {
 	switch {
 	case !o.UnitEnabled || !o.UnitActive:
 		steps = append(steps, EnableUnit{})
-	case sysbox || written[layout.Binary] || written[layout.UnitPath] || written[layout.ConfigPath] || written[layout.TokenPath]:
+	case sysbox || o.AgentReplaced || written[layout.Binary] || written[layout.UnitPath] || written[layout.ConfigPath] || written[layout.TokenPath]:
 		// The agent reads Docker's runtimes when it starts.
 		steps = append(steps, RestartUnit{})
 	}

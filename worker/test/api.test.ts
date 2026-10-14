@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { scaleSetKey, type FakeGitHub } from './fake-github';
 import { agent, expectError, fakeGitHub, heartbeatBody, postForm, send, setUp, time, type Agent } from './harness';
 import { setupSecret } from './secret';
+import { version } from '../src/version';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -24,6 +25,14 @@ async function mint(call: Agent, scaleSetId: number, name = 'box-1-boxrunner-3f9
 }
 
 describe('every /v1 call', () => {
+	it("names the Worker's release, so the agent can show it", async () => {
+		const { call, token } = await ready();
+		expect(version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/);
+		expect((await call('GET', '/v1/repos')).headers.get('boxrunner-worker-version')).toBe(version);
+		const refused = await agent(token, '2.0.0')('GET', '/v1/repos');
+		expect(refused.headers.get('boxrunner-worker-version')).toBe(version);
+	});
+
 	it('answers 503 not_configured before setup', async () => {
 		await fakeGitHub();
 		await expectError(await agent('anything')('GET', '/v1/repos'), 503, 'not_configured', 'Setup has not finished. Open https://box.test/setup.');

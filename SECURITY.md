@@ -12,7 +12,7 @@ The maintainer works on boxrunner alone. Expect a first answer within seven days
 
 ## Supported versions
 
-Only the latest release gets security fixes. The installer always installs it, and re-running `boxrunner install` upgrades.
+Only the latest release gets security fixes. The installer always installs it. `sudo boxrunner upgrade` upgrades the agent, and [docs/upgrading.md](docs/upgrading.md) says how to upgrade the Worker. `boxrunner status`, `boxrunner doctor` and the dashboard say when a newer release is out.
 
 ## What boxrunner defends, and what it does not
 

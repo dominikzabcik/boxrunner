@@ -6,6 +6,7 @@ The same pages, with a sidebar, are at [boxrunner.zabcik.me/docs](https://boxrun
 |---|---|
 | [Architecture](architecture.md) | You want to know what each part holds and how a job reaches the box. The code follows this page. |
 | [Configuration](config.md) | You set up classes, limits, warm runners, Docker inside jobs or a custom job image. |
+| [Upgrading](upgrading.md) | A newer release is out, or `status` says so. It covers the agent and the Worker. |
 | [Fallback](fallback.md) | You want jobs to run on GitHub's runners while the box is down. |
 | [Dashboard](dashboard.md) | You want to see boxes, runners and recent jobs in the browser. |
 | [Worker API](api.md) | You change the agent or the Worker; both sides test against it. |

@@ -1,7 +1,8 @@
 import { variable } from './fallback';
-import { dayOf, type Classes, type FallbackConfig, type Priority, type Repo, type RunnerState } from './model';
+import { dayOf, newer, type Classes, type FallbackConfig, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
 import { retentionDays, type Store } from './store';
+import { version as workerVersion } from './version';
 
 /** GitHub's published price for its standard (2-core) Linux runner. */
 export const dollarsPerMinute = 0.006;
@@ -14,9 +15,12 @@ type Totals = { jobs: number; minutes: number; dollars: number };
 /** What `GET /dashboard.json` answers and the page shows. Times are ISO 8601; ages are seconds before `generatedAt`. */
 export type Dashboard = {
 	generatedAt: string;
+	workerVersion: string;
 	boxes: {
 		name: string;
 		version: string;
+		/** boxrunner's latest release as the box last found it, or null. */
+		latest: string | null;
 		image: string;
 		lastSeen: string;
 		secondsSinceSeen: number;
@@ -81,11 +85,13 @@ export function dashboardData(store: Store, classes: Classes, fallback: Fallback
 	const paused = new Set<string>(pauses.map((pause) => pause.className));
 	return {
 		generatedAt: iso(now),
+		workerVersion,
 		boxes: store.boxes().map(({ status, seenAt }) => {
 			const secondsSinceSeen = secondsBetween(seenAt, now);
 			return {
 				name: status.box,
 				version: status.version,
+				latest: status.latest ?? null,
 				image: status.image,
 				lastSeen: iso(seenAt),
 				secondsSinceSeen,
@@ -196,14 +202,23 @@ ${row('Last 30 days', last30Days)}
 </section>`;
 }
 
-function renderBox(box: Dashboard['boxes'][number], index: number) {
+const upgradingDocs = 'https://boxrunner.zabcik.me/docs/upgrading/';
+
+/** A version, and the newer release when there is one. */
+function versionWithLatest(version: string, latest: string | null) {
+	if (latest === null || !newer(latest, version)) return escape(version);
+	return `${escape(version)}, <span class="alert">${escape(latest)} is out</span> (<a href="${upgradingDocs}">upgrading</a>)`;
+}
+
+function renderBox(box: Dashboard['boxes'][number], index: number, workerVersion: string) {
 	const seen = `last seen ${time(box.lastSeen, ago(box.secondsSinceSeen))}`;
 	const belowFloor = box.disk.free < box.disk.floor;
 	return `<section aria-labelledby="box-${index}">
 <h2 id="box-${index}">${escape(box.name)}</h2>
 ${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>`}
 <dl>
-<dt>Agent</dt><dd>${escape(box.version)}</dd>
+<dt>Agent</dt><dd>${versionWithLatest(box.version, box.latest)}</dd>
+<dt>Worker</dt><dd>${versionWithLatest(workerVersion, box.latest)}</dd>
 <dt>Image</dt><dd><code>${escape(box.image)}</code></dd>
 <dt>Disk</dt><dd${belowFloor ? ' class="alert"' : ''}>${gigabytes(box.disk.free)} free, floor ${gigabytes(box.disk.floor)}${belowFloor ? ', so no runner starts' : ''}</dd>
 </dl>
@@ -306,7 +321,7 @@ export function renderLive(data: Dashboard, csrf: string): string {
 	const boxes =
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
-			: data.boxes.map(renderBox).join('\n');
+			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion)).join('\n');
 	return [boxes, renderJobs(data), renderTotals(data), renderServed(data, csrf)].join('\n');
 }
 

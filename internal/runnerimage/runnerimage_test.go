@@ -2,10 +2,7 @@ package runnerimage
 
 import (
 	"archive/tar"
-	"context"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,30 +11,6 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 )
-
-func TestParseLatest(t *testing.T) {
-	got, err := ParseLatest("https://github.com/actions/runner/releases/tag/v2.329.0")
-	if err != nil || got != "2.329.0" {
-		t.Errorf("ParseLatest = %q, %v", got, err)
-	}
-	if _, err := ParseLatest("https://github.com/login"); err == nil || err.Error() != `latest runner release: unexpected redirect "https://github.com/login"` {
-		t.Errorf("ParseLatest of a login page = %v", err)
-	}
-}
-
-func TestLatestFollowsNoRedirect(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodHead {
-			t.Errorf("method %s", r.Method)
-		}
-		http.Redirect(w, r, "/actions/runner/releases/tag/v2.330.1", http.StatusFound)
-	}))
-	defer srv.Close()
-	got, err := Latest(context.Background(), srv.Client(), srv.URL+"/actions/runner/releases/latest")
-	if err != nil || got != "2.330.1" {
-		t.Errorf("Latest = %q, %v", got, err)
-	}
-}
 
 func TestTarHoldsTheContext(t *testing.T) {
 	buf, err := Tar()

@@ -24,6 +24,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
@@ -41,6 +42,9 @@ type Checks struct {
 	Worker    *worker.Client
 	Exec      firewall.Run
 	HTTP      *http.Client
+	// Version is this agent's, and ReleasesURL boxrunner's latest-release page.
+	Version     string
+	ReleasesURL string
 }
 
 // MaxSkew is how far the clock may be off; GitHub's tokens carry times.
@@ -154,6 +158,42 @@ func Held(snap status.Snapshot, now time.Time) []Result {
 		if next := c.NextTry(now); next != "" {
 			results = append(results, Result{"class " + c.Name, false, "its runners exit before taking a job; " + next + "; see journalctl -u boxrunner"})
 		}
+	}
+	return results
+}
+
+// Releases compares this agent and its Worker with boxrunner's latest release.
+// Run it after All, which has the Worker answer. A result that is not OK is a
+// warning: the box works, but a newer release is out or the check could not run.
+func (c Checks) Releases(ctx context.Context) []Result {
+	latest, err := release.Latest(ctx, c.HTTP, c.ReleasesURL)
+	workerVersion, answered := "", false
+	if c.Worker != nil {
+		workerVersion, answered = c.Worker.WorkerVersion()
+	}
+	return Versions(c.Version, latest, err, workerVersion, answered)
+}
+
+// Versions words the results of Releases. The Worker gets a result only when
+// it answered.
+func Versions(agent, latest string, latestErr error, workerVersion string, workerAnswered bool) []Result {
+	var results []Result
+	switch {
+	case latestErr != nil:
+		results = append(results, Result{"release", false, fmt.Sprintf("could not find boxrunner's latest release: %v", latestErr)})
+	case release.Newer(latest, agent):
+		results = append(results, Result{"release", false, fmt.Sprintf("boxrunner %s is out and this agent is %s; upgrade with: sudo boxrunner upgrade", latest, agent)})
+	default:
+		results = append(results, Result{"release", true, fmt.Sprintf("agent %s, latest release %s", agent, latest)})
+	}
+	switch {
+	case !workerAnswered:
+	case workerVersion == "":
+		results = append(results, Result{"worker release", false, "the Worker names no version, so it is older than the release that added it; redeploy it as docs/upgrading.md says"})
+	case latestErr == nil && release.Newer(latest, workerVersion):
+		results = append(results, Result{"worker release", false, fmt.Sprintf("the Worker runs %s and %s is out; redeploy it as docs/upgrading.md says", workerVersion, latest)})
+	default:
+		results = append(results, Result{"worker release", true, "Worker " + workerVersion})
 	}
 	return results
 }

@@ -36,6 +36,21 @@ const repoPattern = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
 const loginPattern = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 /** The agent's semver; the first group is the major. */
 export const semverPattern = /^(\d+)\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/;
+
+/** Whether release `a` comes after `b`, by their numbers; a pre-release comes before its release. */
+export function newer(a: string, b: string): boolean {
+	const split = (v: string) => {
+		const [core = '', pre = ''] = v.split('+')[0]!.split(/-(.*)/s);
+		return { numbers: core.split('.').map(Number), pre };
+	};
+	const x = split(a);
+	const y = split(b);
+	for (let i = 0; i < 3; i++) {
+		if (x.numbers[i] !== y.numbers[i]) return (x.numbers[i] ?? 0) > (y.numbers[i] ?? 0);
+	}
+	if (x.pre === y.pre) return false;
+	return x.pre === '' || (y.pre !== '' && x.pre > y.pre);
+}
 const classPattern = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const runnerNamePattern = /^[a-z0-9-]{1,64}$/;
 const boxNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -155,6 +170,8 @@ export type FinishedJob = {
 export type BoxStatus = {
 	box: BoxName;
 	version: string;
+	/** boxrunner's latest release as the agent last found it; null before it did, or from an agent too old to look. */
+	latest: string | null;
 	image: string;
 	disk: { free: number; floor: number };
 	classes: { name: ClassName; priority: Priority; max: number }[];
@@ -195,6 +212,8 @@ const count = (value: unknown) => (typeof value === 'number' && Number.isSafeInt
 const label = (max: number) => (value: unknown) =>
 	typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
 
+const semver = (value: unknown) => (typeof value === 'string' && semverPattern.test(value) && value.length <= 64 ? value : undefined);
+
 const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const instant = (value: unknown) => {
 	const time = typeof value === 'string' && rfc3339.test(value) ? Date.parse(value) : Number.NaN;
@@ -209,7 +228,8 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 			ok: true,
 			heartbeat: {
 				box: need(parse.boxName(body.box), 'box'),
-				version: need(typeof body.version === 'string' && semverPattern.test(body.version) && body.version.length <= 64 ? body.version : undefined, 'version'),
+				version: need(semver(body.version), 'version'),
+				latest: body.latest === undefined || body.latest === null ? null : need(semver(body.latest), 'latest'),
 				image: need(label(128)(body.image), 'image'),
 				disk: { free: need(count(disk.free), 'disk.free'), floor: need(count(disk.floor), 'disk.floor') },
 				classes: list(body.classes, 'classes', heartbeatLimits.classes).map((raw, i) => {

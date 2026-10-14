@@ -112,6 +112,16 @@ func HeldBy(err error) string {
 // refused a new one.
 func (c *Client) SessionBlocked() bool { return c.blocked.Load() }
 
+// WorkerVersion is the release the Worker named in its latest answer, and
+// whether it has answered at all. A Worker deployed before Workers named
+// their release answers with an empty version.
+func (c *Client) WorkerVersion() (version string, answered bool) {
+	if v := c.workerVersion.Load(); v != nil {
+		return *v, true
+	}
+	return "", false
+}
+
 // Fatal reports whether err means the agent must stop: a wrong token, an
 // agent too old for its Worker, or a Worker whose setup is unfinished.
 func Fatal(err error) bool {
@@ -157,6 +167,8 @@ type Client struct {
 	log     *slog.Logger
 	// blocked is set once a session an earlier owner left open refused a new one.
 	blocked atomic.Bool
+	// workerVersion is the release the Worker named in its latest answer.
+	workerVersion atomic.Pointer[string]
 }
 
 type Options struct {
@@ -188,6 +200,8 @@ type Heartbeat struct {
 	Classes []HeartbeatClass  `json:"classes"`
 	Runners []HeartbeatRunner `json:"runners"`
 	Jobs    []HeartbeatJob    `json:"jobs"`
+	// Latest is boxrunner's latest release, once the agent has found it.
+	Latest string `json:"latest,omitempty"`
 }
 
 type HeartbeatDisk struct {
@@ -374,6 +388,8 @@ func (c *Client) once(ctx context.Context, call, method, u string, body []byte, 
 		return fmt.Errorf("worker %s: %w", call, err)
 	}
 	defer resp.Body.Close()
+	version := resp.Header.Get("Boxrunner-Worker-Version")
+	c.workerVersion.Store(&version)
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("worker %s: %w", call, err)

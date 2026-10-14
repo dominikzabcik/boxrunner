@@ -28,6 +28,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/listener"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
+	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
@@ -58,6 +59,9 @@ type Options struct {
 	Tick           time.Duration
 	HeartbeatEvery time.Duration
 	SysboxDir      string
+
+	// BoxrunnerReleasesURL is boxrunner's latest-release page.
+	BoxrunnerReleasesURL string
 }
 
 type Agent struct {
@@ -89,6 +93,8 @@ type Agent struct {
 	snapshot status.Snapshot
 	// imageDisk is what boxrunner's images take on disk after the last prune.
 	imageDisk atomic.Int64
+	// latest is boxrunner's latest release, once checkRelease found it.
+	latest atomic.Pointer[string]
 }
 
 // Run serves jobs until ctx ends. It returns an error only for a problem a
@@ -99,6 +105,7 @@ func Run(ctx context.Context, o Options) error {
 	o.JobsLog = cmp.Or(o.JobsLog, layout.JobsLogPath)
 	o.Socket = cmp.Or(o.Socket, layout.Socket)
 	o.ReleasesURL = cmp.Or(o.ReleasesURL, runnerimage.ReleasesLatest)
+	o.BoxrunnerReleasesURL = cmp.Or(o.BoxrunnerReleasesURL, release.Releases+"/latest")
 	o.Tick = cmp.Or(o.Tick, decideEvery)
 	o.HeartbeatEvery = cmp.Or(o.HeartbeatEvery, heartbeatEvery)
 	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
@@ -135,6 +142,7 @@ func Run(ctx context.Context, o Options) error {
 	go a.observe(ctx)
 	go a.heartbeat(ctx)
 	go a.checkImage(ctx)
+	go a.checkRelease(ctx)
 	supervised := make(chan struct{})
 	go func() {
 		defer close(supervised)
@@ -518,7 +526,7 @@ func (a *Agent) checkImage(ctx context.Context) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	for {
 		wait := imageEvery
-		latest, err := runnerimage.Latest(ctx, client, a.ReleasesURL)
+		latest, err := release.Latest(ctx, client, a.ReleasesURL)
 		if err != nil {
 			a.Log.Warn("checking the runner's latest release", "err", err)
 			wait = imageRetry
@@ -554,11 +562,15 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 }
 
 func (a *Agent) publish(s scheduler.State) {
+	workerVersion, _ := a.Worker.WorkerVersion()
 	snap := status.Snapshot{
-		Box: a.Config.Box, Version: a.Version,
+		Box: a.Config.Box, Version: a.Version, Worker: workerVersion,
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
+	}
+	if latest := a.latest.Load(); latest != nil {
+		snap.Latest = *latest
 	}
 	warm := scheduler.Warm(s)
 	active := map[string]int{}

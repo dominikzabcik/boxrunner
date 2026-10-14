@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agent, expectError, fakeGitHub, heartbeatBody, job, send, setUp, signIn, time } from './harness';
+import { version } from '../src/version';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -31,6 +32,7 @@ describe('GET / signed in', () => {
 			'<span>Signed in as octo</span>',
 			'<h2 id="box-0">box-1</h2>\n<p>Online, last seen <time datetime="2026-10-14T09:59:30.000Z">30 seconds ago</time></p>',
 			'<dt>Agent</dt><dd>0.2.0</dd>',
+			`<dt>Worker</dt><dd>${version}</dd>`,
 			'<dt>Image</dt><dd><code>2.338.0+3f9a2c0b1d4e</code></dd>',
 			'<dt>Disk</dt><dd>26.0 GB free, floor 10.0 GB</dd>',
 			'<tr><td>boxrunner</td><td>normal</td><td class="number">1</td><td class="number">0</td><td class="number">1</td></tr>',
@@ -53,6 +55,19 @@ describe('GET / signed in', () => {
 		expect(await (await view()).text()).toContain('<p>Online, last seen <time datetime="2026-10-14T09:59:30.000Z">2 minutes ago</time></p>');
 		time('2026-10-14T10:04:31Z');
 		expect(await (await view()).text()).toContain('<p class="alert">Offline, last seen <time datetime="2026-10-14T09:59:30.000Z">5 minutes ago</time></p>');
+	});
+
+	it('says when a newer release than the agent or the Worker is out', async () => {
+		const { call, view } = await ready();
+		await call('POST', '/v1/heartbeat', heartbeatBody({ version: '0.2.0', latest: '0.2.0' }));
+		const current = await (await view()).text();
+		expect(current).toContain('<dt>Agent</dt><dd>0.2.0</dd>');
+		expect(current).toContain(`<dt>Worker</dt><dd>${version}</dd>`);
+		await call('POST', '/v1/heartbeat', heartbeatBody({ version: '0.2.0', latest: '99.0.0' }));
+		const behind = await (await view()).text();
+		const out = '<span class="alert">99.0.0 is out</span> (<a href="https://boxrunner.zabcik.me/docs/upgrading/">upgrading</a>)';
+		expect(behind).toContain(`<dt>Agent</dt><dd>0.2.0, ${out}</dd>`);
+		expect(behind).toContain(`<dt>Worker</dt><dd>${version}, ${out}</dd>`);
 	});
 
 	it('flags free disk below the floor', async () => {
@@ -104,10 +119,12 @@ describe('GET /dashboard.json', () => {
 		const { html, ...data } = (await (await view('/dashboard.json')).json()) as Record<string, unknown> & { html: string };
 		expect(data).toEqual({
 			generatedAt: '2026-10-14T10:00:00.000Z',
+			workerVersion: version,
 			boxes: [
 				{
 					name: 'box-1',
 					version: '0.2.0',
+					latest: null,
 					image: '2.338.0+3f9a2c0b1d4e',
 					lastSeen: '2026-10-14T09:59:30.000Z',
 					secondsSinceSeen: 30,

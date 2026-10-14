@@ -26,7 +26,9 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/doctor"
 	"github.com/dominikzabcik/boxrunner/internal/install"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/status"
+	"github.com/dominikzabcik/boxrunner/internal/upgrade"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
 
@@ -37,6 +39,7 @@ const usage = `boxrunner runs GitHub Actions jobs in fresh containers on this bo
 
 Usage:
   boxrunner install [--worker URL] [--token TOKEN] [--box NAME] [--docker] [--sysbox]
+  boxrunner upgrade [--downgrade] [VERSION]
   boxrunner run
   boxrunner status
   boxrunner doctor
@@ -57,6 +60,8 @@ func main() {
 	switch os.Args[1] {
 	case "install":
 		err = installCmd(ctx, os.Args[2:])
+	case "upgrade":
+		err = upgradeCmd(ctx, os.Args[2:])
 	case "run":
 		err = runCmd(ctx)
 	case "status":
@@ -208,6 +213,37 @@ func prompt(label string, secret bool) string {
 	return strings.TrimSpace(line)
 }
 
+func upgradeCmd(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("upgrade", flag.ExitOnError)
+	downgrade := flags.Bool("downgrade", false, "install VERSION even when it is older than this agent")
+	flags.Parse(args)
+	if flags.NArg() > 1 {
+		return errors.New("usage: boxrunner upgrade [--downgrade] [VERSION]")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("upgrade changes the system; run it with sudo")
+	}
+	return upgrade.Run(ctx, upgrade.Options{
+		Version: version, Target: flags.Arg(0), Downgrade: *downgrade,
+		Releases: release.Releases, HTTP: &http.Client{Timeout: time.Minute},
+		Exec: install.Exec, Out: os.Stdout,
+		Install: func(ctx context.Context, script string) error {
+			cmd := exec.CommandContext(ctx, "sh", script)
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("the installer failed: %w", err)
+			}
+			return nil
+		},
+		Restart: func(ctx context.Context) error {
+			if out, err := exec.CommandContext(ctx, "systemctl", "try-restart", "boxrunner.service").CombinedOutput(); err != nil {
+				return fmt.Errorf("systemctl try-restart boxrunner.service: %s", strings.TrimSpace(string(out)))
+			}
+			return nil
+		},
+	})
+}
+
 func uninstallCmd(ctx context.Context) error {
 	if os.Geteuid() != 0 {
 		return errors.New("uninstall changes the system; run it with sudo")
@@ -239,7 +275,8 @@ func doctorCmd(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cfg, token, err := loadConfig()
-	checks := doctor.Checks{Config: cfg, ConfigErr: err, Exec: install.Exec, HTTP: &http.Client{Timeout: 15 * time.Second}}
+	checks := doctor.Checks{Config: cfg, ConfigErr: err, Exec: install.Exec, HTTP: &http.Client{Timeout: 15 * time.Second},
+		Version: version, ReleasesURL: release.Releases + "/latest"}
 	if err == nil {
 		checks.Worker = worker.New(worker.Options{URL: cfg.Worker, Token: token, Version: version,
 			HTTP: &http.Client{Timeout: 15 * time.Second}})
@@ -250,6 +287,13 @@ func doctorCmd(ctx context.Context) error {
 		if !r.OK {
 			mark = "FAIL"
 			failed++
+		}
+		fmt.Printf("%s  %-15s %s\n", mark, r.Name, r.Detail)
+	}
+	for _, r := range checks.Releases(ctx) {
+		mark := "ok  "
+		if !r.OK {
+			mark = "warn"
 		}
 		fmt.Printf("%s  %-15s %s\n", mark, r.Name, r.Detail)
 	}

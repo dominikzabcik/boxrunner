@@ -21,6 +21,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/release"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 )
 
@@ -74,6 +75,10 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	o.UnitEnabled = err == nil
 	_, err = run(ctx, "", "systemctl", "is-active", "--quiet", layout.UnitName)
 	o.UnitActive = err == nil
+	if pid, err := run(ctx, "", "systemctl", "show", "--property=MainPID", "--value", layout.UnitName); err == nil {
+		exe, err := os.Readlink("/proc/" + strings.TrimSpace(pid) + "/exe")
+		o.AgentReplaced = err == nil && strings.HasSuffix(exe, " (deleted)")
+	}
 
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -235,7 +240,7 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		if err := needDocker(); err != nil {
 			return d, err
 		}
-		version, err := runnerimage.Latest(ctx, &http.Client{Timeout: 30 * time.Second}, runnerimage.ReleasesLatest)
+		version, err := release.Latest(ctx, &http.Client{Timeout: 30 * time.Second}, runnerimage.ReleasesLatest)
 		if err != nil {
 			return d, err
 		}

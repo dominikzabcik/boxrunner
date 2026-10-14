@@ -106,6 +106,15 @@ func TestPlanUpgrade(t *testing.T) {
 	}
 }
 
+func TestPlanRestartsAnAgentWhoseBinaryInstallShReplaced(t *testing.T) {
+	o := installed()
+	o.AgentReplaced = true
+	want := []string{"restart boxrunner.service"}
+	if got := names(Plan(desired, o)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Plan = %q", got)
+	}
+}
+
 func TestPlanKeepsAnExistingConfig(t *testing.T) {
 	o := installed()
 	existing := "# mine\nworker = \"https://old.example\"\n\n[[class]]\nname = \"big\"\ncpus = 16\nmemory = \"60GiB\"\nmax = 3\n"

@@ -10,6 +10,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/release"
 )
 
 // TestBuildAgainstDocker builds the real job image with the latest runner and
@@ -26,7 +27,7 @@ func TestBuildAgainstDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := Latest(ctx, http.DefaultClient, ReleasesLatest)
+	version, err := release.Latest(ctx, http.DefaultClient, ReleasesLatest)
 	if err != nil {
 		t.Fatal(err)
 	}
