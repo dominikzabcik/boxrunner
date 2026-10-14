@@ -84,6 +84,15 @@ func span(from, to time.Time) time.Duration {
 	return to.Sub(from)
 }
 
+// waitText shows a queue wait, or "?" for a job logged before boxrunner knew
+// when it was queued.
+func waitText(j Job) string {
+	if j.Queued.IsZero() {
+		return "?"
+	}
+	return j.Wait().Round(time.Second).String()
+}
+
 const maxLog = 1 << 20
 
 // Append adds a job to the log, dropping the older half when it grows past a
@@ -233,7 +242,7 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	fmt.Fprintln(t, "FINISHED\tREPOSITORY\tCLASS\tJOB\tRESULT\tQUEUED FOR\tTOOK")
 	for _, j := range s.Jobs {
 		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.Finished.Local().Format("Jan 02 15:04"), j.Repo, j.Class,
-			orNone(j.Name), j.Result, j.Wait().Round(time.Second), j.Took().Round(time.Second))
+			orNone(j.Name), j.Result, waitText(j), j.Took().Round(time.Second))
 	}
 	t.Flush()
 }

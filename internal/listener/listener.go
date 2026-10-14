@@ -182,7 +182,12 @@ func (l *listener) publish(ctx context.Context, msg *queue.Message, stats *queue
 			l.track(j.Job)
 			u.Started = append(u.Started, j.RunnerName)
 		}
-		for _, j := range msg.Completed {
+		for i, j := range msg.Completed {
+			// GitHub leaves queueTime out of JobCompleted; the listener saw it
+			// when the job was offered or assigned.
+			if t, ok := l.jobs[j.RequestID]; ok && j.QueueTime.IsZero() {
+				msg.Completed[i].QueueTime = t
+			}
 			delete(l.jobs, j.RequestID)
 		}
 		u.Completed = msg.Completed

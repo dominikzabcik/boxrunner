@@ -196,3 +196,21 @@ func TestIneligibleRepoStops(t *testing.T) {
 		t.Errorf("worker calls = %q", w.calls)
 	}
 }
+
+func TestCompletedJobKeepsItsQueueTime(t *testing.T) {
+	events := make(chan scheduler.Event, 2)
+	l := &listener{Config: Config{ScaleSet: key, ScaleSetID: 7, Events: events, Now: func() time.Time { return t0 }}, jobs: map[int64]time.Time{}}
+	queued := t0.Add(-8 * time.Second)
+	ctx := context.Background()
+	if err := l.publish(ctx, &queue.Message{Available: []queue.Job{{RequestID: 501, QueueTime: queued}}}, &queue.Statistics{TotalAssignedJobs: 1}); err != nil {
+		t.Fatal(err)
+	}
+	<-events
+	if err := l.publish(ctx, &queue.Message{Completed: []queue.JobCompleted{{Job: queue.Job{RequestID: 501}, Result: "succeeded"}}}, &queue.Statistics{}); err != nil {
+		t.Fatal(err)
+	}
+	u := (<-events).(scheduler.Update)
+	if got := u.Completed[0].QueueTime; !got.Equal(queued) {
+		t.Errorf("completed job queue time = %v, want %v", got, queued)
+	}
+}
