@@ -6,13 +6,20 @@
 Text is shaped with HarfBuzz (hb-shape) and written as outlines, so GitHub
 shows it in the site's faces without loading a font. Needs Python with
 fonttools and brotli (pip3 install fonttools brotli) and hb-shape (HarfBuzz).
+
+Also draws the logo, the site's favicon and app icons and the repository's
+social preview. The PNGs are screenshots from headless Chrome, found on the
+PATH or at the path in $CHROME.
 """
 
 import json
 import math
+import os
 import random
+import shutil
 import subprocess
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from fontTools.pens.svgPathPen import SVGPathPen
@@ -20,7 +27,9 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
 
 ART = Path(__file__).resolve().parent
-FONTS = ART.parent.parent / "site" / "fonts"
+SITE = ART.parent.parent / "site"
+WORKER = ART.parent.parent / "worker" / "src"
+FONTS = SITE / "fonts"
 TMP = Path(tempfile.mkdtemp())
 
 C = {
@@ -127,26 +136,50 @@ def runs(parts, size, x, y):
     return "".join(out), x
 
 
-def svg(name, w, h, title, body, style=""):
+def document(w, h, title, body, style="", background=None):
+    """A standalone SVG with its glyphs, after which the next image starts with none."""
+    if background is None:
+        background = f'<rect width="{w}" height="{h}" rx="18" fill="{C["night"]}"/>'
     defs = "".join(f'<path id="{k}" d="{d}"/>' for k, d in USED.items() if d)
-    doc = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" role="img">'
-        f"<title>{title}</title>"
-        f"<style>{style}</style>"
-        f"<defs>{defs}</defs>"
-        f'<rect width="{w}" height="{h}" rx="18" fill="{C["night"]}"/>'
-        f"{body}</svg>\n"
-    )
     USED.clear()
-    (ART / name).write_text(doc)
-    print(f"{name}: {len(doc.encode()) // 1024} kB")
-
-
-def logo(x, y, s=1.0):
     return (
-        f'<rect x="{x + 1.5 * s}" y="{y + 1.5 * s}" width="{17 * s}" height="{17 * s}" fill="none" stroke="{C["ink"]}" stroke-width="{2.6 * s}"/>'
-        f'<rect x="{x + 6 * s}" y="{y + 6 * s}" width="{8 * s}" height="{8 * s}" fill="{C["normal"]}"/>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {num(w)} {h}" width="{num(w)}" height="{h}" role="img">'
+        f"<title>{title}</title>"
+        + (f"<style>{style}</style>" if style else "")
+        + (f"<defs>{defs}</defs>" if defs else "")
+        + f"{background}{body}</svg>\n"
     )
+
+
+def write(path, doc):
+    path.write_text(doc)
+    print(f"{path.relative_to(ART.parent.parent)}: {len(doc.encode()) / 1024:.1f} kB")
+
+
+def svg(name, w, h, title, body, style=""):
+    write(ART / name, document(w, h, title, body, style))
+
+
+# The mark, on a 16-unit grid so that a 16 px favicon lands on whole pixels: the box
+# you already own, the main job's container in it, and idle jobs in the room it leaves.
+BOX = "M2 2h12v12H2zM3 3v10h10V3z"
+MAIN = "M4 4h5v5H4z"
+IDLE_CELLS = [(10, 4), (10, 7), (4, 10), (7, 10), (10, 10)]
+IDLE = "".join(f"M{x} {y}h2v2h-2z" for x, y in IDLE_CELLS)
+
+
+def filled(color):
+    return f'fill="{color}"'
+
+
+def mark_paths(box):
+    """The mark on its grid; box paints the box, with a fill or a class."""
+    return f'<path d="{BOX}" fill-rule="evenodd" {box}/><path d="{MAIN}" {filled(C["normal"])}/><path d="{IDLE}" {filled(C["idle"])}/>'
+
+
+def mark(x, y, size, box):
+    """The mark's 12 units, from (2, 2) to (14, 14), drawn size wide with its corner at (x, y)."""
+    return f'<g transform="translate({num(x)} {num(y)}) scale({size / 12:.4g}) translate(-2 -2)">{mark_paths(box)}</g>'
 
 
 EDGES = [(0, 1), (1, 3), (3, 2), (2, 0), (4, 5), (5, 7), (7, 6), (6, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
@@ -181,7 +214,7 @@ def dots(points):
 
 def hero():
     W, H = 1200, 540
-    body = [logo(56, 48)]
+    body = [mark(56, 48, 18, filled(C["ink"]))]
     p, _ = text(mono_bold, "boxrunner", 19, 86, 64, C["ink"])
     body.append(p)
     p, _ = text(mono, "boxrunner.zabcik.me", 15, W - 56, 63, C["dim"], anchor="end")
@@ -417,8 +450,105 @@ def terminal():
     file.write_text(doc)
 
 
+def chrome():
+    for found in [os.environ.get("CHROME"), shutil.which("google-chrome"), shutil.which("chromium"), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]:
+        if found and Path(found).exists():
+            return found
+    raise SystemExit("build.py: no Chrome found; set CHROME to its binary")
+
+
+def png(doc, w, h, path):
+    """Screenshots an SVG at w by h CSS pixels, transparent where it draws nothing."""
+    src = TMP / f"{path.stem}.svg"
+    src.write_text(doc)
+    page = TMP / f"{path.stem}.html"
+    page.write_text(f'<!doctype html><style>html,body{{margin:0;background:transparent}}img{{display:block}}</style><img src="{src.name}" width="{w}" height="{h}">')
+    subprocess.run(
+        [
+            chrome(), "--headless", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+            "--default-background-color=00000000", f"--user-data-dir={TMP / 'chrome'}",
+            f"--window-size={w},{h}", f"--screenshot={path}", page.as_uri(),
+        ],
+        check=True, capture_output=True,
+    )
+    print(f"{path.relative_to(ART.parent.parent)}: {path.stat().st_size / 1024:.1f} kB")
+
+
+def tile(rounded):
+    corner = ' rx="3.5"' if rounded else ""
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16"{corner} {filled(C["night"])}/>'
+        f'{mark_paths(filled(C["ink"]))}</svg>\n'
+    )
+
+
+def lockup(fg, x=0.0, y=0.0):
+    """The mark beside the name in Geist Mono, as the site's header sets it; returns (markup, width)."""
+    size, h, gap = 30, 36, 20
+    cap = mono_bold.font["OS/2"].sCapHeight / mono_bold.upem * size
+    words, w = text(mono_bold, "boxrunner", size, x + h + gap, y + h / 2 + cap / 2, fg)
+    return mark(x, y, h, filled(fg)) + words, h + gap + w
+
+
+def particle_mark(x, y, size):
+    """The mark drawn in particles, the way the site draws its box."""
+    unit = size / 12
+    pitch = unit / 2.5
+
+    def at(u, v):
+        return x + (u - 2) * unit, y + (v - 2) * unit
+
+    def fill(u, v, w, h):
+        n, m = round(w * 2.5), round(h * 2.5)
+        return [at(u + (i + 0.5) * w / n, v + (j + 0.5) * h / m) for i in range(n) for j in range(m)]
+
+    edge = round(11 * unit / pitch)
+    corners = [(2.5, 2.5), (13.5, 2.5), (13.5, 13.5), (2.5, 13.5)]
+    shell = [at(a + (c - a) * i / edge, b + (d - b) * i / edge) for (a, b), (c, d) in zip(corners, corners[1:] + corners[:1]) for i in range(edge)]
+    idle = [pt for u, v in IDLE_CELLS for pt in fill(u, v, 2, 2)]
+    width = pitch * 0.6
+    return (
+        f'<path d="{dots(shell)}" stroke="{C["ink"]}" stroke-width="{width:.1f}" stroke-linecap="round" opacity=".7"/>'
+        f'<path d="{dots(fill(4, 4, 5, 5))}" stroke="{C["normal"]}" stroke-width="{width:.1f}" stroke-linecap="round"/>'
+        f'<path d="{dots(idle)}" stroke="{C["idle"]}" stroke-width="{width:.1f}" stroke-linecap="round"/>'
+    )
+
+
+def social():
+    W, H = 1280, 640
+    body = [lockup(C["ink"], 80, 76)[0]]
+    size, lead, top = 104, 96, 330
+    p, _ = text(display, "CI on the box", size, 74, top, C["ink"], tracking=-0.035)
+    body.append(p)
+    p, w = text(display, "you ", size, 74, top + lead, C["ink"], tracking=-0.035)
+    body.append(p)
+    p, _ = text(display, "already", size, 74 + w, top + lead, None, tracking=-0.035, stroke=(C["ink"], 1.8))
+    body.append(p)
+    p, _ = text(display, "pay for.", size, 74, top + 2 * lead, C["ink"], tracking=-0.035)
+    body.append(p)
+    body.append(particle_mark(W - 80 - 340, (H - 340) / 2, 340))
+    return document(W, H, "boxrunner: CI on the box you already pay for.", "".join(body), background=f'<rect width="{W}" height="{H}" fill="{C["night"]}"/>')
+
+
+def brand():
+    favicon = tile(rounded=True)
+    write(SITE / "favicon.svg", favicon)
+    uri = "data:image/svg+xml," + urllib.parse.quote(favicon.strip(), safe=" =/:.-")
+    write(WORKER / "favicon.ts", f"// Drawn by docs/art/build.py, the same as site/favicon.svg.\nexport const favicon = '{uri}';\n")
+    write(SITE / "mark.svg", f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 2 12 12" aria-hidden="true">{mark_paths(filled(C["ink"]))}</svg>\n')
+    style = f'.box{{fill:{C["ink"]}}}@media (prefers-color-scheme:light){{.box{{fill:{C["night"]}}}}}'
+    write(ART / "logo.svg", document(96, 96, "boxrunner", mark(0, 0, 96, 'class="box"'), style, background=""))
+    for name, fg in [("logo-lockup-dark.svg", C["ink"]), ("logo-lockup-light.svg", C["night"])]:
+        body, w = lockup(fg)
+        write(ART / name, document(w, 36, "boxrunner", body, background=""))
+    for size, rounded, name in [(180, False, "apple-touch-icon.png"), (192, True, "icon-192.png"), (512, True, "icon-512.png")]:
+        png(tile(rounded), size, size, SITE / name)
+    png(social(), 1280, 640, ART / "social-preview.png")
+
+
 hero()
 bench()
 flow()
 icons()
 terminal()
+brand()

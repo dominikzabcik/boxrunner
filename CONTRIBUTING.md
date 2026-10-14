@@ -11,7 +11,7 @@ Thank you for helping. Bug reports with `boxrunner doctor` output, fixes, docs a
 | `worker/` | The Cloudflare Worker that holds the GitHub App key |
 | `install.sh` | The installer; releases write the version and checksums into it |
 | `docs/` | Architecture, the Worker API, configuration and the decisions behind them |
-| `docs/art/` | The README's images and `build.py`, which draws them from the site's fonts and colors |
+| `docs/art/` | The README's images, the logo and `build.py`, which draws them from the site's fonts and colors |
 | `site/` | The website at boxrunner.zabcik.me, with the docs rendered from `docs/` and the README |
 
 Read [docs/architecture.md](docs/architecture.md) before changing how the parts talk to each other. The design is a contract, so a change to it comes with a change to that page.
@@ -43,7 +43,7 @@ bun install
 bun run check
 ```
 
-After changing the words or numbers in the README's images, redraw them with `python3 docs/art/build.py` (it needs `pip3 install fonttools brotli` and HarfBuzz's `hb-shape`).
+After changing the words or numbers in the README's images, or the logo, redraw them with `python3 docs/art/build.py` (it needs `pip3 install fonttools brotli`, HarfBuzz's `hb-shape` and Chrome for the PNGs). It also writes the site's favicon, app icons and header mark and the Worker's favicon.
 
 Shell scripts pass `shellcheck`. CI runs all of this, plus gitleaks and zizmor, on every pull request.
 

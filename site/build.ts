@@ -1,6 +1,6 @@
 // Builds dist/: the landing page, the docs rendered from ../docs and ../README.md, a 404 page,
-// fonts under content-hashed names, the OG image, robots.txt, sitemap.xml and _headers with a
-// CSP that allows each inline <script> and <style> by its hash.
+// fonts under content-hashed names, the icons, the OG image, the web manifest, robots.txt,
+// sitemap.xml and _headers with a CSP that allows each inline <script> and <style> by its hash.
 import { Marked } from 'marked';
 import { chromium, type Browser } from 'playwright-core';
 import { createHash } from 'node:crypto';
@@ -37,7 +37,10 @@ const docPath = (doc: Doc) => `/docs/${doc.slug ? `${doc.slug}/` : ''}`;
 type Page = { path: string; html: string };
 type Rendered = { doc: Doc; title: string; description: string; toc: { id: string; html: string }[]; body: string };
 
-const landing = await read('site/index.html');
+// The header's mark, drawn by docs/art/build.py, is inlined where index.html says <!--mark-->.
+const mark = (await Bun.file(join(site, 'mark.svg')).text()).trim();
+const landing = (await read('site/index.html')).replace('<!--mark-->', mark);
+if (!landing.includes(mark)) throw new Error('index.html: the <!--mark--> placeholder is missing');
 const landingStyle = landing.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
 const cut = landingStyle.indexOf('/* Everything above this line is shared');
 if (cut < 0) throw new Error('index.html: the marker that ends the shared stylesheet is missing');
@@ -226,6 +229,8 @@ ${url ? `<meta property="og:url" content="${url}">\n` : ''}<meta property="og:im
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="${tokens.night}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <style>${base}${docsCss}</style>
@@ -284,14 +289,14 @@ async function ogImage(browser: Browser, fonts: (html: string) => string) {
 body { margin: 0; background: var(--night); color: var(--ink); }
 .card { position: relative; width: 1200px; height: 630px; overflow: hidden; padding: 64px 72px; box-sizing: border-box; display: grid; grid-template-rows: auto 1fr auto; }
 .box { position: absolute; right: -10px; top: 30px; width: 540px; height: 600px; object-fit: contain; }
-.mark { font-size: 22px; gap: 14px; } .mark i { width: 20px; height: 20px; border-width: 2px; } .mark i::after { inset: 4px; }
+.mark { font-size: 22px; gap: 14px; } .mark svg { width: 24px; height: 24px; }
 .eyebrow { font: 500 17px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 12px; }
 .eyebrow .live { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
 h1 { position: relative; font: 800 100px/.92 var(--f-display); letter-spacing: -0.035em; margin: 0; max-width: 680px; align-self: center; }
 h1 .w { display: inline-block; }
 h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 2px var(--ink); }
 </style>
-<div class="card"><span class="mark"><i></i>boxrunner</span>${headline}${eyebrow}<img class="box" src="${box}" alt=""></div>`;
+<div class="card"><span class="mark">${mark}boxrunner</span>${headline}${eyebrow}<img class="box" src="${box}" alt=""></div>`;
 	await page.route('**/og-card', (route) => route.fulfill({ contentType: 'text/html', body: card }));
 	await page.setViewportSize({ width: 1200, height: 630 });
 	await page.goto(new URL('/og-card', server.url).href);
@@ -313,7 +318,7 @@ for (const name of readdirSync(join(site, 'fonts'))) {
 	fontNames.set(`/fonts/${name}`, `/fonts/${hashed}`);
 }
 const withFonts = (html: string) => [...fontNames].reduce((out, [from, to]) => out.replaceAll(from, to), html);
-cpSync(join(site, 'favicon.svg'), join(dist, 'favicon.svg'));
+for (const icon of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png']) cpSync(join(site, icon), join(dist, icon));
 cpSync(join(site, 'deploy-to-cloudflare.svg'), join(dist, 'deploy-to-cloudflare.svg'));
 
 const browser = await chromium.launch();
@@ -387,6 +392,16 @@ try {
 ${listed.map((p) => `  <url><loc>${ORIGIN}${p.path}</loc></url>`).join('\n')}
 </urlset>
 `,
+	);
+	await Bun.write(
+		join(dist, 'manifest.webmanifest'),
+		JSON.stringify({
+			name: 'boxrunner',
+			icons: [192, 512].map((size) => ({ src: `/icon-${size}.png`, sizes: `${size}x${size}`, type: 'image/png' })),
+			theme_color: tokens.night,
+			background_color: tokens.night,
+			display: 'browser',
+		}),
 	);
 	await Bun.write(join(dist, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${ORIGIN}/sitemap.xml\n`);
 	await ogImage(browser, withFonts);

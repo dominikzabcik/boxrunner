@@ -1,4 +1,5 @@
 import { sha256Base64 } from './crypto';
+import { favicon } from './favicon';
 
 const style = `
 :root { color-scheme: light dark; --bg: #fff; --fg: #1a1a1a; --muted: #555; --line: #c8c8c8; --accent: #0b57d0; --alert: #b3261e; }
@@ -63,11 +64,12 @@ export type Page = {
 	headers?: Record<string, string>;
 };
 
-/** An HTML page whose CSP allows exactly its own inline style and script. */
+/** An HTML page whose CSP allows exactly its own inline style and script, and its favicon as a data URI. */
 export async function page({ status, title, body, header, wide, script, formTargets, connect, next, headers = {} }: Page) {
 	const csp = [
 		"default-src 'none'",
 		`style-src 'sha256-${await hashOf(style)}'`,
+		'img-src data:',
 		script ? `script-src 'sha256-${await hashOf(script)}'` : '',
 		connect ? "connect-src 'self'" : '',
 		`form-action 'self'${formTargets ? ` ${formTargets}` : ''}`,
@@ -83,6 +85,7 @@ export async function page({ status, title, body, header, wide, script, formTarg
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
+<link rel="icon" href="${favicon}">
 ${next ? `<meta http-equiv="refresh" content="0; url=${escape(next)}">\n` : ''}<title>${escape(title)} · boxrunner</title>
 <style>${style}</style>
 </head>
