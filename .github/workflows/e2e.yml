@@ -7,9 +7,11 @@ on:
   pull_request:
     paths:
       - cmd/**
+      - internal/agent/**
       - internal/install/**
       - internal/firewall/**
       - internal/doctor/**
+      - internal/layout/**
       - install.sh
       - scripts/build-release.sh
       - scripts/e2e/**
