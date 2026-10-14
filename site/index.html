@@ -42,14 +42,13 @@ nav.top a:hover { color: var(--ink); }
 @media (max-width: 560px) { nav.top ul li:not(:last-child) { display: none; } }
 
 /* hero */
-.hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: end; overflow: hidden; isolation: isolate; }
+.hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; overflow: hidden; isolation: isolate; }
 #field { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; pointer-events: none; }
 header.hero, main, footer { position: relative; z-index: 1; }
 
 .hero::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(90deg, var(--night) 0%, rgba(7,10,16,.7) 38%, transparent 62%), linear-gradient(transparent 70%, var(--night)); }
-@media (max-width: 760px) { .hero::after { background: linear-gradient(transparent 20%, rgba(7,10,16,.75) 52%, var(--night) 75%); } .hero .copy { padding-top: 46vh; } }
-.hero .copy { padding-block: 132px 56px; width: 100%; }
+  background: none; }
+.hero .copy { padding-block: 112px 48px; width: 100%; }
 .copytext { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; max-width: 640px; min-width: 0; }
 .install > * { min-width: 0; }
 .eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 10px; }
@@ -163,11 +162,17 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: var(--night); padding: 10px 14px; border-radius: 8px; font: 500 13px var(--f-mono); transition: .25s; pointer-events: none; z-index: 9; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { .reveal, .race .fill { transition: none; } .eyebrow .live, .term .caret { animation: none; } }
-/* On wide screens the box owns the right half; every chapter and its panels stay in the left column. */
-@media (min-width: 1100px) {
-  .ch .measure > *, footer .measure > * { max-width: 660px; }
-  .pair { grid-template-columns: 1fr; }
-  .receipt { max-width: 380px; }
+/* Each chapter pairs its words with a stage; the one particle box flies from stage to stage as you scroll. */
+.split, .intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); gap: clamp(24px, 4vw, 64px); align-items: center; }
+.intro { margin-bottom: clamp(28px, 4vw, 48px); }
+.intro .head { margin-bottom: 0; }
+.stage { min-height: clamp(300px, 32vw, 440px); }
+.hero .stage { min-height: clamp(380px, 44vw, 600px); }
+.foot { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+@media (max-width: 900px) {
+  .split, .intro { grid-template-columns: minmax(0, 1fr); }
+  .stage, .hero .stage { min-height: 260px; order: -1; }
+  .hero .copy { padding-top: 84px; }
 }
 </style>
 
@@ -185,7 +190,7 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
 <canvas id="field" aria-hidden="true"></canvas>
 <header class="hero gutter" id="top" data-scene="hero">
-  <div class="copy measure">
+  <div class="copy measure split">
     <div class="copytext">
       <div class="eyebrow"><span class="live" aria-hidden="true"></span>Self-hosted GitHub Actions runners</div>
       <h1><span class="w">CI on the box</span> <span class="w">you <em>already</em></span> <span class="w">pay for.</span></h1>
@@ -201,16 +206,20 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
         <span>containers since load <b id="tk-born">0</b></span>
       </div>
     </div>
+    <div class="stage" aria-hidden="true"></div>
   </div>
 </header>
 
 <main>
   <section class="ch gutter" id="cores" data-scene="cores">
     <div class="measure">
+      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Priority classes</div>
         <h2>Your <span class="n">tests</span> keep every core. <span class="i">The rest</span> waits its turn.</h2>
         <p class="sub">Light jobs run in an idle-priority class, scheduled by Linux's SCHED_IDLE: they use any core your main job is not using, and give it back the instant it wants it. Flip the switch to see the same box without it.</p>
+      </div>
+        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="scope reveal">
         <canvas id="lanes" role="img" aria-label="Four CPU cores over time: a normal-priority job takes cores in bursts, idle-priority jobs fill the gaps"></canvas>
@@ -232,10 +241,13 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
   <section class="ch gutter" id="key" data-scene="key">
     <div class="measure">
+      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Key custody</div>
         <h2>The <span class="k">key</span> stays in your Worker. The box gets tokens that expire.</h2>
         <p class="sub">The GitHub App can administer your repositories, so its private key lives only in a Cloudflare Worker you deploy. The box can ask for one thing: a runner for one job.</p>
+      </div>
+        <div class="stage" aria-hidden="true"></div>
       </div>
       <p class="caption mono reveal"><span class="k">●</span> the vault holds your key &nbsp; <span class="n">●</span> tokens travel to your box &nbsp; <span class="n">●</span> one job's container forms and dissolves</p>
       <div class="vault">
@@ -251,10 +263,13 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
   <section class="ch gutter" id="install" data-scene="install">
     <div class="measure">
+      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Install</div>
         <h2>One line on the box. Then minutes stop costing money.</h2>
         <p class="sub">Deploy the Worker with one click, open its setup page, run the line it gives you. The installer checks the binary's checksum and its build attestation before anything runs.</p>
+      </div>
+        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="pair">
         <div class="term"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div><pre id="term" aria-label="Installing boxrunner and checking its status"></pre></div>
@@ -274,10 +289,13 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 
   <section class="ch gutter" id="proof" data-scene="install">
     <div class="measure">
+      <div class="intro">
       <div class="head reveal">
         <div class="kicker">Why it exists</div>
         <h2>A personal site spent 2,000 free minutes in twelve days.</h2>
         <p class="sub">Lighthouse, Playwright and CodeQL on every pull request. A 4-core ARM VPS that was already paid for now runs all of it, faster.</p>
+      </div>
+        <div class="stage" aria-hidden="true"></div>
       </div>
       <div class="race pending" id="race">
         <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill" style="--w:100%;--c:var(--faint)"></div></div><span class="t">~15 min</span></div>
@@ -287,11 +305,14 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     </div>
   </section>
 
-  <section class="ch gutter" id="not" data-scene="hero">
+  <section class="ch gutter" id="not">
     <div class="measure">
+      <div class="intro">
       <div class="head reveal">
         <div class="kicker">When not to use it</div>
         <h2>Honest limits.</h2>
+      </div>
+        
       </div>
       <div class="nots">
         <div class="not"><strong>Public repositories</strong><span>Anyone who can open a pull request could run code on your box. The Worker refuses them.</span></div>
@@ -304,13 +325,16 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 </main>
 
 <footer class="gutter" data-scene="hero">
-  <div class="measure" style="display:grid;grid-template-columns:minmax(0,1fr);gap:22px">
+  <div class="measure split">
+   <div class="foot">
     <h2>Your box is waiting.</h2>
     <div class="install">
       <div class="cmd"><code><span class="p">$ </span>curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh</code><button class="copybtn" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh" id="copy-foot">copy</button></div>
       <a class="ghost" href="https://github.com/dominikzabcik/boxrunner">Read the source</a>
     </div>
     <div class="meta"><span>Apache-2.0</span><span>Go agent · Cloudflare Worker</span><span>amd64 · arm64</span><span>Built by Dominik Žabčík</span></div>
+   </div>
+   <div class="stage" aria-hidden="true"></div>
   </div>
 </footer>
 <div class="toast" id="toast" role="status">Copied</div>
@@ -431,12 +455,14 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   const PITCH = { hero: -.42, cores: -.12, key: -.18, install: -.38 };
 
   const sections = [...document.querySelectorAll('[data-scene]')], hero = document.getElementById('top');
+  const stages = sections.map((sec) => sec.querySelector('.stage'));
   function sceneAt() {
     const vh = H; let i = 0;
-    for (let k = 0; k < sections.length; k++) if (sections[k].getBoundingClientRect().top <= vh * .95) i = k;
+    for (let k = 0; k < sections.length; k++) if (sections[k].getBoundingClientRect().top <= vh * .7) i = k;
     const top = sections[i].getBoundingClientRect().top;
-    const k = i === 0 ? 1 : ease((vh * .95 - top) / (vh * .5));
-    return { from: sections[Math.max(0, i - 1)].dataset.scene, to: sections[i].dataset.scene, k };
+    const k = i === 0 ? 1 : ease((vh * .7 - top) / (vh * .45));
+    const a = Math.max(0, i - 1);
+    return { from: sections[a].dataset.scene, to: sections[i].dataset.scene, k, ra: stages[a].getBoundingClientRect(), rb: stages[i].getBoundingClientRect() };
   }
 
   const pointer = { x: -1e4, y: -1e4, tx: 0, ty: 0, active: false };
@@ -455,9 +481,11 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   function frame(now) {
     const dt = Math.min(.05, (now - lastT) / 1000); lastT = now; elapsed += dt;
     const sv = scrollY - lastScroll; lastScroll = scrollY; scrollVel += (sv - scrollVel) * .15;
-    const { from, to, k } = sceneAt();
-    const narrow = W < 1100;
-    const cx = narrow ? W * .5 : W * .77, cy = narrow ? H * .3 : H * .5, scale = narrow ? Math.min(W, H) * .19 : Math.min(W * .15, H * .23);
+    const { from, to, k, ra, rb } = sceneAt();
+    // The box flies from the last chapter's stage to this one's and travels with it.
+    const lerp = (x, y) => x + (y - x) * k;
+    const cx = lerp(ra.left + ra.width / 2, rb.left + rb.width / 2), cy = lerp(ra.top + ra.height / 2, rb.top + rb.height / 2);
+    const scale = lerp(Math.min(ra.width, ra.height) * .4, Math.min(rb.width, rb.height) * .4);
     const spin = SPIN[from] * (1 - k) + SPIN[to] * k;
     if (!reduce) rotY += dt * .16 * spin + scrollVel * .0018;
     rotX += ((PITCH[from] * (1 - k) + PITCH[to] * k) - rotX) * Math.min(1, dt * 2);
@@ -465,9 +493,7 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     tiltY += ((pointer.active ? pointer.tx * .6 : 0) - tiltY) * .05;
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';
-    // On narrow screens the box sits behind the text, so it fades out once the hero scrolls away.
-    const heroLeft = narrow ? Math.max(0, Math.min(1, hero.getBoundingClientRect().bottom / H - .15)) : 1;
-    const fade = narrow ? .5 * heroLeft : 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
+    const fade = 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
     for (const p of parts) {
       SCENES[from](p, elapsed, A); SCENES[to](p, elapsed, B);
       for (let q = 0; q < 3; q++) { const target = A.x[q] + (B.x[q] - A.x[q]) * k; p.p[q] += (target - p.p[q]) * settle; }
