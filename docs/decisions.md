@@ -96,6 +96,16 @@ Docker stops every container when its daemon stops, unless `live-restore` is on 
 
 Sysbox's documentation does not mention live-restore, and it was not tried on a box with boxrunner. `boxrunner drain` covers every case instead: no job runs when Docker or the box restarts. `doctor` shows whether live-restore is on, for a box whose owner turned it on.
 
+## The runner image's provenance is checked in the agent
+
+GitHub publishes one Sigstore bundle with SLSA provenance for each of the 19 `ghcr.io/actions/actions-runner` releases from 2.323.0 to 2.338.0, the newest on October 14, 2026; 2.320.0 to 2.322.0 have none. Each is signed through Sigstore's public Fulcio and Rekor by `https://github.com/actions/runner/.github/workflows/release.yml@refs/heads/releases/m<minor>`, with the release's minor version (`m327` for both 2.327.0 and 2.327.1), and names the tag's multi-platform index digest. The bundles are served by GitHub's attestation API, which needs no token for actions/runner. The registry has none: `ghcr.io` answered 404 to both the OCI referrers API and the `sha256-<digest>` tag for 2.338.0's digest. Three ways to verify them were weighed:
+
+- **sigstore-go in the agent (chosen).** It is Sigstore's Go library and the one `gh attestation verify` uses, Apache-2.0 like boxrunner. The box needs no other tool or token, and the tests verify a real bundle offline. It is not small: the release binary grows from 8.2 MB to 20.1 MB on amd64 (7.6 MB to 18.8 MB on arm64, Go 1.26.9, `-trimpath -s -w`), and the agent links 72 modules instead of one: 23 go-openapi modules behind Rekor's generated API models, gRPC, OpenTelemetry, protobuf and the TUF client among them. That code runs as root on the box, kept current by Dependabot and govulncheck.
+- **`gh attestation verify` when gh is on the box, with the digest pin alone otherwise.** Without a signed-in account, gh 2.99.0 refuses to fetch the attestations but verifies a bundle the agent fetched and passed with `--bundle`. `install` does not install gh, though, so on a box set up as the docs say this would always fall back to the pin, which says nothing about where the image came from. Installing gh on the host would add a second program and package repository to a box that otherwise needs one binary and Docker.
+- **cosign in a container pinned by digest.** It keeps the binary small and runs the verifier without root. But the agent would pull and run a second image, copy the bundle into it, read the result from its exit code and keep the pinned digest current by hand, and only a test against Docker could cover it.
+
+The certificate's branch is bound to the version so that a registry that answers with an older minor release's digest is refused, as the tests show with 2.338.0's bundle served as 2.339.0. A patch release shares its branch with the minor release, so within one minor release the check cannot tell them apart. If actions/runner ever renames its release branches, builds fail closed, `doctor` says so, and boxes keep their image until a boxrunner release follows the new name.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.
