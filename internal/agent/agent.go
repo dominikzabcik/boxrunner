@@ -58,8 +58,10 @@ type Options struct {
 type Agent struct {
 	Options
 	rootDir string
-	queue   *queue.Client
-	events  chan scheduler.Event
+	// sysbox is whether Docker can run the jobs of classes with docker = true.
+	sysbox bool
+	queue  *queue.Client
+	events chan scheduler.Event
 	// stopped closes when the scheduler loop no longer reads events.
 	stopped chan struct{}
 	fatal   chan error
@@ -90,6 +92,7 @@ func Run(ctx context.Context, o Options) error {
 		return fmt.Errorf("docker: %w", err)
 	}
 	a.rootDir = info.RootDir
+	_, a.sysbox = info.Runtimes[layout.SysboxRuntime]
 	if err := a.converge(ctx); err != nil {
 		return err
 	}
@@ -237,7 +240,8 @@ func runnerName(box, class string) string {
 
 // Spec is the container for one runner: the class's limits, the bridge
 // network, no mounts and no Docker socket. The runner config travels in the
-// environment, never on a command line.
+// environment, never on a command line. A class with Docker runs under Sysbox
+// and starts its own daemon.
 func Spec(box string, class config.Class, r scheduler.Runner, jitConfig string) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  r.Name,
@@ -259,6 +263,10 @@ func Spec(box string, class config.Class, r scheduler.Runner, jitConfig string) 
 	}
 	if class.Priority == config.Idle {
 		spec.CgroupParent = layout.IdleSlice
+	}
+	if class.Docker {
+		spec.Runtime = layout.SysboxRuntime
+		spec.Env = append(spec.Env, layout.EnvDocker)
 	}
 	return spec
 }
@@ -513,6 +521,10 @@ func (a *Agent) supervise(ctx context.Context) error {
 		for _, c := range a.Config.Classes {
 			if !slices.Contains(repos.Classes, c.Name) {
 				a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
+				continue
+			}
+			if c.Docker && !a.sysbox {
+				a.Log.Error("class has docker = true but Docker has no "+layout.SysboxRuntime+" runtime; run `sudo boxrunner install --docker`; not serving it", "class", c.Name)
 				continue
 			}
 			for _, r := range repos.Repos {

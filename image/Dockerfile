@@ -13,7 +13,7 @@ RUN install -d -m 755 /etc/apt/keyrings \
 	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
 RUN apt-get update -qq \
 	&& DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-		build-essential ca-certificates curl gh git jq python3 python3-pip python3-venv shellcheck unzip zstd >/dev/null \
+		build-essential ca-certificates curl gh git iptables jq python3 python3-pip python3-venv shellcheck unzip zstd >/dev/null \
 	&& rm -rf /var/lib/apt/lists/*
 
 # GitHub's Ubuntu image has node on the PATH, and tools such as CodeQL's
@@ -26,10 +26,14 @@ RUN for tool in node npm npx; do ln -sf /home/runner/externals/node24/bin/$tool 
 RUN install -d -o runner -g runner /opt/hostedtoolcache
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 
-# Jobs get no Docker daemon in this version; the shim says so instead of
-# failing with a missing socket.
+# The runner image ships Docker's engine. A class with docker = true runs
+# under Sysbox, and the entrypoint starts a daemon for the job and removes
+# this shim; other jobs get the shim, which says why there is no daemon.
 COPY docker /usr/local/bin/docker
+# The entrypoint starts as root and runs the job as runner.
+COPY entrypoint.sh /usr/local/bin/boxrunner-entrypoint
 
-USER runner
+USER root
 WORKDIR /home/runner
+ENTRYPOINT ["/usr/local/bin/boxrunner-entrypoint"]
 CMD ["/home/runner/run.sh"]

@@ -57,7 +57,7 @@ func TestTarHoldsTheContext(t *testing.T) {
 			t.Errorf("Dockerfile does not build from the official runner image")
 		}
 	}
-	if strings.Join(got, ",") != "Dockerfile file,docker exec" {
+	if strings.Join(got, ",") != "Dockerfile file,docker exec,entrypoint.sh exec" {
 		t.Errorf("tar = %v", got)
 	}
 }

@@ -97,6 +97,8 @@ type Class struct {
 	// Dockerfile, when set, builds Image FROM the job image; the agent
 	// rebuilds it whenever the job image or the Dockerfile's directory changes.
 	Dockerfile string
+	// Docker runs the class's jobs under Sysbox, each with its own Docker daemon.
+	Docker bool
 }
 
 type Config struct {
@@ -144,6 +146,7 @@ type rawClass struct {
 	Image      string   `toml:"image"`
 	Dockerfile string   `toml:"dockerfile"`
 	Repos      []string `toml:"repos"`
+	Docker     bool     `toml:"docker"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -228,6 +231,7 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 		Max:      rc.Max,
 		Image:    rc.Image,
 		Shm:      DefaultShm,
+		Docker:   rc.Docker,
 	}
 	switch {
 	case rc.Name == "":

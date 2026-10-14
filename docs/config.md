@@ -52,8 +52,17 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `image` | `boxrunner/runner:local` | Any image whose entrypoint runs the Actions runner. |
 | `dockerfile` | none | Builds the class's own image; see below. Set either this or `image`. |
 | `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. |
+| `docker` | `false` | Gives each job its own Docker daemon; see below. |
 
 Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
+
+## Docker inside jobs
+
+With `docker = true`, a class's jobs can use `services:`, `container:` jobs, Docker container actions and `docker build`. It needs Sysbox, which `sudo boxrunner install --docker` installs, as does any `install` while a class has `docker = true`. A new config written with `--docker` turns `docker` on for both classes. Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer on Linux 5.15 or newer, on amd64 and arm64. Docker keeps running while Sysbox installs: install first writes Docker's current bridge address and address pools into `/etc/docker/daemon.json`, so Sysbox's package only makes Docker reload its configuration.
+
+Each job runs under Sysbox's `sysbox-runc` runtime, where root inside the container is an unprivileged user on the box, and starts its own Docker daemon before the runner. The job's Docker shares the class's CPU, memory and process limits and its priority, and the firewall applies to the containers it starts. The agent does not serve a class with `docker = true` while Docker has no `sysbox-runc` runtime; it logs why.
+
+Every job starts with an empty Docker, so it pulls each image it uses again. Docker Hub limits anonymous pulls per IP address, so a box that runs many such jobs can reach the limit; a job that logs in with `docker/login-action` first pulls under its account's limit instead.
 
 ## Extending the job image
 
@@ -71,9 +80,7 @@ dockerfile = "/etc/boxrunner/images/web/Dockerfile"
 ```dockerfile
 ARG BASE
 FROM ${BASE}
-USER root
 RUN npx -y playwright@1.56.0 install --with-deps chromium
-USER runner
 ```
 
-The directory that holds the Dockerfile is the build context. The agent passes the job image as `BASE` and tags the result `boxrunner/class-<name>:local`. It rebuilds the class image when the job image is rebuilt for a new runner release, and when any file in that directory changes.
+The job image starts as root, and its entrypoint runs the job as `runner`. A class Dockerfile can end with `USER runner`, but then the entrypoint cannot start Docker, so a class with `docker = true` must end as root (`USER root`) and keep the entrypoint. The directory that holds the Dockerfile is the build context. The agent passes the job image as `BASE` and tags the result `boxrunner/class-<name>:local`. It rebuilds the class image when the job image is rebuilt for a new runner release, and when any file in that directory changes.

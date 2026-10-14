@@ -44,9 +44,20 @@ On a 4-core ARM box, four timed threads took 1,319 ms alone, 1,345 ms beside fou
 
 The private key goes from GitHub straight to the Worker through the App manifest flow, so nobody copies it. A freshly deployed Worker is reachable by anyone, so its setup page requires a secret set at deploy time. It signs the manifest's `state` and ties it to a cookie, and it works once. Both design reviews found the unguarded version claimable by whoever came first.
 
+## Docker inside jobs with Sysbox
+
+Jobs that use `services:`, `container:`, Docker container actions or `docker build` need a Docker daemon. Mounting the box's Docker socket would give every job root on the box, and a privileged container would too. Sysbox runs a container with root mapped to an unprivileged range on the host and lets it run its own Docker. It was tested in a fresh Ubuntu 24.04 arm64 VM (kernel 7.0, Docker 29.1.3) with Sysbox 0.7.1:
+
+- `docker:dind`, not privileged, under `sysbox-runc` with `--cpus 2 --memory 2g --cgroup-parent boxrunner_idle.slice` ran `docker run alpine` and `docker build` inside. Its root was uid 100000 on the host (uid map `0 100000 65536`), the idle slice still read `cpu.idle 1`, and the container's `cpu.max` read `200000 100000`.
+- The job image under `sysbox-runc` on the `boxrunner` network, as the `runner` user, ran `docker run`, `docker build` and a Postgres container that accepted connections. Its containers reached github.com, and connections from them to the host and the metadata address timed out after 3 s, so the firewall applies to them.
+- The official runner image already ships Docker's engine (`dockerd` 29.8.2 in runner 2.338.0), so the job image adds only `iptables`.
+
+Sysbox's package refuses to install while Docker has any container, unless `/etc/docker/daemon.json` already sets `bip` and `default-address-pools`; otherwise it sets its own and restarts Docker. `install` therefore writes Docker's current bridge address and address pools (Docker's built-in ones when none are set) into that file first. On a box with a running container, `install --docker` then left Docker's process and the container untouched, and the package only made Docker reload its configuration to add the runtime.
+
+Every job starts with an empty Docker, so images are pulled cold; a pull-through mirror on the box is planned.
+
 ## Not in v0.1
 
-- **Docker inside jobs.** It needs Sysbox, which must first be tested with the idle slice and CPU limits.
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.
 - **Several boxes per Worker.** How GitHub spreads jobs across two scale sets with one label is untested.
 - **A published image.** The box builds its image from GitHub's official runner image, so the first release depends on no image of ours.

@@ -20,6 +20,10 @@ const (
 	Network       = "boxrunner"
 	Bridge        = "boxrunner0"
 	Image         = "boxrunner/runner:local"
+	// SysboxRuntime is the Docker runtime that `install --docker` registers.
+	SysboxRuntime = "sysbox-runc"
+	// EnvDocker tells the job image's entrypoint to start a Docker daemon.
+	EnvDocker = "BOXRUNNER_DOCKER=1"
 
 	LabelBox        = "boxrunner.box"
 	LabelRunner     = "boxrunner.runner"

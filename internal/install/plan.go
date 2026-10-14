@@ -8,6 +8,10 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
@@ -24,6 +28,9 @@ type Desired struct {
 	Host     config.Host
 	// Binary is the running boxrunner, copied to /usr/local/bin.
 	Binary []byte
+	// Docker installs Sysbox so jobs can run Docker, and gives a new config's
+	// classes docker = true.
+	Docker bool
 }
 
 type File struct {
@@ -41,7 +48,16 @@ type Network struct {
 type Observed struct {
 	// Debian is true on Debian, Ubuntu and their derivatives, where install
 	// can add Docker itself.
-	Debian       bool
+	Debian bool
+	// Distro and DistroVersion are ID and VERSION_ID from /etc/os-release.
+	Distro        string
+	DistroVersion string
+	// Kernel is the running kernel's release, such as 6.8.0-45-generic.
+	Kernel string
+	// Arch is Go's name for the CPU architecture, such as arm64.
+	Arch string
+	// Sysbox is true when Docker lists the sysbox-runc runtime.
+	Sysbox       bool
 	DockerBinary bool
 	DockerUp     bool
 	CgroupV2     bool
@@ -64,6 +80,9 @@ type (
 	// InstallDocker installs docker.io when Package is set, then enables and
 	// starts the daemon.
 	InstallDocker struct{ Package bool }
+	// InstallSysbox installs the Sysbox package, which registers its runtime
+	// with Docker.
+	InstallSysbox struct{ Package SysboxPackage }
 	WriteFile     struct {
 		Path    string
 		Mode    fs.FileMode
@@ -91,6 +110,9 @@ func (s InstallDocker) String() string {
 	}
 	return "start Docker"
 }
+func (s InstallSysbox) String() string {
+	return "install Sysbox " + s.Package.Version + "; Docker reloads its configuration and running containers keep running"
+}
 func (s WriteFile) String() string  { return fmt.Sprintf("write %s (%04o)", s.Path, s.Mode) }
 func (DaemonReload) String() string { return "reload systemd" }
 func (CreateNetwork) String() string {
@@ -107,6 +129,55 @@ func (RemoveNetwork) String() string    { return "remove the Docker network " + 
 func (RemoveFirewall) String() string   { return "remove the firewall rules" }
 func (RemoveImage) String() string      { return "remove the job image " + layout.Image }
 func (s RemovePath) String() string     { return "remove " + s.Path }
+
+// SysboxPackage is a pinned Sysbox release for one architecture.
+type SysboxPackage struct {
+	Version string
+	URL     string
+	SHA256  string
+}
+
+var sysboxPackages = map[string]SysboxPackage{
+	"amd64": {"0.7.1", "https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_amd64.deb", "9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5"},
+	"arm64": {"0.7.1", "https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_arm64.deb", "04ca894ae0b53f0fa54eaacc173ce40363c9a95ea5450f773716a84ef650a69b"},
+}
+
+// sysboxProblem says why Sysbox cannot be installed on the box, or "".
+func sysboxProblem(o Observed) string {
+	oldest := map[string]string{"ubuntu": "22.04", "debian": "11"}
+	first, ok := oldest[o.Distro]
+	switch {
+	case !ok:
+		return fmt.Sprintf("Docker inside jobs needs Sysbox, which supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs %q", o.Distro)
+	case !atLeast(o.DistroVersion, first):
+		return fmt.Sprintf("Docker inside jobs needs Sysbox, which supports %s %s or newer; this box runs %s", o.Distro, first, o.DistroVersion)
+	case !atLeast(o.Kernel, "5.15"):
+		return fmt.Sprintf("Docker inside jobs needs Sysbox, which needs Linux 5.15 or newer; this box runs %s", o.Kernel)
+	}
+	if _, ok := sysboxPackages[o.Arch]; !ok {
+		return fmt.Sprintf("Docker inside jobs needs Sysbox, which has packages for amd64 and arm64; this box is %s", o.Arch)
+	}
+	return ""
+}
+
+var leadingVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*`)
+
+// atLeast compares the leading dotted numbers of two versions, so
+// "6.8.0-45-generic" is at least "5.15" and "22.04" is not at least "24.04".
+func atLeast(version, floor string) bool {
+	have := strings.Split(leadingVersion.FindString(version), ".")
+	for i, part := range strings.Split(floor, ".") {
+		want, _ := strconv.Atoi(part)
+		got := 0
+		if i < len(have) {
+			got, _ = strconv.Atoi(have[i])
+		}
+		if got != want {
+			return got > want
+		}
+	}
+	return true
+}
 
 const sliceUnit = `[Unit]
 Description=boxrunner jobs that run only on cores nothing else wants
@@ -155,9 +226,14 @@ func Plan(d Desired, o Observed) []Step {
 		block("%s", o.Network.Problem)
 	}
 
-	cfg, cfgErr := desiredConfig(d, o)
+	content, cfg, cfgErr := desiredConfig(d, o)
 	if cfgErr != nil {
 		block("%v", cfgErr)
+	}
+	// A class with docker = true needs Sysbox, whether or not --docker asked.
+	sysbox := !o.Sysbox && (d.Docker || slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker }))
+	if problem := sysboxProblem(o); sysbox && problem != "" {
+		block("%s", problem)
 	}
 	if _, ok := o.Paths[layout.TokenPath]; !ok && d.Token == "" {
 		block("no box token: pass --token or set BOXRUNNER_TOKEN")
@@ -170,11 +246,14 @@ func Plan(d Desired, o Observed) []Step {
 	if !o.DockerBinary || !o.DockerUp {
 		steps = append(steps, InstallDocker{Package: !o.DockerBinary})
 	}
+	if sysbox {
+		steps = append(steps, InstallSysbox{sysboxPackages[o.Arch]})
+	}
 	files := []WriteFile{
 		{layout.Binary, 0o755, d.Binary},
 		{layout.IdleSlicePath, 0o644, []byte(sliceUnit)},
 		{layout.UnitPath, 0o644, []byte(serviceUnit)},
-		{layout.ConfigPath, 0o644, cfg},
+		{layout.ConfigPath, 0o644, content},
 	}
 	if d.Token != "" {
 		files = append(files, WriteFile{layout.TokenPath, 0o600, []byte(d.Token + "\n")})
@@ -203,7 +282,8 @@ func Plan(d Desired, o Observed) []Step {
 	switch {
 	case !o.UnitEnabled || !o.UnitActive:
 		steps = append(steps, EnableUnit{})
-	case written[layout.Binary] || written[layout.UnitPath] || written[layout.ConfigPath] || written[layout.TokenPath]:
+	case sysbox || written[layout.Binary] || written[layout.UnitPath] || written[layout.ConfigPath] || written[layout.TokenPath]:
+		// The agent reads Docker's runtimes when it starts.
 		steps = append(steps, RestartUnit{})
 	}
 	return steps
@@ -212,7 +292,7 @@ func Plan(d Desired, o Observed) []Step {
 // desiredConfig is the config file install leaves: the existing one with
 // worker and box filled in when given, or a new one sized for the host. It
 // never overwrites anything else in an existing file.
-func desiredConfig(d Desired, o Observed) ([]byte, error) {
+func desiredConfig(d Desired, o Observed) ([]byte, config.Config, error) {
 	var content string
 	if f, ok := o.Paths[layout.ConfigPath]; ok {
 		content = string(f.Content)
@@ -224,22 +304,23 @@ func desiredConfig(d Desired, o Observed) ([]byte, error) {
 		}
 	} else {
 		if d.Worker == "" {
-			return nil, fmt.Errorf("no Worker URL: pass --worker or set BOXRUNNER_WORKER")
+			return nil, config.Config{}, fmt.Errorf("no Worker URL: pass --worker or set BOXRUNNER_WORKER")
 		}
 		box := d.Box
 		if box == "" {
 			box = config.BoxName(d.Hostname)
 		}
-		content = config.Default(d.Worker, box, d.Host)
+		content = config.Default(d.Worker, box, d.Host, d.Docker)
 	}
-	if _, err := config.Parse([]byte(content), d.Hostname); err != nil {
-		return nil, fmt.Errorf("%s: %w", layout.ConfigPath, err)
+	cfg, err := config.Parse([]byte(content), d.Hostname)
+	if err != nil {
+		return nil, config.Config{}, fmt.Errorf("%s: %w", layout.ConfigPath, err)
 	}
-	return []byte(content), nil
+	return []byte(content), cfg, nil
 }
 
-// PlanUninstall removes everything install created. Docker itself stays:
-// other software on the box may use it.
+// PlanUninstall removes everything install created. Docker and Sysbox stay:
+// other software on the box may use them.
 func PlanUninstall(o Observed) []Step {
 	var steps []Step
 	if o.UnitEnabled || o.UnitActive {

@@ -85,6 +85,7 @@ func TestCreateShape(t *testing.T) {
 		ShmSize:      1 << 30,
 		CgroupParent: "boxrunner_idle.slice",
 		Network:      "boxrunner",
+		Runtime:      "sysbox-runc",
 	})
 	if err != nil || id != "abc" {
 		t.Fatalf("Create = %q, %v", id, err)
@@ -101,7 +102,8 @@ func TestCreateShape(t *testing.T) {
 			"PidsLimit": 4096,
 			"ShmSize": 1073741824,
 			"CgroupParent": "boxrunner_idle.slice",
-			"NetworkMode": "boxrunner"
+			"NetworkMode": "boxrunner",
+			"Runtime": "sysbox-runc"
 		}
 	}`), &want)
 	got := (*requests)[0]
@@ -182,5 +184,25 @@ func TestBuildFromLocalBaseWithLabels(t *testing.T) {
 	wantURI := "/v1.47/build?buildargs=%7B%22BASE%22%3A%22boxrunner%2Frunner%3Alocal%22%7D&forcerm=1&labels=%7B%22boxrunner.base%22%3A%22sha256%3Aabc%22%7D&rm=1&t=boxrunner%2Fclass-web%3Alocal"
 	if got := (*requests)[0]; got.uri != wantURI {
 		t.Errorf("uri = %s", got.uri)
+	}
+}
+
+func TestInfoReadsRuntimesAndPools(t *testing.T) {
+	c, _ := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"ServerVersion":"29.1.3","CgroupDriver":"systemd",
+			"Runtimes":{"runc":{"path":"runc"},"sysbox-runc":{"path":"/usr/bin/sysbox-runc"}},
+			"DefaultAddressPools":[{"Base":"172.17.0.0/16","Size":16},{"Base":"192.168.0.0/16","Size":20}]}`)
+	})
+	got, err := c.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Info{
+		ServerVersion: "29.1.3", CgroupDriver: "systemd",
+		Runtimes:            map[string]struct{}{"runc": {}, "sysbox-runc": {}},
+		DefaultAddressPools: []AddressPool{{"172.17.0.0/16", 16}, {"192.168.0.0/16", 20}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Info =\n%+v\nwant\n%+v", got, want)
 	}
 }

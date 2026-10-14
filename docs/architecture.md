@@ -13,7 +13,6 @@ boxrunner runs GitHub Actions jobs in fresh containers on a Linux box you alread
 ## Not in scope
 
 - **Public repositories.** Anyone who can open a pull request can run code on a self-hosted runner, so the Worker refuses public repositories. There is no switch.
-- **Docker inside jobs in v0.1.** `services:`, `container:` jobs, Docker container actions and `docker build` need a Docker daemon. Jobs get none, and a `docker` command in the job prints why. Sysbox, which gives each job its own daemon without privileges, is planned.
 - **Virtual-machine isolation.** Jobs share the host kernel. Firecracker and Kata need `/dev/kvm`, which common VPS plans do not offer.
 - **Several boxes per Worker in v0.1.** One Worker serves one box.
 - **A hosted service.** Everyone runs their own Worker and their own box.
@@ -68,6 +67,7 @@ Class
   priority  normal | idle
   max       runners of this class at once on this box
   image
+  docker    the job gets its own Docker daemon under Sysbox
 Runner      requested -> starting -> running -> exited
             failed to start after 3 minutes -> removed
 ```
@@ -108,11 +108,12 @@ Measured on a 4-core ARM box, CPU only: four timed threads of a normal job took 
   - the IPv6 equivalents
 
   DNS keeps working through Docker's resolver. The agent re-applies the rules on every start, and `doctor` starts a container that tries the host, a private address and the metadata address and fails if any answers.
+- **Docker inside jobs, when the class asks.** A class with `docker = true` runs its jobs under Sysbox's `sysbox-runc` runtime, never privileged. Root inside the container maps to an unprivileged range on the host (uid 0 is 100000 *measured*), and the image's entrypoint starts a Docker daemon for the job before it runs the runner as `runner`. That daemon is the job's own: it starts empty, so images are pulled cold every job, and it disappears with the container. Its containers run inside the job's cgroup, so the class's CPU limit and the idle slice still hold, and their traffic leaves through the job's interface, so the firewall rules apply to it. The agent serves such a class only while Docker lists `sysbox-runc`. Other classes run with Docker's default runtime and get a `docker` command that says why there is no daemon.
 - **Disk floor.** The agent starts no runner while `/var/lib/docker` has less free space than the floor (default 10 GB). It stops the largest job container if free space falls below half the floor.
 
 ## Image
 
-`install` builds the job image on the box from GitHub's official `ghcr.io/actions/actions-runner` image, plus `zstd`, `build-essential`, Python and `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`. The agent checks the runner's latest release daily through the release page's redirect, which needs no API quota. It rebuilds the image only when the version changed, and never while a job of a normal-priority class runs. Runners keep self-update on as a safety net. A class can name any image built `FROM boxrunner/runner`.
+`install` builds the job image on the box from GitHub's official `ghcr.io/actions/actions-runner` image, plus `zstd`, `build-essential`, Python, `iptables` for a job's own Docker and `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`. The official image already ships Docker's engine. The image starts as root: its entrypoint starts Docker when the class asks for it, then runs the job as `runner`. The agent checks the runner's latest release daily through the release page's redirect, which needs no API quota. It rebuilds the image only when the version changed, and never while a job of a normal-priority class runs. Runners keep self-update on as a safety net. A class can name any image built `FROM boxrunner/runner`.
 
 ## Worker
 
@@ -160,10 +161,10 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 
 | Command | Does |
 |---|---|
-| `boxrunner install` | Converges the box: Docker, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
+| `boxrunner install` | Converges the box: Docker, Sysbox with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
 | `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration |
-| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token |
-| `boxrunner uninstall` | Closes sessions and removes the unit, containers, network, rules, slice and files |
+| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, and with a `docker` class, Sysbox and a Docker daemon inside a job container |
+| `boxrunner uninstall` | Closes sessions and removes the unit, containers, network, rules, slice and files. Docker and Sysbox stay. |
 | `boxrunner worker deploy` | Deploys the Worker with Wrangler and opens its setup page |
 
 ## Decisions

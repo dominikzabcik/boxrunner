@@ -15,8 +15,13 @@ type Host struct {
 
 // Default writes a new config file for a host: a normal class with every core
 // and about three quarters of the memory, and an idle class that uses only the
-// cores the normal class leaves idle.
-func Default(worker, box string, h Host) string {
+// cores the normal class leaves idle. With docker, both classes run Docker
+// inside their jobs.
+func Default(worker, box string, h Host, docker bool) string {
+	extra := ""
+	if docker {
+		extra = "docker = true\n"
+	}
 	return fmt.Sprintf(`# boxrunner configuration. The format is in docs/config.md.
 # The agent reads it on start: systemctl restart boxrunner after a change.
 
@@ -32,7 +37,7 @@ pids = %d
 shm = "1GiB"
 priority = "normal"
 max = 1
-
+%s
 [[class]]
 name = "boxrunner-light"
 cpus = %d
@@ -41,9 +46,9 @@ pids = %d
 shm = "1GiB"
 priority = "idle"
 max = 2
-`, strconv.Quote(worker), strconv.Quote(box),
-		h.CPUs, share(h.Memory, 75).String(), DefaultPids,
-		h.CPUs, share(h.Memory, 40).String(), DefaultPids)
+%s`, strconv.Quote(worker), strconv.Quote(box),
+		h.CPUs, share(h.Memory, 75).String(), DefaultPids, extra,
+		h.CPUs, share(h.Memory, 40).String(), DefaultPids, extra)
 }
 
 // share is percent of total, rounded down to 256 MiB so the file reads well.

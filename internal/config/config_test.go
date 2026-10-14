@@ -58,6 +58,7 @@ shm = "256MiB"
 priority = "idle"
 max = 3
 image = "boxrunner/runner-node:local"
+docker = true
 `), "ignored")
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ image = "boxrunner/runner-node:local"
 		DiskFloor: 20_000_000_000,
 		Classes: []Class{
 			{Name: "boxrunner", NanoCPUs: 4_000_000_000, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local"},
-			{Name: "boxrunner-light", NanoCPUs: 1_500_000_000, Memory: 2560 << 20, Pids: 512, Shm: 256 << 20, Priority: Idle, Max: 3, Image: "boxrunner/runner-node:local"},
+			{Name: "boxrunner-light", NanoCPUs: 1_500_000_000, Memory: 2560 << 20, Pids: 512, Shm: 256 << 20, Priority: Idle, Max: 3, Image: "boxrunner/runner-node:local", Docker: true},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -170,7 +171,7 @@ class "boxrunner": appears twice`,
 }
 
 func TestDefaultParses(t *testing.T) {
-	file := Default("https://w.example", "box-1", Host{CPUs: 4, Memory: 7_700_000_000})
+	file := Default("https://w.example", "box-1", Host{CPUs: 4, Memory: 7_700_000_000}, false)
 	got, err := Parse([]byte(file), "unused")
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +182,20 @@ func TestDefaultParses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Classes, want) || got.Box != "box-1" || got.Worker.String() != "https://w.example" {
 		t.Errorf("Default parsed to %+v", got)
+	}
+}
+
+func TestDefaultWithDocker(t *testing.T) {
+	got, err := Parse([]byte(Default("https://w.example", "box-1", Host{CPUs: 4, Memory: 8 << 30}, true)), "unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Class{
+		{Name: "boxrunner", NanoCPUs: 4e9, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local", Docker: true},
+		{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 3 << 30, Pids: 4096, Shm: 1 << 30, Priority: Idle, Max: 2, Image: "boxrunner/runner:local", Docker: true},
+	}
+	if !reflect.DeepEqual(got.Classes, want) {
+		t.Errorf("Default with docker parsed to\n%+v\nwant\n%+v", got.Classes, want)
 	}
 }
 

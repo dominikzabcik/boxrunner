@@ -41,6 +41,7 @@ type fakeDocker struct {
 	mu         sync.Mutex
 	containers map[string]*container
 	network    bool
+	runtimes   []string
 }
 
 func (f *fakeDocker) serve(t *testing.T) string {
@@ -59,7 +60,11 @@ func (f *fakeDocker) serve(t *testing.T) string {
 		case path == "/version":
 			io.WriteString(w, `{"ApiVersion":"1.47"}`)
 		case path == "/info":
-			json.NewEncoder(w).Encode(map[string]string{"DockerRootDir": root, "CgroupDriver": "systemd", "CgroupVersion": "2"})
+			runtimes := map[string]any{"runc": map[string]string{"path": "runc"}}
+			for _, r := range f.runtimes {
+				runtimes[r] = map[string]string{"path": "/usr/bin/" + r}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"DockerRootDir": root, "CgroupDriver": "systemd", "CgroupVersion": "2", "Runtimes": runtimes})
 		case path == "/networks/boxrunner":
 			if !f.network {
 				http.Error(w, `{"message":"no such network"}`, 404)
@@ -197,12 +202,21 @@ type harness struct {
 	done   chan error
 }
 
-func startAgent(t *testing.T, containers map[string]*container, busy map[string]bool) *harness {
+// startAgent runs the agent with one class; change may adjust the class and
+// the fake Docker before the agent starts.
+func startAgent(t *testing.T, containers map[string]*container, busy map[string]bool, change ...func(*config.Class, *fakeDocker)) *harness {
 	h := &harness{
 		docker: &fakeDocker{containers: containers},
 		github: &fakeGitHub{queue: make(chan string, 8), busy: busy},
 		jobs:   filepath.Join(t.TempDir(), "jobs.jsonl"),
 		done:   make(chan error, 1),
+	}
+	cfg := config.Config{
+		Box: "box-1", DiskFloor: 1,
+		Classes: []config.Class{{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Max: 1, Image: "boxrunner/runner:local"}},
+	}
+	for _, f := range change {
+		f(&cfg.Classes[0], h.docker)
 	}
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
@@ -211,10 +225,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(srv.URL)
-	cfg := config.Config{
-		Worker: u, Box: "box-1", DiskFloor: 1,
-		Classes: []config.Class{{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Max: 1, Image: "boxrunner/runner:local"}},
-	}
+	cfg.Worker = u
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	var ctx context.Context
 	ctx, h.cancel = context.WithCancel(context.Background())
@@ -375,5 +386,51 @@ func TestSpecIdleClass(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestSpecDockerClass(t *testing.T) {
+	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true}
+	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
+	got := Spec("box-1", class, r, "jit")
+	want := docker.ContainerSpec{
+		Name: "box-1-boxrunner-3f9a2c", Image: "boxrunner/runner:local",
+		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_DOCKER=1"},
+		Labels: map[string]string{"boxrunner.box": "box-1", "boxrunner.runner": "box-1-boxrunner-3f9a2c", "boxrunner.runner-id": "41",
+			"boxrunner.repo": "octo/site", "boxrunner.class": "boxrunner", "boxrunner.scaleset-id": "7"},
+		NanoCPUs: 2e9, Memory: 4 << 30, PidsLimit: 4096, ShmSize: 1 << 30,
+		Network: "boxrunner", Runtime: "sysbox-runc",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Spec =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestDockerClassNeedsSysbox(t *testing.T) {
+	without := startAgent(t, map[string]*container{}, nil, func(c *config.Class, _ *fakeDocker) { c.Docker = true })
+	waitFor(t, "the repository list", func() bool { return len(without.github.workerCalls()) > 0 })
+	time.Sleep(300 * time.Millisecond)
+	without.stop(t)
+	if got := without.github.workerCalls(); !reflect.DeepEqual(got, []string{"GET /v1/repos"}) {
+		t.Errorf("without Sysbox, worker calls = %q; want only the repository list", got)
+	}
+
+	with := startAgent(t, map[string]*container{}, nil, func(c *config.Class, d *fakeDocker) {
+		c.Docker = true
+		d.runtimes = []string{"sysbox-runc"}
+	})
+	with.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
+	var body map[string]any
+	waitFor(t, "a running job container", func() bool {
+		for _, c := range with.docker.snapshot() {
+			body = c.Body
+			return c.State == "running"
+		}
+		return false
+	})
+	with.stop(t)
+	host := body["HostConfig"].(map[string]any)
+	if host["Runtime"] != "sysbox-runc" || !reflect.DeepEqual(body["Env"], []any{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit-41", "BOXRUNNER_DOCKER=1"}) {
+		t.Errorf("with Sysbox, runtime %v and env %v", host["Runtime"], body["Env"])
 	}
 }

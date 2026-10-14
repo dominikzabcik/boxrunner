@@ -1,7 +1,11 @@
 package install
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -38,7 +43,12 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	o := Observed{Paths: map[string]File{}}
 	if release, err := os.ReadFile("/etc/os-release"); err == nil {
 		o.Debian = debianLike(string(release))
+		o.Distro, o.DistroVersion = osRelease(string(release))
 	}
+	if kernel, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
+		o.Kernel = strings.TrimSpace(string(kernel))
+	}
+	o.Arch = runtime.GOARCH
 	_, errDockerd := exec.LookPath("dockerd")
 	_, errDocker := exec.LookPath("docker")
 	o.DockerBinary = errDockerd == nil || errDocker == nil
@@ -72,6 +82,7 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	o.DockerUp = true
 	if info, err := d.Info(ctx); err == nil {
 		o.CgroupDriver = info.CgroupDriver
+		_, o.Sysbox = info.Runtimes[layout.SysboxRuntime]
 	}
 	if n, ok, err := d.Network(ctx, layout.Network); err == nil && ok {
 		o.Network = Network{Exists: true}
@@ -100,6 +111,21 @@ func debianLike(osRelease string) bool {
 		}
 	}
 	return false
+}
+
+// osRelease returns ID and VERSION_ID from /etc/os-release.
+func osRelease(content string) (id, version string) {
+	for _, line := range strings.Split(content, "\n") {
+		key, value, _ := strings.Cut(line, "=")
+		value = strings.Trim(value, `"'`)
+		switch key {
+		case "ID":
+			id = value
+		case "VERSION_ID":
+			version = value
+		}
+	}
+	return id, version
 }
 
 // Execute runs steps in order and stops at the first failure.
@@ -141,13 +167,27 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		if err := command("systemctl", "enable", "--now", "docker.service"); err != nil {
 			return d, err
 		}
-		for range 30 {
-			if c, err := docker.Dial(ctx, layout.DockerSocket); err == nil {
-				return c, nil
-			}
-			time.Sleep(time.Second)
+		return waitForDocker(ctx, "")
+	case InstallSysbox:
+		if err := needDocker(); err != nil {
+			return d, err
 		}
-		return d, errors.New("docker did not answer within 30 seconds")
+		if err := pinNetworks(ctx, d); err != nil {
+			return d, err
+		}
+		deb, err := download(ctx, s.Package)
+		if err != nil {
+			return d, err
+		}
+		defer os.RemoveAll(filepath.Dir(deb))
+		if err := command("apt-get", "update", "-qq"); err != nil {
+			return d, err
+		}
+		// This also finishes a package left half configured by an earlier run.
+		if err := command("env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", deb); err != nil {
+			return d, err
+		}
+		return waitForDocker(ctx, layout.SysboxRuntime)
 	case WriteFile:
 		return d, writeFile(s)
 	case DaemonReload:
@@ -209,6 +249,143 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 	default:
 		panic(fmt.Sprintf("install: unhandled step %T", step))
 	}
+}
+
+// waitForDocker waits until Docker answers and, when oci is set, lists that
+// runtime.
+func waitForDocker(ctx context.Context, oci string) (*docker.Client, error) {
+	for range 60 {
+		if c, err := docker.Dial(ctx, layout.DockerSocket); err == nil {
+			info, err := c.Info(ctx)
+			if _, ok := info.Runtimes[oci]; err == nil && (oci == "" || ok) {
+				return c, nil
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	if oci != "" {
+		return nil, fmt.Errorf("docker did not list the %s runtime within a minute", oci)
+	}
+	return nil, errors.New("docker did not answer within a minute")
+}
+
+const daemonJSON = "/etc/docker/daemon.json"
+
+// defaultPools are Docker's built-in IPv4 address pools
+// (daemon/libnetwork/ipamutils), which /info leaves out when daemon.json sets
+// none. Pinned without an IPv6 pool, Docker still derives its IPv6 one.
+var defaultPools = []docker.AddressPool{
+	{Base: "172.17.0.0/16", Size: 16}, {Base: "172.18.0.0/16", Size: 16}, {Base: "172.19.0.0/16", Size: 16},
+	{Base: "172.20.0.0/14", Size: 16}, {Base: "172.24.0.0/14", Size: 16}, {Base: "172.28.0.0/14", Size: 16},
+	{Base: "192.168.0.0/16", Size: 20},
+}
+
+// pinNetworks writes Docker's current bridge address and address pools into
+// daemon.json. Sysbox's package otherwise sets its own and restarts Docker,
+// and it refuses to install at all while any container exists.
+func pinNetworks(ctx context.Context, d *docker.Client) error {
+	info, err := d.Info(ctx)
+	if err != nil {
+		return err
+	}
+	bridge, ok, err := d.Network(ctx, "bridge")
+	if err != nil {
+		return err
+	}
+	bip := ""
+	if ok && len(bridge.IPAM.Config) > 0 {
+		bip = bridgeIP(bridge.IPAM.Config[0].Gateway, bridge.IPAM.Config[0].Subnet)
+	}
+	current, err := os.ReadFile(daemonJSON)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	pools := info.DefaultAddressPools
+	if len(pools) == 0 {
+		pools = defaultPools
+	}
+	pinned, err := withNetworks(current, bip, pools)
+	if err != nil || bytes.Equal(pinned, current) {
+		return err
+	}
+	return writeFile(WriteFile{Path: daemonJSON, Mode: 0o644, Content: pinned})
+}
+
+// bridgeIP is Docker's "bip" setting for a bridge: its gateway with the
+// subnet's prefix length, or "" when either is unknown.
+func bridgeIP(gateway, subnet string) string {
+	_, prefix, ok := strings.Cut(subnet, "/")
+	if gateway == "" || !ok {
+		return ""
+	}
+	return gateway + "/" + prefix
+}
+
+// withNetworks adds "bip" and "default-address-pools" to a daemon.json when
+// they are missing and known, and writes it indented as Sysbox's installer
+// expects to find them. Every other setting keeps its value.
+func withNetworks(current []byte, bip string, pools []docker.AddressPool) ([]byte, error) {
+	settings := map[string]json.RawMessage{}
+	if len(bytes.TrimSpace(current)) > 0 {
+		if err := json.Unmarshal(current, &settings); err != nil {
+			return nil, fmt.Errorf("%s: %w", daemonJSON, err)
+		}
+	}
+	if _, ok := settings["bip"]; !ok && bip != "" {
+		settings["bip"], _ = json.Marshal(bip)
+	}
+	if _, ok := settings["default-address-pools"]; !ok && len(pools) > 0 {
+		type pool struct {
+			Base string `json:"base"`
+			Size int    `json:"size"`
+		}
+		var list []pool
+		for _, p := range pools {
+			list = append(list, pool{p.Base, p.Size})
+		}
+		settings["default-address-pools"], _ = json.Marshal(list)
+	}
+	out, err := json.MarshalIndent(settings, "", "    ")
+	return append(out, '\n'), err
+}
+
+// download fetches a Sysbox package into a new temporary directory and checks
+// its SHA-256.
+func download(ctx context.Context, p SysboxPackage) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.URL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s answered %s", p.URL, resp.Status)
+	}
+	dir, err := os.MkdirTemp("", "boxrunner-sysbox-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, filepath.Base(p.URL))
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.New()
+	_, err = io.Copy(io.MultiWriter(f, sum), resp.Body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if got := hex.EncodeToString(sum.Sum(nil)); err == nil && got != p.SHA256 {
+		err = fmt.Errorf("%s: SHA-256 is %s, want %s", p.URL, got, p.SHA256)
+	}
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return path, nil
 }
 
 // writeFile replaces a file atomically with the right mode from the start, so

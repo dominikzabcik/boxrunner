@@ -20,14 +20,18 @@ var desired = Desired{
 }
 
 func fresh() Observed {
-	return Observed{Debian: true, CgroupV2: true, Paths: map[string]File{}}
+	return Observed{
+		Debian: true, Distro: "ubuntu", DistroVersion: "24.04", Kernel: "6.8.0-45-generic", Arch: "arm64",
+		CgroupV2: true, Paths: map[string]File{},
+	}
 }
 
 // installed is the box after a successful install with desired.
 func installed() Observed {
-	cfg := config.Default(desired.Worker, desired.Box, desired.Host)
+	cfg := config.Default(desired.Worker, desired.Box, desired.Host, false)
 	return Observed{
-		Debian: true, DockerBinary: true, DockerUp: true, CgroupV2: true, CgroupDriver: "systemd",
+		Debian: true, Distro: "ubuntu", DistroVersion: "24.04", Kernel: "6.8.0-45-generic", Arch: "arm64",
+		DockerBinary: true, DockerUp: true, CgroupV2: true, CgroupDriver: "systemd",
 		Paths: map[string]File{
 			layout.Binary:        {[]byte("boxrunner binary"), 0o755},
 			layout.IdleSlicePath: {[]byte(sliceUnit), 0o644},
@@ -116,6 +120,111 @@ func TestPlanKeepsAnExistingConfig(t *testing.T) {
 	}
 	if got := string(steps[1].(WriteFile).Content); got != "box-token\n" {
 		t.Errorf("token kept as %q", got)
+	}
+}
+
+func TestPlanDocker(t *testing.T) {
+	withDocker := desired
+	withDocker.Docker = true
+	sysbox := "install Sysbox 0.7.1; Docker reloads its configuration and running containers keep running"
+	cases := []struct {
+		name    string
+		desired Desired
+		observe func(*Observed)
+		want    []string
+	}{
+		{
+			name:    "fresh box",
+			desired: withDocker,
+			observe: func(o *Observed) { *o = fresh() },
+			want: []string{
+				"install Docker (docker.io) and start it",
+				sysbox,
+				"write /usr/local/bin/boxrunner (0755)",
+				"write /etc/systemd/system/boxrunner_idle.slice (0644)",
+				"write /etc/systemd/system/boxrunner.service (0644)",
+				"write /etc/boxrunner/config.toml (0644)",
+				"write /etc/boxrunner/token (0600)",
+				"reload systemd",
+				"create the Docker network boxrunner on bridge boxrunner0",
+				"apply the firewall rules for boxrunner0",
+				"build the job image boxrunner/runner:local",
+				"enable and start boxrunner.service",
+			},
+		},
+		{
+			name:    "installed box without Sysbox",
+			desired: withDocker,
+			observe: func(*Observed) {},
+			want:    []string{sysbox, "restart boxrunner.service"},
+		},
+		{
+			name:    "Sysbox already installed",
+			desired: withDocker,
+			observe: func(o *Observed) { o.Sysbox = true },
+			want:    nil,
+		},
+		{
+			name:    "a class with docker = true and no flag",
+			desired: desired,
+			observe: func(o *Observed) {
+				o.Paths[layout.ConfigPath] = File{[]byte(config.Default(desired.Worker, desired.Box, desired.Host, true)), 0o644}
+			},
+			want: []string{sysbox, "restart boxrunner.service"},
+		},
+		{
+			name:    "no flag and no docker class",
+			desired: desired,
+			observe: func(*Observed) {},
+			want:    nil,
+		},
+		{
+			name:    "Ubuntu 20.04",
+			desired: withDocker,
+			observe: func(o *Observed) { o.DistroVersion = "20.04" },
+			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which supports ubuntu 22.04 or newer; this box runs 20.04"},
+		},
+		{
+			name:    "Debian 12 on an old kernel",
+			desired: withDocker,
+			observe: func(o *Observed) { o.Distro, o.DistroVersion, o.Kernel = "debian", "12", "5.10.0-28-amd64" },
+			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which needs Linux 5.15 or newer; this box runs 5.10.0-28-amd64"},
+		},
+		{
+			name:    "Fedora",
+			desired: withDocker,
+			observe: func(o *Observed) { o.Distro, o.DistroVersion = "fedora", "41" },
+			want:    []string{`cannot continue: Docker inside jobs needs Sysbox, which supports Ubuntu 22.04 or newer and Debian 11 or newer; this box runs "fedora"`},
+		},
+		{
+			name:    "an architecture without a package",
+			desired: withDocker,
+			observe: func(o *Observed) { o.Arch = "riscv64" },
+			want:    []string{"cannot continue: Docker inside jobs needs Sysbox, which has packages for amd64 and arm64; this box is riscv64"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := installed()
+			c.observe(&o)
+			steps := Plan(c.desired, o)
+			if got := names(steps); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Plan =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPlanDockerWritesDockerClasses(t *testing.T) {
+	d := desired
+	d.Docker = true
+	steps := Plan(d, fresh())
+	if got := steps[1].(InstallSysbox).Package.URL; got != "https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_arm64.deb" {
+		t.Errorf("package = %s", got)
+	}
+	cfg, err := config.Parse(steps[5].(WriteFile).Content, "unused")
+	if err != nil || len(cfg.Classes) != 2 || !cfg.Classes[0].Docker || !cfg.Classes[1].Docker {
+		t.Errorf("new config = %+v, %v", cfg.Classes, err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -78,6 +79,9 @@ func (c Checks) All(ctx context.Context) []Result {
 
 	if d != nil {
 		results = append(results, c.probe(ctx, d)...)
+		if c.ConfigErr == nil && slices.ContainsFunc(c.Config.Classes, func(k config.Class) bool { return k.Docker }) {
+			results = append(results, dockerInJobs(ctx, d)...)
+		}
 	}
 
 	date, err := httpDate(ctx, c.HTTP, "https://github.com")
@@ -188,6 +192,50 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	}
 	blocked("metadata", "169.254.169.254")
 	add("github", codes["github"] == 0, "github.com:443 from a job container (exit %d)", codes["github"])
+	return results
+}
+
+// dockerInJobs checks what classes with docker = true need: Docker's Sysbox
+// runtime, and a job container whose entrypoint starts a Docker daemon that
+// the runner user can use.
+func dockerInJobs(ctx context.Context, d *docker.Client) []Result {
+	var results []Result
+	add := func(name string, ok bool, format string, args ...any) {
+		results = append(results, Result{name, ok, fmt.Sprintf(format, args...)})
+	}
+	info, err := d.Info(ctx)
+	if _, ok := info.Runtimes[layout.SysboxRuntime]; err != nil || !ok {
+		add("sysbox", false, "Docker has no %s runtime, so classes with docker = true get no jobs; run sudo boxrunner install --docker", layout.SysboxRuntime)
+		return results
+	}
+	add("sysbox", true, "Docker lists the %s runtime", layout.SysboxRuntime)
+
+	const name = "boxrunner-doctor-docker"
+	d.Remove(ctx, name)
+	id, err := d.Create(ctx, docker.ContainerSpec{
+		Name: name, Image: layout.Image, Cmd: []string{"docker", "info", "--format", "{{.ServerVersion}}"}, Env: []string{layout.EnvDocker}, Tty: true,
+		Runtime: layout.SysboxRuntime, CgroupParent: layout.IdleSlice, Network: layout.Network, NanoCPUs: 1e9, Memory: 1 << 30, PidsLimit: 1024,
+	})
+	if err == nil {
+		defer d.Remove(context.WithoutCancel(ctx), id)
+		err = d.Start(ctx, id)
+	}
+	code := 0
+	if err == nil {
+		code, err = d.Wait(ctx, id)
+	}
+	if err != nil {
+		add("docker in jobs", false, "%v", err)
+		return results
+	}
+	logs, _ := d.Logs(ctx, id)
+	logs = strings.TrimSpace(strings.ReplaceAll(logs, "\r", ""))
+	if code != 0 {
+		lines := strings.Split(logs, "\n")
+		add("docker in jobs", false, "a job container could not start Docker (exit %d):\n%s", code, strings.Join(lines[max(0, len(lines)-10):], "\n"))
+		return results
+	}
+	add("docker in jobs", true, "a job container started Docker %s and the runner user can use it", logs)
 	return results
 }
 

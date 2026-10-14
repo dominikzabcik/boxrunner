@@ -81,6 +81,15 @@ type Info struct {
 	RootDir       string `json:"DockerRootDir"`
 	CgroupDriver  string `json:"CgroupDriver"`
 	CgroupVersion string `json:"CgroupVersion"`
+	// Runtimes are the OCI runtimes a container can name, by name.
+	Runtimes            map[string]struct{} `json:"Runtimes"`
+	DefaultAddressPools []AddressPool       `json:"DefaultAddressPools"`
+}
+
+// AddressPool is a range Docker carves new networks' subnets from.
+type AddressPool struct {
+	Base string `json:"Base"`
+	Size int    `json:"Size"`
 }
 
 func (c *Client) Info(ctx context.Context) (Info, error) {
@@ -129,7 +138,9 @@ type ContainerSpec struct {
 	ShmSize      int64
 	CgroupParent string
 	Network      string
-	Tty          bool
+	// Runtime is the OCI runtime; empty means Docker's default.
+	Runtime string
+	Tty     bool
 }
 
 type hostConfig struct {
@@ -140,6 +151,7 @@ type hostConfig struct {
 	ShmSize      int64  `json:"ShmSize,omitempty"`
 	CgroupParent string `json:"CgroupParent,omitempty"`
 	NetworkMode  string `json:"NetworkMode,omitempty"`
+	Runtime      string `json:"Runtime,omitempty"`
 }
 
 type createBody struct {
@@ -158,7 +170,7 @@ func (c *Client) Create(ctx context.Context, s ContainerSpec) (string, error) {
 		Image: s.Image, Cmd: s.Cmd, Env: s.Env, Labels: s.Labels, Tty: s.Tty,
 		HostConfig: hostConfig{
 			NanoCpus: s.NanoCPUs, Memory: s.Memory, MemorySwap: s.Memory, PidsLimit: s.PidsLimit,
-			ShmSize: s.ShmSize, CgroupParent: s.CgroupParent, NetworkMode: s.Network,
+			ShmSize: s.ShmSize, CgroupParent: s.CgroupParent, NetworkMode: s.Network, Runtime: s.Runtime,
 		},
 	}
 	var out struct {

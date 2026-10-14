@@ -34,7 +34,7 @@ var version = "0.1.0-dev"
 const usage = `boxrunner runs GitHub Actions jobs in fresh containers on this box.
 
 Usage:
-  boxrunner install [--worker URL] [--token TOKEN] [--box NAME]
+  boxrunner install [--worker URL] [--token TOKEN] [--box NAME] [--docker]
   boxrunner run
   boxrunner status
   boxrunner doctor
@@ -138,6 +138,7 @@ func installCmd(ctx context.Context, args []string) error {
 	workerURL := flags.String("worker", os.Getenv("BOXRUNNER_WORKER"), "the Worker's URL (or BOXRUNNER_WORKER)")
 	token := flags.String("token", os.Getenv("BOXRUNNER_TOKEN"), "the box token from the Worker's setup page (or BOXRUNNER_TOKEN)")
 	box := flags.String("box", os.Getenv("BOXRUNNER_BOX"), "this box's name, [a-z0-9-] (or BOXRUNNER_BOX; default: the hostname)")
+	withDocker := flags.Bool("docker", os.Getenv("BOXRUNNER_DOCKER") == "1", "install Sysbox so jobs can run Docker, and turn it on for the classes of a new config (or BOXRUNNER_DOCKER=1)")
 	flags.Parse(args)
 	if os.Geteuid() != 0 {
 		return errors.New("install changes the system; run it with sudo")
@@ -164,7 +165,7 @@ func installCmd(ctx context.Context, args []string) error {
 	steps, err := install.Install(ctx, install.Desired{
 		Worker: *workerURL, Token: strings.TrimSpace(*token), Box: *box, Hostname: hostname,
 		Host:   config.Host{CPUs: runtime.NumCPU(), Memory: config.Bytes(memory)},
-		Binary: binary,
+		Binary: binary, Docker: *withDocker,
 	}, install.Exec, os.Stdout)
 	if err != nil {
 		return err
@@ -212,7 +213,7 @@ func uninstallCmd(ctx context.Context) error {
 	if len(steps) == 0 {
 		fmt.Println("Nothing to remove.")
 	} else {
-		fmt.Println("boxrunner is gone. Docker stays installed.")
+		fmt.Println("boxrunner is gone. Docker stays installed, and so does Sysbox if install added it.")
 	}
 	return nil
 }

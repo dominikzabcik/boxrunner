@@ -39,6 +39,7 @@ func TestBuildAgainstDocker(t *testing.T) {
 	}
 
 	script := `docker ps; echo "docker exit $?"
+id -un
 touch "$RUNNER_TOOL_CACHE/x" && echo "tool cache writable"
 for tool in zstd gcc make python3 git curl jq; do command -v $tool >/dev/null || echo "missing $tool"; done
 python3 -m venv /tmp/venv && echo "venv ok"
@@ -56,9 +57,10 @@ test -x /home/runner/run.sh && echo "run.sh ok"`
 	}
 	out, _ := d.Logs(ctx, id)
 	out = strings.ReplaceAll(out, "\r", "")
-	want := `boxrunner: Docker is not available inside jobs in this version of boxrunner.
-boxrunner: services:, container: jobs, Docker container actions and docker build need a GitHub-hosted runner for now.
+	want := `boxrunner: this job's class has no Docker daemon.
+boxrunner: services:, container: jobs, Docker container actions and docker build need a class with docker = true (docs/config.md).
 docker exit 1
+runner
 tool cache writable
 venv ok
 run.sh ok

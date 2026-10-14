@@ -32,6 +32,8 @@ You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; am
    ```
 4. **Use it.** In a workflow, `runs-on: boxrunner`, or `runs-on: boxrunner-light` for jobs that should only use idle cores.
 
+For `services:`, `container:` jobs and `docker build`, add `--docker` to the install command, which installs [Sysbox](https://github.com/nestybox/sysbox) and gives each job its own Docker daemon; the [configuration](docs/config.md#docker-inside-jobs) explains the limits.
+
 `sudo boxrunner doctor` checks the box, including that a job cannot reach the host, your private network or the cloud metadata service. `sudo boxrunner status` shows what runs.
 
 ## Why
@@ -88,7 +90,7 @@ The [architecture](docs/architecture.md) explains each part and what it holds, a
 sudo boxrunner uninstall
 ```
 
-It closes the box's sessions and removes the service, containers, network, firewall rules and files. Docker stays.
+It closes the box's sessions and removes the service, containers, network, firewall rules and files. Docker stays, and so does Sysbox if `install --docker` added it.
 
 ## Contributing
 
