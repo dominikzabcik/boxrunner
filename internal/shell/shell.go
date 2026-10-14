@@ -62,8 +62,13 @@ func Join(j Job) []string {
 }
 
 // Inspect is the docker command that opens a shell in a snapshot of a
-// stopped job, on the jobs' network and with modest limits.
-func Inspect(image string) []string {
-	return []string{"run", "-it", "--rm", "--network", "boxrunner", "--cpus", "1", "--memory", "1g", "--pids-limit", "512",
-		"-u", "runner", "-w", "/home/runner/_work", "--entrypoint", "bash", image}
+// stopped job, on the jobs' network and with modest limits. The snapshot runs
+// under the job's runtime: a job under Sysbox could leave behind something
+// that would run as the host's root under Docker's default runtime.
+func Inspect(image, runtime string) []string {
+	args := []string{"run", "-it", "--rm", "--network", "boxrunner", "--cpus", "1", "--memory", "1g", "--pids-limit", "512"}
+	if runtime != "" && runtime != "runc" {
+		args = append(args, "--runtime", runtime)
+	}
+	return append(args, "-u", "runner", "-w", "/home/runner/_work", "--entrypoint", "bash", image)
 }

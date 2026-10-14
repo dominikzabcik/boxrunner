@@ -310,13 +310,17 @@ func shellCmd(ctx context.Context, args []string) error {
 		return attach(ctx, shell.Join(job)...)
 	}
 	// A stopped container cannot run a shell, so open one in a snapshot of it.
+	runtime, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.HostConfig.Runtime}}", job.Name).Output()
+	if err != nil {
+		return fmt.Errorf("docker inspect %s: %w", job.Name, err)
+	}
 	image := "boxrunner/inspect:" + job.Name
 	if out, err := exec.CommandContext(ctx, "docker", "commit", job.Name, image).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker commit: %s", strings.TrimSpace(string(out)))
 	}
 	defer exec.Command("docker", "rmi", "-f", image).Run()
 	fmt.Fprintf(os.Stderr, "%s has stopped; this shell runs in a copy of its container, which goes away when you exit.\n", job.Name)
-	return attach(ctx, shell.Inspect(image)...)
+	return attach(ctx, shell.Inspect(image, strings.TrimSpace(string(runtime)))...)
 }
 
 // attach runs docker with this terminal attached.

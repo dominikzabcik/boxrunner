@@ -30,3 +30,20 @@ func TestParseAndPick(t *testing.T) {
 		t.Errorf("Parse(empty) = %v", got)
 	}
 }
+
+// A copy of a stopped job runs under the job's runtime, so a Sysbox job's
+// leftovers never run as the host's root.
+func TestInspectKeepsTheJobsRuntime(t *testing.T) {
+	base := []string{"run", "-it", "--rm", "--network", "boxrunner", "--cpus", "1", "--memory", "1g", "--pids-limit", "512"}
+	tail := []string{"-u", "runner", "-w", "/home/runner/_work", "--entrypoint", "bash", "boxrunner/inspect:x"}
+	for runtime, extra := range map[string][]string{
+		"sysbox-runc": {"--runtime", "sysbox-runc"},
+		"runc":        nil,
+		"":            nil,
+	} {
+		want := append(append(append([]string{}, base...), extra...), tail...)
+		if got := Inspect("boxrunner/inspect:x", runtime); !reflect.DeepEqual(got, want) {
+			t.Errorf("Inspect(%q) = %q", runtime, got)
+		}
+	}
+}
