@@ -163,6 +163,12 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
 .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: var(--night); padding: 10px 14px; border-radius: 8px; font: 500 13px var(--f-mono); transition: .25s; pointer-events: none; z-index: 9; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { .reveal, .race .fill { transition: none; } .eyebrow .live, .term .caret { animation: none; } }
+/* On wide screens the box owns the right half; every chapter and its panels stay in the left column. */
+@media (min-width: 1100px) {
+  .ch .measure > *, footer .measure > * { max-width: 660px; }
+  .pair { grid-template-columns: 1fr; }
+  .receipt { max-width: 380px; }
+}
 </style>
 
 <nav class="top gutter" aria-label="Site">
@@ -424,7 +430,7 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
   const SPIN = { hero: 1, cores: .45, key: .2, install: .8 };
   const PITCH = { hero: -.42, cores: -.12, key: -.18, install: -.38 };
 
-  const sections = [...document.querySelectorAll('[data-scene]')];
+  const sections = [...document.querySelectorAll('[data-scene]')], hero = document.getElementById('top');
   function sceneAt() {
     const vh = H; let i = 0;
     for (let k = 0; k < sections.length; k++) if (sections[k].getBoundingClientRect().top <= vh * .95) i = k;
@@ -450,8 +456,8 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     const dt = Math.min(.05, (now - lastT) / 1000); lastT = now; elapsed += dt;
     const sv = scrollY - lastScroll; lastScroll = scrollY; scrollVel += (sv - scrollVel) * .15;
     const { from, to, k } = sceneAt();
-    const narrow = W < 900;
-    const cx = narrow ? W * .5 : W * .74, cy = narrow ? H * .3 : H * .5, scale = Math.min(W, H) * (narrow ? .19 : .21);
+    const narrow = W < 1100;
+    const cx = narrow ? W * .5 : W * .77, cy = narrow ? H * .3 : H * .5, scale = narrow ? Math.min(W, H) * .19 : Math.min(W * .15, H * .23);
     const spin = SPIN[from] * (1 - k) + SPIN[to] * k;
     if (!reduce) rotY += dt * .16 * spin + scrollVel * .0018;
     rotX += ((PITCH[from] * (1 - k) + PITCH[to] * k) - rotX) * Math.min(1, dt * 2);
@@ -459,7 +465,9 @@ footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex;
     tiltY += ((pointer.active ? pointer.tx * .6 : 0) - tiltY) * .05;
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'lighter';
-    const fade = narrow ? .45 : 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
+    // On narrow screens the box sits behind the text, so it fades out once the hero scrolls away.
+    const heroLeft = narrow ? Math.max(0, Math.min(1, hero.getBoundingClientRect().bottom / H - .15)) : 1;
+    const fade = narrow ? .5 * heroLeft : 1, settle = reduce ? 1 : Math.min(1, dt * 3.2);
     for (const p of parts) {
       SCENES[from](p, elapsed, A); SCENES[to](p, elapsed, B);
       for (let q = 0; q < 3; q++) { const target = A.x[q] + (B.x[q] - A.x[q]) * k; p.p[q] += (target - p.p[q]) * settle; }
