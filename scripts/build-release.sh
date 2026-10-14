@@ -9,7 +9,7 @@ set -euo pipefail
 version=${1:?usage: scripts/build-release.sh VERSION}
 version=${version#v}
 cd "$(dirname "$0")/.."
-grep -qx "export const version = '$version';" worker/src/version.ts || {
+grep -qxF "export const version = '$version';" worker/src/version.ts || {
 	echo "worker/src/version.ts does not name version $version; set it in the release commit" >&2
 	exit 1
 }
