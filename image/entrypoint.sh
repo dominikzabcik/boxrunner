@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs the container's command as runner. With BOXRUNNER_DOCKER=1, the job
-# runs under Sysbox and first gets a Docker daemon of its own.
+# runs under Sysbox and first gets a Docker daemon of its own, which pulls
+# Docker Hub images through the box's registry mirror at BOXRUNNER_MIRROR.
 set -eu
 
 if [ "$(id -u)" != 0 ]; then
@@ -12,7 +13,7 @@ fi
 
 if [ "${BOXRUNNER_DOCKER:-}" = 1 ]; then
 	rm -f /usr/local/bin/docker
-	dockerd --group docker >/var/log/dockerd.log 2>&1 &
+	dockerd --group docker ${BOXRUNNER_MIRROR:+"--registry-mirror=$BOXRUNNER_MIRROR"} >/var/log/dockerd.log 2>&1 &
 	dockerd=$!
 	waited=0
 	until docker info >/dev/null 2>&1; do

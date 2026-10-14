@@ -1,5 +1,5 @@
 // Package firewall keeps job containers away from the host and private
-// networks. The rules live in two chains of their own, filled atomically with
+// networks, except for the registry mirror, which serves jobs alone. The rules live in two chains of their own, filled atomically with
 // iptables-restore and reached by jumps tagged with a comment, so applying them
 // again replaces them and uninstall removes exactly them.
 package firewall
@@ -7,6 +7,9 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -16,19 +19,29 @@ const (
 	tag          = "boxrunner"
 )
 
+// Rules are what boxrunner's chains hold for one bridge.
+type Rules struct {
+	Bridge string
+	// Mirror is the registry mirror: the one host address and port jobs may
+	// reach, and that nothing else may reach. The zero value means none.
+	Mirror netip.AddrPort
+}
+
 type Family struct {
 	Name    string
 	Command string
 	Restore string
 	// Blocked are the destinations forwarded traffic from the bridge may not reach.
 	Blocked []string
+	// Is reports whether an address belongs to the family.
+	Is func(netip.Addr) bool
 }
 
 var (
 	V4 = Family{"IPv4", "iptables", "iptables-restore", []string{
 		"10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
-	}}
-	V6 = Family{"IPv6", "ip6tables", "ip6tables-restore", []string{"fc00::/7", "fe80::/10"}}
+	}, netip.Addr.Is4}
+	V6 = Family{"IPv6", "ip6tables", "ip6tables-restore", []string{"fc00::/7", "fe80::/10"}, netip.Addr.Is6}
 
 	Families = []Family{V4, V6}
 )
@@ -45,9 +58,19 @@ type Chain struct {
 	Rules [][]string
 }
 
-// Chains is the content of boxrunner's own chains for a family.
-func (f Family) Chains() []Chain {
-	input := append(append([][]string{}, dns...), []string{"-j", "DROP"})
+// Chains is the content of boxrunner's own chains for a family. Everything
+// the host receives passes the input chain, so that the mirror answers only
+// the bridge; traffic from elsewhere returns to the host's own rules.
+func (f Family) Chains(r Rules) []Chain {
+	var input, mirror [][]string
+	if r.Mirror.IsValid() && f.Is(r.Mirror.Addr()) {
+		host := netip.PrefixFrom(r.Mirror.Addr(), r.Mirror.Addr().BitLen()).String()
+		port := strconv.Itoa(int(r.Mirror.Port()))
+		input = append(input, []string{"-d", host, "!", "-i", r.Bridge, "-p", "tcp", "-m", "tcp", "--dport", port, "-j", "DROP"})
+		mirror = append(mirror, []string{"-d", host, "-p", "tcp", "-m", "tcp", "--dport", port, "-j", "ACCEPT"})
+	}
+	input = append(input, []string{"!", "-i", r.Bridge, "-j", "RETURN"})
+	input = append(append(append(input, dns...), mirror...), []string{"-j", "DROP"})
 	forward := append([][]string{}, dns...)
 	for _, cidr := range f.Blocked {
 		forward = append(forward, []string{"-d", cidr, "-j", "DROP"})
@@ -57,13 +80,13 @@ func (f Family) Chains() []Chain {
 
 // RestoreInput is the iptables-restore --noflush input that creates or
 // replaces the chains in one commit.
-func (f Family) RestoreInput() string {
+func (f Family) RestoreInput(r Rules) string {
 	var b strings.Builder
 	b.WriteString("*filter\n")
-	for _, c := range f.Chains() {
+	for _, c := range f.Chains(r) {
 		fmt.Fprintf(&b, ":%s - [0:0]\n", c.Name)
 	}
-	for _, c := range f.Chains() {
+	for _, c := range f.Chains(r) {
 		for _, r := range c.Rules {
 			fmt.Fprintf(&b, "-A %s %s\n", c.Name, strings.Join(r, " "))
 		}
@@ -77,14 +100,22 @@ type Jump struct {
 	Rule  []string
 }
 
-// Jumps send traffic from the bridge into boxrunner's chains. Forwarded
-// traffic is caught in DOCKER-USER, which Docker evaluates before its own
-// accept rules, or in FORWARD when Docker has no DOCKER-USER for the family.
+// Jumps send traffic into boxrunner's chains: everything the host receives,
+// and what it forwards from the bridge. Forwarded traffic is caught in
+// DOCKER-USER, which Docker evaluates before its own accept rules, or in
+// FORWARD when Docker has no DOCKER-USER for the family.
 func Jumps(bridge, forwardHook string) []Jump {
-	rule := func(target string) []string {
-		return []string{"-i", bridge, "-m", "comment", "--comment", tag, "-j", target}
+	tagged := []string{"-m", "comment", "--comment", tag, "-j"}
+	return []Jump{
+		{"INPUT", slices.Concat(tagged, []string{InputChain})},
+		{forwardHook, slices.Concat([]string{"-i", bridge}, tagged, []string{ForwardChain})},
 	}
-	return []Jump{{"INPUT", rule(InputChain)}, {forwardHook, rule(ForwardChain)}}
+}
+
+// legacyInput is the input jump of boxrunner before the registry mirror,
+// which sent only the bridge's traffic. Apply and Remove delete it.
+func legacyInput(bridge string) Jump {
+	return Jump{"INPUT", []string{"-i", bridge, "-m", "comment", "--comment", tag, "-j", InputChain}}
 }
 
 // Run runs a command with stdin and returns its combined output.
@@ -98,12 +129,12 @@ func forwardHook(ctx context.Context, run Run, f Family) string {
 }
 
 // Apply installs or replaces the rules for every family.
-func Apply(ctx context.Context, run Run, bridge string) error {
+func Apply(ctx context.Context, run Run, r Rules) error {
 	for _, f := range Families {
-		if out, err := run(ctx, f.RestoreInput(), f.Restore, "-w", "--noflush"); err != nil {
+		if out, err := run(ctx, f.RestoreInput(r), f.Restore, "-w", "--noflush"); err != nil {
 			return fmt.Errorf("%s: %w: %s", f.Restore, err, out)
 		}
-		for _, j := range Jumps(bridge, forwardHook(ctx, run, f)) {
+		for _, j := range Jumps(r.Bridge, forwardHook(ctx, run, f)) {
 			if _, err := run(ctx, "", f.Command, append([]string{"-w", "-C", j.Chain}, j.Rule...)...); err == nil {
 				continue
 			}
@@ -111,8 +142,18 @@ func Apply(ctx context.Context, run Run, bridge string) error {
 				return fmt.Errorf("%s -I %s: %w: %s", f.Command, j.Chain, err, out)
 			}
 		}
+		deleteAll(ctx, run, f, legacyInput(r.Bridge))
 	}
 	return nil
+}
+
+// deleteAll deletes every copy of a jump.
+func deleteAll(ctx context.Context, run Run, f Family, j Jump) {
+	for range 10 {
+		if _, err := run(ctx, "", f.Command, append([]string{"-w", "-D", j.Chain}, j.Rule...)...); err != nil {
+			return
+		}
+	}
 }
 
 type State int
@@ -125,10 +166,10 @@ const (
 
 // Check reports whether every family has exactly boxrunner's rules, none of
 // them, or something in between.
-func Check(ctx context.Context, run Run, bridge string) State {
+func Check(ctx context.Context, run Run, r Rules) State {
 	found, missing := false, false
 	for _, f := range Families {
-		for _, c := range f.Chains() {
+		for _, c := range f.Chains(r) {
 			out, err := run(ctx, "", f.Command, "-w", "-S", c.Name)
 			if err != nil {
 				missing = true
@@ -144,7 +185,7 @@ func Check(ctx context.Context, run Run, bridge string) State {
 				}
 			}
 		}
-		for _, j := range Jumps(bridge, forwardHook(ctx, run, f)) {
+		for _, j := range Jumps(r.Bridge, forwardHook(ctx, run, f)) {
 			if _, err := run(ctx, "", f.Command, append([]string{"-w", "-C", j.Chain}, j.Rule...)...); err != nil {
 				missing = true
 			} else {
@@ -167,22 +208,19 @@ func Remove(ctx context.Context, run Run, bridge string) error {
 	for _, f := range Families {
 		for _, hook := range []string{"DOCKER-USER", "FORWARD"} {
 			for _, j := range Jumps(bridge, hook) {
-				for range 10 {
-					if _, err := run(ctx, "", f.Command, append([]string{"-w", "-D", j.Chain}, j.Rule...)...); err != nil {
-						break
-					}
-				}
+				deleteAll(ctx, run, f, j)
 			}
 		}
-		for _, c := range f.Chains() {
-			if _, err := run(ctx, "", f.Command, "-w", "-S", c.Name); err != nil {
+		deleteAll(ctx, run, f, legacyInput(bridge))
+		for _, chain := range []string{InputChain, ForwardChain} {
+			if _, err := run(ctx, "", f.Command, "-w", "-S", chain); err != nil {
 				continue
 			}
-			if out, err := run(ctx, "", f.Command, "-w", "-F", c.Name); err != nil {
-				return fmt.Errorf("%s -F %s: %w: %s", f.Command, c.Name, err, out)
+			if out, err := run(ctx, "", f.Command, "-w", "-F", chain); err != nil {
+				return fmt.Errorf("%s -F %s: %w: %s", f.Command, chain, err, out)
 			}
-			if out, err := run(ctx, "", f.Command, "-w", "-X", c.Name); err != nil {
-				return fmt.Errorf("%s -X %s: %w: %s", f.Command, c.Name, err, out)
+			if out, err := run(ctx, "", f.Command, "-w", "-X", chain); err != nil {
+				return fmt.Errorf("%s -X %s: %w: %s", f.Command, chain, err, out)
 			}
 		}
 	}

@@ -41,7 +41,21 @@ type fakeDocker struct {
 	mu         sync.Mutex
 	containers map[string]*container
 	network    bool
+	volumes    map[string]bool
 	runtimes   []string
+}
+
+// matches applies a containers/json label filter, key or key=value.
+func (c *container) matches(filters string) bool {
+	var f map[string][]string
+	json.Unmarshal([]byte(filters), &f)
+	for _, label := range f["label"] {
+		key, value, withValue := strings.Cut(label, "=")
+		if have, ok := c.Labels[key]; !ok || withValue && have != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *fakeDocker) serve(t *testing.T) string {
@@ -70,14 +84,27 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				http.Error(w, `{"message":"no such network"}`, 404)
 				return
 			}
-			io.WriteString(w, `{"Name":"boxrunner"}`)
+			io.WriteString(w, `{"Name":"boxrunner","IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}`)
 		case path == "/networks/create":
 			f.network = true
+		case path == "/volumes/create":
+			var body struct{ Name string }
+			json.NewDecoder(r.Body).Decode(&body)
+			f.volumes[body.Name] = true
+		case parts[0] == "volumes" && len(parts) == 2:
+			if !f.volumes[parts[1]] {
+				http.Error(w, `{"message":"no such volume"}`, 404)
+				return
+			}
+			io.WriteString(w, `{}`)
 		case strings.HasPrefix(path, "/images/"):
 			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+runnerimage.Identity("2.338.0")+`"}}}`)
 		case path == "/containers/json":
 			var list []map[string]any
 			for _, c := range f.containers {
+				if !c.matches(r.URL.Query().Get("filters")) {
+					continue
+				}
 				list = append(list, map[string]any{"Id": c.Name, "Names": []string{"/" + c.Name}, "Labels": c.Labels, "State": c.State, "Created": c.Created})
 			}
 			json.NewEncoder(w).Encode(list)
@@ -207,7 +234,7 @@ type harness struct {
 // the fake Docker before the agent starts.
 func startAgent(t *testing.T, containers map[string]*container, busy map[string]bool, change ...func(*config.Class, *fakeDocker)) *harness {
 	h := &harness{
-		docker: &fakeDocker{containers: containers},
+		docker: &fakeDocker{containers: containers, volumes: map[string]bool{}},
 		github: &fakeGitHub{queue: make(chan string, 8), busy: busy},
 		jobs:   filepath.Join(t.TempDir(), "jobs.jsonl"),
 		socket: filepath.Join(t.TempDir(), "s.sock"),
@@ -401,7 +428,7 @@ func TestWarmRunner(t *testing.T) {
 func TestSpecIdleClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 2 << 30, Pids: 512, Shm: 1 << 30, Priority: config.Idle, Image: "boxrunner/runner:local"}
 	r := scheduler.Runner{Name: "box-1-boxrunner-light-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner-light"}, ScaleSetID: 8, ID: 41}
-	got := Spec("box-1", class, r, "jit")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-light-3f9a2c", Image: "boxrunner/runner:local",
 		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"},
@@ -418,10 +445,10 @@ func TestSpecIdleClass(t *testing.T) {
 func TestSpecDockerClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
-	got := Spec("box-1", class, r, "jit")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-3f9a2c", Image: "boxrunner/runner:local",
-		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_DOCKER=1"},
+		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_DOCKER=1", "BOXRUNNER_MIRROR=http://172.18.0.1:5000"},
 		Labels: map[string]string{"boxrunner.box": "box-1", "boxrunner.runner": "box-1-boxrunner-3f9a2c", "boxrunner.runner-id": "41",
 			"boxrunner.repo": "octo/site", "boxrunner.class": "boxrunner", "boxrunner.scaleset-id": "7"},
 		NanoCPUs: 2e9, Memory: 4 << 30, PidsLimit: 4096, ShmSize: 1 << 30,
@@ -449,14 +476,35 @@ func TestDockerClassNeedsSysbox(t *testing.T) {
 	var body map[string]any
 	waitFor(t, "a running job container", func() bool {
 		for _, c := range with.docker.snapshot() {
-			body = c.Body
-			return c.State == "running"
+			if c.Labels["boxrunner.box"] == "box-1" {
+				body = c.Body
+				return c.State == "running"
+			}
 		}
 		return false
 	})
 	with.stop(t)
 	host := body["HostConfig"].(map[string]any)
-	if host["Runtime"] != "sysbox-runc" || !reflect.DeepEqual(body["Env"], []any{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit-41", "BOXRUNNER_DOCKER=1"}) {
+	if host["Runtime"] != "sysbox-runc" || !reflect.DeepEqual(body["Env"], []any{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit-41", "BOXRUNNER_DOCKER=1", "BOXRUNNER_MIRROR=http://172.18.0.1:5000"}) {
 		t.Errorf("with Sysbox, runtime %v and env %v", host["Runtime"], body["Env"])
+	}
+	m := with.docker.snapshot()["boxrunner-mirror"]
+	with.docker.mu.Lock()
+	volume := with.docker.volumes["boxrunner-mirror"]
+	with.docker.mu.Unlock()
+	mirrorHost, _ := json.Marshal(m.Body["HostConfig"])
+	if m.State != "running" || !reflect.DeepEqual(m.Body["Env"], []any{"REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io", "REGISTRY_HTTP_ADDR=172.18.0.1:5000"}) ||
+		string(mirrorHost) != `{"Mounts":[{"Source":"boxrunner-mirror","Target":"/var/lib/registry","Type":"volume"}],"NetworkMode":"host","RestartPolicy":{"Name":"unless-stopped"}}` ||
+		!volume {
+		t.Errorf("mirror %s with env %v and host config %s; volume %v", m.State, m.Body["Env"], mirrorHost, volume)
+	}
+}
+
+func TestMirrorOnlyForDockerClasses(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil)
+	waitFor(t, "the repository list", func() bool { return len(h.github.workerCalls()) > 0 })
+	h.stop(t)
+	if got := h.docker.snapshot(); len(got) != 0 {
+		t.Errorf("without a docker class, containers = %v", got)
 	}
 }

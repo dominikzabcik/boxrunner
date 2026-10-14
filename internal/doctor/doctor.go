@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
 
@@ -70,7 +72,12 @@ func (c Checks) All(ctx context.Context) []Result {
 		}
 	}
 
-	state := firewall.Check(ctx, c.Exec, layout.Bridge)
+	withDocker := c.ConfigErr == nil && slices.ContainsFunc(c.Config.Classes, func(k config.Class) bool { return k.Docker })
+	rules := firewall.Rules{Bridge: layout.Bridge}
+	if withDocker && d != nil {
+		rules.Mirror, _ = mirror.Find(ctx, d)
+	}
+	state := firewall.Check(ctx, c.Exec, rules)
 	add("firewall rules", state == firewall.Current, "%s", map[firewall.State]string{
 		firewall.Current: "in place for IPv4 and IPv6",
 		firewall.Stale:   "incomplete; restart boxrunner or run install",
@@ -79,8 +86,8 @@ func (c Checks) All(ctx context.Context) []Result {
 
 	if d != nil {
 		results = append(results, c.probe(ctx, d)...)
-		if c.ConfigErr == nil && slices.ContainsFunc(c.Config.Classes, func(k config.Class) bool { return k.Docker }) {
-			results = append(results, dockerInJobs(ctx, d)...)
+		if withDocker {
+			results = append(results, dockerInJobs(ctx, d, rules.Mirror)...)
 		}
 	}
 
@@ -195,10 +202,22 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	return results
 }
 
+// dockerScript runs as the runner user in a job container with Docker and
+// reports what that Docker sees, one "name value" line each.
+const dockerScript = `set -e
+version=$(docker info --format '{{.ServerVersion}}')
+mirrors=$(docker info --format '{{range .RegistryConfig.Mirrors}}{{.}} {{end}}')
+answer=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$BOXRUNNER_MIRROR/v2/" || true)
+echo "version $version"
+echo "mirrors $mirrors"
+echo "mirror $answer"
+`
+
 // dockerInJobs checks what classes with docker = true need: Docker's Sysbox
-// runtime, and a job container whose entrypoint starts a Docker daemon that
-// the runner user can use.
-func dockerInJobs(ctx context.Context, d *docker.Client) []Result {
+// runtime, a job container whose entrypoint starts a Docker daemon that the
+// runner user can use, and the registry mirror at addr, which that daemon
+// pulls through and reaches past the firewall.
+func dockerInJobs(ctx context.Context, d *docker.Client, addr netip.AddrPort) []Result {
 	var results []Result
 	add := func(name string, ok bool, format string, args ...any) {
 		results = append(results, Result{name, ok, fmt.Sprintf(format, args...)})
@@ -210,10 +229,14 @@ func dockerInJobs(ctx context.Context, d *docker.Client) []Result {
 	}
 	add("sysbox", true, "Docker lists the %s runtime", layout.SysboxRuntime)
 
+	env := []string{layout.EnvDocker}
+	if addr.IsValid() {
+		env = append(env, layout.EnvMirror+"="+mirror.URL(addr))
+	}
 	const name = "boxrunner-doctor-docker"
 	d.Remove(ctx, name)
 	id, err := d.Create(ctx, docker.ContainerSpec{
-		Name: name, Image: layout.Image, Cmd: []string{"docker", "info", "--format", "{{.ServerVersion}}"}, Env: []string{layout.EnvDocker}, Tty: true,
+		Name: name, Image: layout.Image, Cmd: []string{"bash", "-c", dockerScript}, Tty: true, Env: env,
 		Runtime: layout.SysboxRuntime, CgroupParent: layout.IdleSlice, Network: layout.Network, NanoCPUs: 1e9, Memory: 1 << 30, PidsLimit: 1024,
 	})
 	if err == nil {
@@ -229,13 +252,34 @@ func dockerInJobs(ctx context.Context, d *docker.Client) []Result {
 		return results
 	}
 	logs, _ := d.Logs(ctx, id)
+	return append(results, DockerInJobs(code, logs, addr)...)
+}
+
+// DockerInJobs judges what dockerScript reported from a job container that
+// exited with code.
+func DockerInJobs(code int, logs string, addr netip.AddrPort) []Result {
 	logs = strings.TrimSpace(strings.ReplaceAll(logs, "\r", ""))
 	if code != 0 {
 		lines := strings.Split(logs, "\n")
-		add("docker in jobs", false, "a job container could not start Docker (exit %d):\n%s", code, strings.Join(lines[max(0, len(lines)-10):], "\n"))
-		return results
+		return []Result{{"docker in jobs", false, fmt.Sprintf("a job container could not start Docker (exit %d):\n%s", code, strings.Join(lines[max(0, len(lines)-10):], "\n"))}}
 	}
-	add("docker in jobs", true, "a job container started Docker %s and the runner user can use it", logs)
+	seen := map[string]string{}
+	for _, line := range strings.Split(logs, "\n") {
+		name, value, _ := strings.Cut(line, " ")
+		seen[name] = strings.TrimSpace(value)
+	}
+	url := mirror.URL(addr)
+	results := []Result{{"docker in jobs", true, fmt.Sprintf("a job container started Docker %s and the runner user can use it", seen["version"])}}
+	switch {
+	case !addr.IsValid():
+		results = append(results, Result{"registry mirror", false, "the network " + layout.Network + " has no IPv4 gateway for the mirror; run install"})
+	case !strings.Contains(seen["mirrors"]+" ", url+"/ "):
+		results = append(results, Result{"registry mirror", false, fmt.Sprintf("a job's Docker does not pull through %s (its mirrors: %q); rebuild the job image with install", url, seen["mirrors"])})
+	case seen["mirror"] != "200":
+		results = append(results, Result{"registry mirror", false, fmt.Sprintf("%s did not answer a job container (HTTP %q); run install, or see docker logs %s", url, seen["mirror"], layout.Mirror)})
+	default:
+		results = append(results, Result{"registry mirror", true, fmt.Sprintf("a job's Docker pulls through %s, which answers from inside a job container", url)})
+	}
 	return results
 }
 

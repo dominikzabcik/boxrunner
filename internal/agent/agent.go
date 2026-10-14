@@ -24,6 +24,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/listener"
+	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
@@ -60,6 +61,8 @@ type Agent struct {
 	rootDir string
 	// sysbox is whether Docker can run the jobs of classes with docker = true.
 	sysbox bool
+	// mirror is the registry mirror's URL for those jobs, "" when no class has Docker.
+	mirror string
 	queue  *queue.Client
 	events chan scheduler.Event
 	// stopped closes when the scheduler loop no longer reads events.
@@ -139,7 +142,8 @@ func Run(ctx context.Context, o Options) error {
 }
 
 // converge re-applies what install set up and a reboot or Docker restart
-// could have lost: the network and the firewall rules.
+// could have lost: the network, the registry mirror for classes with Docker
+// and the firewall rules.
 func (a *Agent) converge(ctx context.Context) error {
 	if _, ok, err := a.Docker.Network(ctx, layout.Network); err != nil {
 		return err
@@ -148,7 +152,19 @@ func (a *Agent) converge(ctx context.Context) error {
 			return fmt.Errorf("creating network %s: %w", layout.Network, err)
 		}
 	}
-	if err := firewall.Apply(ctx, a.Run, layout.Bridge); err != nil {
+	rules := firewall.Rules{Bridge: layout.Bridge}
+	if slices.ContainsFunc(a.Config.Classes, func(c config.Class) bool { return c.Docker }) {
+		addr, err := mirror.Find(ctx, a.Docker)
+		if err != nil {
+			return err
+		}
+		// Without the mirror, a job's Docker pulls from Docker Hub itself.
+		if err := mirror.Ensure(ctx, a.Docker, addr); err != nil {
+			a.Log.Error("starting the registry mirror failed; jobs pull from Docker Hub directly", "err", err)
+		}
+		rules.Mirror, a.mirror = addr, mirror.URL(addr)
+	}
+	if err := firewall.Apply(ctx, a.Run, rules); err != nil {
 		return fmt.Errorf("firewall: %w", err)
 	}
 	return nil
@@ -250,8 +266,8 @@ func runnerName(box, class string) string {
 // Spec is the container for one runner: the class's limits, the bridge
 // network, no mounts and no Docker socket. The runner config travels in the
 // environment, never on a command line. A class with Docker runs under Sysbox
-// and starts its own daemon.
-func Spec(box string, class config.Class, r scheduler.Runner, jitConfig string) docker.ContainerSpec {
+// and starts its own daemon, which pulls through mirror when one is given.
+func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror string) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  r.Name,
 		Image: class.Image,
@@ -276,6 +292,9 @@ func Spec(box string, class config.Class, r scheduler.Runner, jitConfig string) 
 	if class.Docker {
 		spec.Runtime = layout.SysboxRuntime
 		spec.Env = append(spec.Env, layout.EnvDocker)
+		if mirror != "" {
+			spec.Env = append(spec.Env, layout.EnvMirror+"="+mirror)
+		}
 	}
 	return spec
 }
@@ -295,7 +314,7 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 		return
 	}
 	r.ID = minted.ID
-	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig))
+	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror))
 	if err == nil {
 		err = a.Docker.Start(ctx, id)
 	}

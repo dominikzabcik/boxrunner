@@ -20,6 +20,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 )
 
@@ -67,7 +68,8 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 		o.Paths[p] = f
 	}
 
-	o.Firewall = firewall.Check(ctx, run, layout.Bridge)
+	o.Firewall = firewall.Check(ctx, run, firewall.Rules{Bridge: layout.Bridge})
+	o.FirewallMirror = firewall.Stale
 	_, err = run(ctx, "", "systemctl", "is-enabled", "--quiet", layout.UnitName)
 	o.UnitEnabled = err == nil
 	_, err = run(ctx, "", "systemctl", "is-active", "--quiet", layout.UnitName)
@@ -86,11 +88,16 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	}
 	if n, ok, err := d.Network(ctx, layout.Network); err == nil && ok {
 		o.Network = Network{Exists: true}
+		if gateway, ok := n.Gateway(); ok {
+			o.Network.Gateway = gateway
+			o.FirewallMirror = firewall.Check(ctx, run, firewall.Rules{Bridge: layout.Bridge, Mirror: mirror.Addr(gateway)})
+		}
 		if n.Driver != "bridge" || n.Options["com.docker.network.bridge.name"] != layout.Bridge || n.Options["com.docker.network.bridge.enable_icc"] != "false" {
 			o.Network.Problem = fmt.Sprintf("a Docker network named %s exists but is not boxrunner's (driver %q, bridge %q, icc %q); remove it with `docker network rm %s` and run install again",
 				layout.Network, n.Driver, n.Options["com.docker.network.bridge.name"], n.Options["com.docker.network.bridge.enable_icc"], layout.Network)
 		}
 	}
+	o.Mirror, _ = mirror.Observe(ctx, d)
 	_, o.Image, _ = d.ImageLabels(ctx, layout.Image)
 	if list, err := d.List(ctx, layout.LabelBox, false); err == nil {
 		o.Containers = len(list)
@@ -198,7 +205,32 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		}
 		return d, d.CreateNetwork(ctx, docker.NetworkSpec{Name: layout.Network, Bridge: layout.Bridge})
 	case ApplyFirewall:
-		return d, firewall.Apply(ctx, run, layout.Bridge)
+		rules := firewall.Rules{Bridge: layout.Bridge}
+		if s.Mirror {
+			if err := needDocker(); err != nil {
+				return d, err
+			}
+			addr, err := mirror.Find(ctx, d)
+			if err != nil {
+				return d, err
+			}
+			rules.Mirror = addr
+		}
+		return d, firewall.Apply(ctx, run, rules)
+	case StartMirror:
+		if err := needDocker(); err != nil {
+			return d, err
+		}
+		addr, err := mirror.Find(ctx, d)
+		if err != nil {
+			return d, err
+		}
+		return d, mirror.Ensure(ctx, d, addr)
+	case RemoveMirror:
+		if err := needDocker(); err != nil {
+			return d, err
+		}
+		return d, mirror.Remove(ctx, d)
 	case BuildImage:
 		if err := needDocker(); err != nil {
 			return d, err

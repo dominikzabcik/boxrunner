@@ -2,12 +2,14 @@ package install
 
 import (
 	"io/fs"
+	"net/netip"
 	"reflect"
 	"testing"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/mirror"
 )
 
 var desired = Desired{
@@ -41,10 +43,12 @@ func installed() Observed {
 			layout.ConfigDir:     {nil, fs.ModeDir | 0o755},
 			layout.StateDir:      {nil, fs.ModeDir | 0o755},
 		},
-		Network: Network{Exists: true}, Firewall: firewall.Current, Image: true,
+		Network: Network{Exists: true, Gateway: gateway}, Firewall: firewall.Current, Image: true,
 		UnitEnabled: true, UnitActive: true,
 	}
 }
+
+var gateway = netip.MustParseAddr("172.18.0.1")
 
 func names(steps []Step) []string {
 	var out []string
@@ -127,6 +131,12 @@ func TestPlanDocker(t *testing.T) {
 	withDocker := desired
 	withDocker.Docker = true
 	sysbox := "install Sysbox 0.7.1; Docker reloads its configuration and running containers keep running"
+	startMirror := "start the registry mirror boxrunner-mirror on boxrunner0's gateway, port 5000"
+	mirrorFirewall := "apply the firewall rules for boxrunner0, which let jobs reach the registry mirror"
+	withDockerClass := func(o *Observed) {
+		o.Sysbox = true
+		o.Paths[layout.ConfigPath] = File{[]byte(config.Default(desired.Worker, desired.Box, desired.Host, true)), 0o644}
+	}
 	cases := []struct {
 		name    string
 		desired Desired
@@ -147,7 +157,8 @@ func TestPlanDocker(t *testing.T) {
 				"write /etc/boxrunner/token (0600)",
 				"reload systemd",
 				"create the Docker network boxrunner on bridge boxrunner0",
-				"apply the firewall rules for boxrunner0",
+				startMirror,
+				mirrorFirewall,
 				"build the job image boxrunner/runner:local",
 				"enable and start boxrunner.service",
 			},
@@ -170,7 +181,43 @@ func TestPlanDocker(t *testing.T) {
 			observe: func(o *Observed) {
 				o.Paths[layout.ConfigPath] = File{[]byte(config.Default(desired.Worker, desired.Box, desired.Host, true)), 0o644}
 			},
-			want: []string{sysbox, "restart boxrunner.service"},
+			want: []string{sysbox, startMirror, mirrorFirewall, "restart boxrunner.service"},
+		},
+		{
+			name:    "a docker class with its mirror in place",
+			desired: desired,
+			observe: func(o *Observed) {
+				withDockerClass(o)
+				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), firewall.Current
+			},
+			want: nil,
+		},
+		{
+			name:    "a docker class whose mirror stopped",
+			desired: desired,
+			observe: func(o *Observed) {
+				withDockerClass(o)
+				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), firewall.Current
+				o.Mirror.Running = false
+			},
+			want: []string{startMirror},
+		},
+		{
+			name:    "a docker class and a network on a new gateway",
+			desired: desired,
+			observe: func(o *Observed) {
+				withDockerClass(o)
+				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.19.0.1:5000")), firewall.Stale
+			},
+			want: []string{startMirror, mirrorFirewall},
+		},
+		{
+			name:    "a mirror left after the last docker class went",
+			desired: desired,
+			observe: func(o *Observed) {
+				o.Mirror = mirror.State{Volume: true}
+			},
+			want: []string{"remove the registry mirror boxrunner-mirror and its cache"},
 		},
 		{
 			name:    "no flag and no docker class",
@@ -290,9 +337,11 @@ func TestPlanBlocked(t *testing.T) {
 func TestPlanUninstall(t *testing.T) {
 	o := installed()
 	o.Containers = 2
+	o.Mirror = mirror.State{Identity: mirror.Identity(netip.MustParseAddrPort("172.18.0.1:5000")), Volume: true}
 	want := []string{
 		"stop and disable boxrunner.service (closes sessions)",
 		"remove the job containers",
+		"remove the registry mirror boxrunner-mirror and its cache",
 		"remove the Docker network boxrunner",
 		"remove the job image boxrunner/runner:local",
 		"remove the firewall rules",

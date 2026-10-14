@@ -24,6 +24,12 @@ const (
 	SysboxRuntime = "sysbox-runc"
 	// EnvDocker tells the job image's entrypoint to start a Docker daemon.
 	EnvDocker = "BOXRUNNER_DOCKER=1"
+	// EnvMirror gives that daemon the registry mirror's URL.
+	EnvMirror = "BOXRUNNER_MIRROR"
+	// Mirror names the registry mirror's container and its cache volume. It
+	// listens on the bridge's gateway address only.
+	Mirror     = "boxrunner-mirror"
+	MirrorPort = 5000
 
 	LabelBox        = "boxrunner.box"
 	LabelRunner     = "boxrunner.runner"
@@ -34,6 +40,9 @@ const (
 	LabelVersion    = "boxrunner.runner-version"
 	// LabelImage holds the job image's identity: runner version and build context.
 	LabelImage = "boxrunner.image"
+	// LabelMirror marks the registry mirror's container and volume; on the
+	// container it holds the mirror's identity: image and address.
+	LabelMirror = "boxrunner.mirror"
 
 	// ExitConfig is the exit status for a problem a restart cannot fix (a wrong
 	// token, an agent too old for its Worker); the unit does not restart on it.

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
+	"github.com/dominikzabcik/boxrunner/internal/mirror"
 )
 
 // Desired is what the person running install asked for. Empty strings keep
@@ -43,6 +45,9 @@ type Network struct {
 	Exists bool
 	// Problem says why an existing network named boxrunner is not ours.
 	Problem string
+	// Gateway is the host's IPv4 address on the bridge, where the registry
+	// mirror listens.
+	Gateway netip.Addr
 }
 
 type Observed struct {
@@ -63,13 +68,17 @@ type Observed struct {
 	CgroupV2     bool
 	CgroupDriver string
 	// Paths holds every path boxrunner manages that exists.
-	Paths       map[string]File
-	Network     Network
-	Firewall    firewall.State
-	Image       bool
-	Containers  int
-	UnitEnabled bool
-	UnitActive  bool
+	Paths   map[string]File
+	Network Network
+	// Firewall is the state of the rules without the mirror's exception, and
+	// FirewallMirror with it, at the network's gateway.
+	Firewall       firewall.State
+	FirewallMirror firewall.State
+	Mirror         mirror.State
+	Image          bool
+	Containers     int
+	UnitEnabled    bool
+	UnitActive     bool
 }
 
 type Step interface{ String() string }
@@ -88,9 +97,14 @@ type (
 		Mode    fs.FileMode
 		Content []byte
 	}
-	DaemonReload     struct{}
-	CreateNetwork    struct{}
-	ApplyFirewall    struct{}
+	DaemonReload  struct{}
+	CreateNetwork struct{}
+	// ApplyFirewall installs the rules, with the mirror's exception when
+	// Mirror is set.
+	ApplyFirewall struct{ Mirror bool }
+	// StartMirror runs the registry mirror on the network's gateway.
+	StartMirror      struct{}
+	RemoveMirror     struct{}
 	BuildImage       struct{}
 	EnableUnit       struct{}
 	RestartUnit      struct{}
@@ -118,7 +132,18 @@ func (DaemonReload) String() string { return "reload systemd" }
 func (CreateNetwork) String() string {
 	return "create the Docker network " + layout.Network + " on bridge " + layout.Bridge
 }
-func (ApplyFirewall) String() string    { return "apply the firewall rules for " + layout.Bridge }
+func (s ApplyFirewall) String() string {
+	if s.Mirror {
+		return "apply the firewall rules for " + layout.Bridge + ", which let jobs reach the registry mirror"
+	}
+	return "apply the firewall rules for " + layout.Bridge
+}
+func (StartMirror) String() string {
+	return fmt.Sprintf("start the registry mirror %s on %s's gateway, port %d", layout.Mirror, layout.Bridge, layout.MirrorPort)
+}
+func (RemoveMirror) String() string {
+	return "remove the registry mirror " + layout.Mirror + " and its cache"
+}
 func (BuildImage) String() string       { return "build the job image " + layout.Image }
 func (EnableUnit) String() string       { return "enable and start " + layout.UnitName }
 func (RestartUnit) String() string      { return "restart " + layout.UnitName }
@@ -230,8 +255,10 @@ func Plan(d Desired, o Observed) []Step {
 	if cfgErr != nil {
 		block("%v", cfgErr)
 	}
-	// A class with docker = true needs Sysbox, whether or not --docker asked.
-	sysbox := !o.Sysbox && (d.Docker || slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker }))
+	// A class with docker = true needs Sysbox, whether or not --docker asked,
+	// and its jobs pull through the registry mirror.
+	wantMirror := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker })
+	sysbox := !o.Sysbox && (d.Docker || wantMirror)
 	if problem := sysboxProblem(o); sysbox && problem != "" {
 		block("%s", problem)
 	}
@@ -273,8 +300,19 @@ func Plan(d Desired, o Observed) []Step {
 	if !o.Network.Exists {
 		steps = append(steps, CreateNetwork{})
 	}
-	if o.Firewall != firewall.Current {
-		steps = append(steps, ApplyFirewall{})
+	gateway := o.Network.Gateway
+	switch {
+	case wantMirror && (!gateway.IsValid() || o.Mirror != mirror.Current(mirror.Addr(gateway))):
+		steps = append(steps, StartMirror{})
+	case !wantMirror && o.Mirror != mirror.State{}:
+		steps = append(steps, RemoveMirror{})
+	}
+	wall := o.Firewall
+	if wantMirror {
+		wall = o.FirewallMirror
+	}
+	if wall != firewall.Current {
+		steps = append(steps, ApplyFirewall{Mirror: wantMirror})
 	}
 	if !o.Image {
 		steps = append(steps, BuildImage{})
@@ -329,6 +367,9 @@ func PlanUninstall(o Observed) []Step {
 	if o.DockerUp {
 		if o.Containers > 0 {
 			steps = append(steps, RemoveContainers{})
+		}
+		if o.Mirror != (mirror.State{}) {
+			steps = append(steps, RemoveMirror{})
 		}
 		if o.Network.Exists && o.Network.Problem == "" {
 			steps = append(steps, RemoveNetwork{})

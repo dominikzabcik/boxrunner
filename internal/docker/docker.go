@@ -10,9 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -141,17 +144,33 @@ type ContainerSpec struct {
 	// Runtime is the OCI runtime; empty means Docker's default.
 	Runtime string
 	Tty     bool
+	// Restart is the restart policy, such as unless-stopped; empty means none.
+	Restart string
+	// Volumes mounts named volumes: volume name to path in the container.
+	Volumes map[string]string
+}
+
+type restartPolicy struct {
+	Name string `json:"Name"`
+}
+
+type mount struct {
+	Type   string `json:"Type"`
+	Source string `json:"Source"`
+	Target string `json:"Target"`
 }
 
 type hostConfig struct {
-	NanoCpus     int64  `json:"NanoCpus,omitempty"`
-	Memory       int64  `json:"Memory,omitempty"`
-	MemorySwap   int64  `json:"MemorySwap,omitempty"`
-	PidsLimit    int64  `json:"PidsLimit,omitempty"`
-	ShmSize      int64  `json:"ShmSize,omitempty"`
-	CgroupParent string `json:"CgroupParent,omitempty"`
-	NetworkMode  string `json:"NetworkMode,omitempty"`
-	Runtime      string `json:"Runtime,omitempty"`
+	NanoCpus      int64          `json:"NanoCpus,omitempty"`
+	Memory        int64          `json:"Memory,omitempty"`
+	MemorySwap    int64          `json:"MemorySwap,omitempty"`
+	PidsLimit     int64          `json:"PidsLimit,omitempty"`
+	ShmSize       int64          `json:"ShmSize,omitempty"`
+	CgroupParent  string         `json:"CgroupParent,omitempty"`
+	NetworkMode   string         `json:"NetworkMode,omitempty"`
+	Runtime       string         `json:"Runtime,omitempty"`
+	RestartPolicy *restartPolicy `json:"RestartPolicy,omitempty"`
+	Mounts        []mount        `json:"Mounts,omitempty"`
 }
 
 type createBody struct {
@@ -172,6 +191,12 @@ func (c *Client) Create(ctx context.Context, s ContainerSpec) (string, error) {
 			NanoCpus: s.NanoCPUs, Memory: s.Memory, MemorySwap: s.Memory, PidsLimit: s.PidsLimit,
 			ShmSize: s.ShmSize, CgroupParent: s.CgroupParent, NetworkMode: s.Network, Runtime: s.Runtime,
 		},
+	}
+	if s.Restart != "" {
+		body.HostConfig.RestartPolicy = &restartPolicy{s.Restart}
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.Volumes)) {
+		body.HostConfig.Mounts = append(body.HostConfig.Mounts, mount{"volume", name, s.Volumes[name]})
 	}
 	var out struct {
 		ID string `json:"Id"`
@@ -214,7 +239,17 @@ func (c *Client) Wait(ctx context.Context, id string) (int, error) {
 
 // Logs returns a TTY container's output.
 func (c *Client) Logs(ctx context.Context, id string) (string, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/logs?stdout=1&stderr=1", "", nil)
+	return c.LogsSince(ctx, id, time.Time{})
+}
+
+// LogsSince returns a container's output from a moment on, up to 1 MiB.
+// Without a TTY, every line carries Docker's 8-byte stream header.
+func (c *Client) LogsSince(ctx context.Context, id string, since time.Time) (string, error) {
+	q := url.Values{"stdout": {"1"}, "stderr": {"1"}}
+	if !since.IsZero() {
+		q.Set("since", fmt.Sprintf("%d.%09d", since.Unix(), since.Nanosecond()))
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/logs?"+q.Encode(), "", nil)
 	if err != nil {
 		return "", err
 	}
@@ -244,6 +279,16 @@ type Network struct {
 			Gateway string `json:"Gateway"`
 		} `json:"Config"`
 	} `json:"IPAM"`
+}
+
+// Gateway is the network's IPv4 gateway: the host's address on its bridge.
+func (n Network) Gateway() (netip.Addr, bool) {
+	for _, c := range n.IPAM.Config {
+		if a, err := netip.ParseAddr(c.Gateway); err == nil && a.Is4() {
+			return a, true
+		}
+	}
+	return netip.Addr{}, false
 }
 
 // Network returns a network, or false when there is none by that name.
@@ -284,6 +329,40 @@ func (c *Client) RemoveNetwork(ctx context.Context, name string) error {
 		return nil
 	}
 	return err
+}
+
+// CreateVolume creates a named volume, or keeps the one by that name.
+func (c *Client) CreateVolume(ctx context.Context, name string, labels map[string]string) error {
+	return c.call(ctx, http.MethodPost, "/volumes/create", "application/json", map[string]any{"Name": name, "Labels": labels}, nil)
+}
+
+// Volume reports whether a named volume exists.
+func (c *Client) Volume(ctx context.Context, name string) (bool, error) {
+	err := c.call(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), "", nil, nil)
+	if NotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// RemoveVolume removes a named volume and its data. One already gone counts
+// as removed.
+func (c *Client) RemoveVolume(ctx context.Context, name string) error {
+	err := c.call(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), "", nil, nil)
+	if NotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// Pull fetches an image, such as name@sha256:…, from its registry.
+func (c *Client) Pull(ctx context.Context, ref string) error {
+	resp, err := c.do(ctx, http.MethodPost, "/images/create?"+url.Values{"fromImage": {ref}}.Encode(), "", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return streamError(resp.Body, "docker pull")
 }
 
 // ImageLabels returns an image's labels, or false when the image is missing.
@@ -355,7 +434,13 @@ func (c *Client) Build(ctx context.Context, tarContext io.Reader, o BuildOptions
 		return err
 	}
 	defer resp.Body.Close()
-	dec := json.NewDecoder(bufio.NewReader(resp.Body))
+	return streamError(resp.Body, "docker build")
+}
+
+// streamError reads a JSON progress stream to its end and returns the first
+// error it reports.
+func streamError(r io.Reader, what string) error {
+	dec := json.NewDecoder(bufio.NewReader(r))
 	for {
 		var line struct {
 			Error string `json:"error"`
@@ -363,10 +448,10 @@ func (c *Client) Build(ctx context.Context, tarContext io.Reader, o BuildOptions
 		if err := dec.Decode(&line); err == io.EOF {
 			return nil
 		} else if err != nil {
-			return fmt.Errorf("docker build: %w", err)
+			return fmt.Errorf("%s: %w", what, err)
 		}
 		if line.Error != "" {
-			return fmt.Errorf("docker build: %s", line.Error)
+			return fmt.Errorf("%s: %s", what, line.Error)
 		}
 	}
 }

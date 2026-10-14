@@ -112,6 +112,33 @@ func TestCreateShape(t *testing.T) {
 	}
 }
 
+func TestPullByDigestReportsError(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"status":"Pulling from library/registry"}`+"\n"+`{"error":"toomanyrequests: rate limit"}`+"\n")
+	})
+	err := c.Pull(context.Background(), "registry@sha256:a3d8")
+	if err == nil || err.Error() != "docker pull: toomanyrequests: rate limit" {
+		t.Errorf("Pull = %v", err)
+	}
+	if got := (*requests)[0]; got.method != "POST" || got.uri != "/v1.47/images/create?fromImage=registry%40sha256%3Aa3d8" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestNetworkGateway(t *testing.T) {
+	c, _ := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"Name":"boxrunner","IPAM":{"Config":[{"Subnet":"fd00:1::/64","Gateway":"fd00:1::1"},{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}`)
+	})
+	n, ok, err := c.Network(context.Background(), "boxrunner")
+	gateway, found := n.Gateway()
+	if err != nil || !ok || !found || gateway.String() != "172.18.0.1" {
+		t.Errorf("Gateway = %v, %v (network %v, %v)", gateway, found, ok, err)
+	}
+	if _, found := (Network{}).Gateway(); found {
+		t.Error("a network without IPAM has a gateway")
+	}
+}
+
 func TestListAndRemove(t *testing.T) {
 	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
