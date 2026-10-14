@@ -28,6 +28,28 @@ func TestHeartbeatBody(t *testing.T) {
 	}
 }
 
+func TestHeartbeatBodyTellsWhyJobsMayWait(t *testing.T) {
+	held := time.Date(2026, 10, 14, 9, 5, 0, 0, time.UTC)
+	snap := status.Snapshot{
+		Box: "box-1", Version: "0.5.0", Image: status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e"}, Draining: true,
+		Classes: []status.Class{
+			{Name: "boxrunner", Priority: "normal", Max: 1},
+			{Name: "boxrunner-light", Priority: "idle", Max: 2, HeldUntil: held},
+		},
+		ScaleSets: []status.ScaleSet{
+			{Repo: "octo/docs", Class: "boxrunner", Assigned: 0},
+			{Repo: "octo/site", Class: "boxrunner-light", Assigned: 3},
+		},
+	}
+	body, _ := json.Marshal(heartbeatBody(snap, nil))
+	want := `{"box":"box-1","version":"0.5.0","image":"2.338.0+3f9a2c0b1d4e","disk":{"free":0,"floor":0},` +
+		`"classes":[{"name":"boxrunner","priority":"normal","max":1},{"name":"boxrunner-light","priority":"idle","max":2,"heldUntil":"2026-10-14T09:05:00Z"}],` +
+		`"runners":[],"jobs":[],"draining":true,"scaleSets":[{"repo":"octo/site","class":"boxrunner-light","assigned":3}]}`
+	if string(body) != want {
+		t.Errorf("body =\n%s\nwant\n%s", body, want)
+	}
+}
+
 func TestFitHeartbeatDropsOldestJobs(t *testing.T) {
 	var jobs []status.Job
 	for i := range 50 {

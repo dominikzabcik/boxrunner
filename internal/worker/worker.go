@@ -202,6 +202,10 @@ type Heartbeat struct {
 	Jobs    []HeartbeatJob    `json:"jobs"`
 	// Latest is boxrunner's latest release, once the agent has found it.
 	Latest string `json:"latest,omitempty"`
+	// Draining and ScaleSets tell the Worker why jobs may wait with no
+	// runner, for its alerts. A Worker from before them ignores them.
+	Draining  bool                `json:"draining,omitempty"`
+	ScaleSets []HeartbeatScaleSet `json:"scaleSets,omitempty"`
 }
 
 type HeartbeatDisk struct {
@@ -213,6 +217,16 @@ type HeartbeatClass struct {
 	Name     string `json:"name"`
 	Priority string `json:"priority"`
 	Max      int    `json:"max"`
+	// HeldUntil is set while the class's runners fail before taking a job.
+	HeldUntil time.Time `json:"heldUntil,omitzero"`
+}
+
+// HeartbeatScaleSet is a scale set the box listens to and its assigned
+// jobs, including the ones runners already took.
+type HeartbeatScaleSet struct {
+	Repo     string `json:"repo"`
+	Class    string `json:"class"`
+	Assigned int    `json:"assigned"`
 }
 
 type HeartbeatRunner struct {

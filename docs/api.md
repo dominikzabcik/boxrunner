@@ -156,10 +156,14 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
   "latest": "0.2.2",
   "image": "2.338.0+3f9a2c0b1d4e",
   "disk": { "free": 26000000000, "floor": 10000000000 },
-  "classes": [{ "name": "boxrunner", "priority": "normal", "max": 1 }],
+  "classes": [
+    { "name": "boxrunner", "priority": "normal", "max": 1 },
+    { "name": "boxrunner-light", "priority": "idle", "max": 2, "heldUntil": "2026-10-14T09:02:00Z" }
+  ],
   "runners": [
     { "name": "box-1-boxrunner-3f9a2c", "repo": "octo/site", "class": "boxrunner", "state": "running", "since": "2026-10-14T09:00:00Z" }
   ],
+  "scaleSets": [{ "repo": "octo/site", "class": "boxrunner", "assigned": 2 }],
   "jobs": [
     {
       "runner": "box-1-boxrunner-3f9a2c",
@@ -182,15 +186,17 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 | `latest` | Optional. boxrunner's latest release as the agent last found it, a semver; the dashboard compares the agent's and the Worker's release with it |
 | `image` | The job image's identity, 1 to 128 characters without control characters |
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
-| `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more |
+| `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more. Optional `heldUntil`: present while the class's runners fail before taking a job, so the box holds its starts until then and starts one at a time after |
 | `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state |
+| `draining` | Optional, `false` when missing. `true` while `boxrunner drain` keeps the box from serving |
+| `scaleSets` | Optional, empty when missing. At most 128: the scale sets the box listens to that have jobs assigned. `assigned` counts them, including the ones runners already took. With `runners`, it tells the Worker which jobs wait with no runner, for [alerts](alerts.md#when-jobs-wait) and the dashboard |
 | `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it |
 
 Times are RFC 3339. Repositories and classes are stored as the box sends them: the box is trusted with its own state, so the Worker does not check them against `GET /v1/repos` or `CLASSES`. Fields the Worker does not know are ignored, so a newer agent can add some. A malformed field gets `400 bad_request` naming it, as in `"runners[0].state" is missing or malformed.`
 
 The body must fit in 16 KB like every other call. Fifty jobs with long repository and job names can pass that, so the agent leaves out the oldest jobs until it fits.
 
-With [fallback](fallback.md) or [alerts](alerts.md) on, the time a heartbeat arrives also decides when the Worker sends jobs to GitHub's runners and back, and when it posts an alert. A heartbeat never waits for GitHub or the webhook: a Durable Object alarm makes those calls.
+With [fallback](fallback.md) or [alerts](alerts.md) on, the time a heartbeat arrives also decides when the Worker sends jobs to GitHub's runners and back, and when it posts an alert. Its `scaleSets` and `runners` decide which jobs wait, and for how long. A heartbeat never waits for GitHub or the webhook: a Durable Object alarm makes those calls.
 
 The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
 

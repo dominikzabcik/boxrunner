@@ -13,6 +13,8 @@ import (
 const (
 	heartbeatEvery = 30 * time.Second
 	heartbeatJobs  = 50
+	// The Worker refuses a heartbeat with more scale sets than this.
+	heartbeatScaleSets = 128
 	// The Worker refuses bodies over 16 KB; the margin covers headers it counts.
 	heartbeatLimit = 15 * 1024
 )
@@ -64,16 +66,23 @@ func (a *Agent) heartbeat(ctx context.Context) {
 func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 	hb := worker.Heartbeat{
 		Box: snap.Box, Version: snap.Version, Latest: snap.Latest, Image: snap.Image.Built,
-		Disk:    worker.HeartbeatDisk{Free: max(snap.DiskFree, 0), Floor: snap.DiskFloor},
-		Classes: []worker.HeartbeatClass{},
-		Runners: []worker.HeartbeatRunner{},
-		Jobs:    []worker.HeartbeatJob{},
+		Disk:     worker.HeartbeatDisk{Free: max(snap.DiskFree, 0), Floor: snap.DiskFloor},
+		Classes:  []worker.HeartbeatClass{},
+		Runners:  []worker.HeartbeatRunner{},
+		Jobs:     []worker.HeartbeatJob{},
+		Draining: snap.Draining,
 	}
 	if hb.Image == "" {
 		hb.Image = "not built"
 	}
 	for _, c := range snap.Classes {
-		hb.Classes = append(hb.Classes, worker.HeartbeatClass{Name: c.Name, Priority: c.Priority, Max: c.Max})
+		hb.Classes = append(hb.Classes, worker.HeartbeatClass{Name: c.Name, Priority: c.Priority, Max: c.Max, HeldUntil: c.HeldUntil})
+	}
+	// Only scale sets with assigned jobs can have jobs waiting, so the rest stay out of the body.
+	for _, ss := range snap.ScaleSets {
+		if ss.Assigned > 0 && len(hb.ScaleSets) < heartbeatScaleSets {
+			hb.ScaleSets = append(hb.ScaleSets, worker.HeartbeatScaleSet{Repo: ss.Repo, Class: ss.Class, Assigned: ss.Assigned})
+		}
 	}
 	for _, r := range snap.Runners {
 		hb.Runners = append(hb.Runners, worker.HeartbeatRunner{Name: r.Name, Repo: r.Repo, Class: r.Class, State: r.Phase, Since: r.Since})

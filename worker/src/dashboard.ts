@@ -4,6 +4,7 @@ import { dayOf, newer, type Priority, type Repo, type RunnerState } from './mode
 import { escape } from './page';
 import { retentionDays } from './store';
 import { version as workerVersion } from './version';
+import { cause } from './waits';
 
 /** GitHub's published price for its standard (2-core) Linux runner. */
 export const dollarsPerMinute = 0.006;
@@ -30,6 +31,8 @@ export type Dashboard = {
 		classes: { name: string; priority: Priority; max: number; running: number; starting: number; paused: boolean }[];
 		runners: { name: string; repo: string; class: string; state: RunnerState; since: string; seconds: number }[];
 	}[];
+	/** Scale sets whose assigned jobs have no runner requested, starting or running, as the boxes last reported them. */
+	waiting: { repo: string; class: string; box: string; since: string; seconds: number; overdue: boolean; cause: string | null }[];
 	jobs: {
 		runner: string;
 		repo: string;
@@ -98,12 +101,16 @@ export function dashboardData(box: Box, now: number): Dashboard {
 	const days = store.daysFrom(today - retentionDays + 1);
 	const repos = store.lastCached('repos');
 	const served = classes.ok ? classes.classes : [];
-	const pauses = store.pauses().filter((pause) => served.includes(pause.className));
+	const allPauses = store.pauses();
+	const pauses = allPauses.filter((pause) => served.includes(pause.className));
 	const paused = new Set<string>(pauses.map((pause) => pause.className));
+	// A box may report a class the Worker no longer serves; its wait still names the pause.
+	const pausedAnywhere = new Set(allPauses.map((pause) => pause.className));
+	const boxes = store.boxes();
 	return {
 		generatedAt: iso(now),
 		workerVersion,
-		boxes: store.boxes().map(({ status, seenAt }) => {
+		boxes: boxes.map(({ status, seenAt }) => {
 			const secondsSinceSeen = secondsBetween(seenAt, now);
 			return {
 				name: status.box,
@@ -135,6 +142,15 @@ export function dashboardData(box: Box, now: number): Dashboard {
 				})),
 			};
 		}),
+		waiting: watch.waits.map((wait) => ({
+			repo: wait.repo,
+			class: wait.className,
+			box: wait.box,
+			since: iso(wait.since),
+			seconds: secondsBetween(wait.since, now),
+			overdue: wait.overdue,
+			cause: cause(wait, boxes, pausedAnywhere, now),
+		})),
 		jobs: store.recentJobs(recentJobCount).map((job) => ({
 			runner: job.runner,
 			repo: job.repo,
@@ -288,6 +304,25 @@ ${table(
 </section>`;
 }
 
+function renderWaiting({ waiting }: Dashboard) {
+	if (waiting.length === 0) return '';
+	return `<section aria-labelledby="waiting">
+<h2 id="waiting">Jobs waiting for a runner</h2>
+${table(
+	[{ title: 'Repository' }, { title: 'Class' }, { title: 'Box' }, { title: 'Waiting', number: true }, { title: 'Likely cause' }],
+	waiting.map((wait) => [
+		escape(wait.repo),
+		escape(wait.class),
+		escape(wait.box),
+		wait.overdue ? `<span class="alert">${duration(wait.seconds)}</span>` : duration(wait.seconds),
+		wait.cause === null ? 'Unknown' : escape(wait.cause),
+	]),
+	'',
+)}
+<p class="hint">Jobs assigned to a box with no runner requested, starting or running for their repository and class. A box stops reporting the jobs of a paused class, and all of them while it drains, so a row stays until the class resumes or the box serves again.</p>
+</section>`;
+}
+
 function renderFallback({ fallback }: Dashboard) {
 	const name = `<code>${variable}</code>`;
 	const switched = fallback.since === null || fallback.secondsSince === null ? '' : ` The Worker switched ${time(fallback.since, ago(fallback.secondsSince))}.`;
@@ -305,12 +340,14 @@ function renderFallback({ fallback }: Dashboard) {
 function renderAlerts({ alerts, fallback }: Dashboard) {
 	const lines: string[] = [];
 	if (alerts.configProblem !== null) lines.push(`<p class="alert">The Worker’s ${escape(alerts.configProblem)}, so alerts are off.</p>`);
-	else if (alerts.host === null || alerts.minutes === null) lines.push('<p>Off: set <code>ALERT_WEBHOOK</code> to hear when the box goes silent.</p>');
+	else if (alerts.host === null || alerts.minutes === null) lines.push('<p>Off: set <code>ALERT_WEBHOOK</code> to hear when the box goes silent or jobs wait.</p>');
 	else {
 		const host = `<code>${escape(alerts.host)}</code>`;
-		lines.push(`<p>After ${plural(alerts.minutes, 'minute')} without a heartbeat, the Worker posts to ${host}, and again once the box is back.</p>`);
-		if (alerts.sentDown !== fallback.down && alerts.problem !== null) {
-			lines.push(`<p class="alert">The Worker could not post the ${fallback.down ? 'down' : 'recovery'} alert: ${escape(alerts.problem)}. It tries again.</p>`);
+		const minutes = plural(alerts.minutes, 'minute');
+		lines.push(`<p>After ${minutes} without a heartbeat, the Worker posts to ${host}, and again once the box is back. It also posts when a repository’s jobs have waited ${minutes} with no runner starting, and when they no longer wait.</p>`);
+		if (alerts.problem !== null) {
+			const which = alerts.sentDown === fallback.down ? 'waiting jobs' : fallback.down ? 'down' : 'recovery';
+			lines.push(`<p class="alert">The Worker could not post the ${which} alert: ${escape(alerts.problem)}. It tries again.</p>`);
 		}
 	}
 	return `<h3>Alerts</h3>\n${lines.join('\n')}`;
@@ -361,7 +398,7 @@ export function renderLive(data: Dashboard, csrf: string): string {
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
 			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion)).join('\n');
-	return [boxes, renderJobs(data), renderTotals(data), renderServed(data, csrf)].join('\n');
+	return [boxes, renderWaiting(data), renderJobs(data), renderTotals(data), renderServed(data, csrf)].filter(Boolean).join('\n');
 }
 
 /** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */

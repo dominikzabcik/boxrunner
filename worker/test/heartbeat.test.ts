@@ -54,6 +54,10 @@ describe('POST /v1/heartbeat', () => {
 			[{ runners: [{ name: 'r-1', repo: 'octo/site', class: 'boxrunner', state: 'paused', since: '2026-10-14T09:00:00Z' }] }, 'runners[0].state'],
 			[{ runners: [{ name: 'r-1', repo: 'octo/site', class: 'boxrunner', state: 'running', since: 'yesterday' }] }, 'runners[0].since'],
 			[{ jobs: [job('r-1', '2026-10-14T09:00:00Z', null, '2026-10-14T09:01:00Z', { name: '' })] }, 'jobs[0].name'],
+			[{ classes: [{ name: 'boxrunner', priority: 'idle', max: 1, heldUntil: 'soon' }] }, 'classes[0].heldUntil'],
+			[{ draining: 'yes' }, 'draining'],
+			[{ scaleSets: [{ repo: 'octo/site', class: 'boxrunner', assigned: -1 }] }, 'scaleSets[0].assigned'],
+			[{ scaleSets: Array.from({ length: 129 }, (_, i) => ({ repo: `octo/r${i}`, class: 'boxrunner', assigned: 1 })) }, 'scaleSets'],
 			[{ jobs: Array.from({ length: 51 }, (_, i) => job(`r-${i}`, '2026-10-14T09:00:00Z', null, '2026-10-14T09:01:00Z')) }, 'jobs'],
 		];
 		for (const [override, field] of cases) {

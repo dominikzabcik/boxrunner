@@ -1,6 +1,6 @@
 # Alerts
 
-While the box is down, its jobs wait in GitHub's queue for up to 24 hours, and nothing tells you. With alerts on, the Worker posts a short message to a webhook of yours when every box has gone silent, and one more when a box is back. ntfy, Discord and Slack read the same message. Alerts are off until you set a webhook.
+While the box is down, its jobs wait in GitHub's queue for up to 24 hours, and nothing tells you. With alerts on, the Worker posts a short message to a webhook of yours when every box has gone silent, and one more when a box is back. It also posts when a repository's jobs wait with no runner starting, and when they no longer wait. ntfy, Discord and Slack read the same message. Alerts are off until you set a webhook.
 
 ## How it works
 
@@ -15,6 +15,32 @@ Once a box has reported for two minutes with no three heartbeats in a row missin
 Each change is posted once. An outage that ends before its alert got through sends nothing, so you never get a recovery message for an outage you did not hear of.
 
 Ten minutes is long enough that an agent upgrade, which restarts the agent in seconds, or a reboot of the box usually passes without an alert, and short against the 24 hours a job may wait in the queue. Set `ALERT_MINUTES` for another threshold.
+
+### When jobs wait
+
+Each heartbeat says which of the box's scale sets have jobs assigned to them, and which runners are requested, starting or running. A scale set waits while it has assigned jobs and no runner on the way for its repository and class. When one has waited for `ALERT_MINUTES` (or `FALLBACK_MINUTES` while fallback is on), the Worker posts once, naming the repository, the class and the likely cause:
+
+> boxrunner: octo/site has had jobs for class boxrunner waiting since 2026-10-14 10:00 UTC with no runner starting. Likely cause: the class is paused on the dashboard.
+
+Once a runner starts for them, or the box reports no jobs assigned, it posts once more:
+
+> boxrunner: octo/site no longer has jobs for class boxrunner waiting without a runner.
+
+The likely cause is the first of these that holds, from the latest heartbeats:
+
+| Cause | What to do |
+|---|---|
+| the class is paused on the dashboard | Resume it on the [dashboard](dashboard.md#pausing-a-class). |
+| box-1 stopped reporting | Another box still reports, so this is no down alert. Check box-1. |
+| box-1 is draining | `sudo boxrunner resume` on box-1. |
+| box-1 holds the class back because its runners failed before taking a job | `sudo boxrunner doctor` on box-1 names the class and its next try; the agent's log has the last lines of the container that failed. |
+| box-1 already runs the class's maximum of 2 runners for other repositories | Long jobs of other repositories hold every runner. Raise the class's `max` or wait. |
+
+Without a cause, the message ends after "no runner starting", and `boxrunner status` on the box says more.
+
+A box listens to a scale set only while it serves it, so a paused class or a draining box stops reporting that scale set's jobs. The Worker then keeps the wait it last saw until the class resumes or the box serves again, and does the same while the box that reported it is silent. It does not see jobs that arrive in the meantime.
+
+Changes that happen together go out in one post, one line each, at most five lines, so Discord's limit of 2,000 characters holds. Agents up to v0.4.0 do not report assigned jobs, so the Worker sees no waits on their boxes.
 
 ### With fallback on
 
@@ -67,7 +93,7 @@ A post that fails or takes more than 10 seconds is retried after 1, 2, 4, 8 minu
 
 ## What it does not see
 
-An alert means every box stopped reporting. A box that reports but starts no runners, for example because Docker on it is broken, sends no alert, and neither does a job that waits for a class no box serves. The Worker does not see the queue: the agent reads it from GitHub and reports runners and finished jobs, not waiting ones.
+A down alert means every box stopped reporting. A box that reports but starts no runners, for example because Docker on it is broken, shows up as waiting jobs instead, once a job is assigned to it. A job that waits for a class or repository no box listens to sends no alert: no box has been assigned it, so no heartbeat carries it.
 
 ## Turn it off
 
@@ -76,4 +102,5 @@ Delete the `ALERT_WEBHOOK` secret. An address that does not start with `https://
 ## What it costs
 
 - **Cloudflare.** Alerts wake the Worker with fallback's Durable Object alarm, never a cron trigger. While the box reports, the alarm fires once every `ALERT_MINUTES`: 144 times a day at 10 minutes, each one request and one row written. While the box is down it fires once an hour. With both alerts and fallback off it never fires. Each alert is one outbound request.
-- **The webhook.** One post when the box goes down and one when it is back, plus retries while the webhook fails.
+- **The webhook.** One post when the box goes down and one when it is back, one when a repository's jobs wait too long and one when they no longer wait, plus retries while the webhook fails.
+- **Rows written.** A heartbeat writes the alert state only when a wait starts, becomes overdue or ends, not while it lasts.

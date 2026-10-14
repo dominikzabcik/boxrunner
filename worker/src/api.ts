@@ -140,7 +140,7 @@ async function heartbeat(context: Context) {
 	const parsed = parseHeartbeat(await body(context.request));
 	if (!parsed.ok) throw new ApiError('bad_request', `"${parsed.field}" is missing or malformed.`);
 	const now = Date.now();
-	await onHeartbeat(context.box, now);
+	await onHeartbeat(context.box, parsed.heartbeat, now);
 	context.box.store.saveHeartbeat(parsed.heartbeat, now);
 	return json({ paused: splitPaused(context.classes, context.box.store.pauses()).paused });
 }
