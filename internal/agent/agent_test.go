@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"io"
@@ -455,6 +456,18 @@ func TestStopRemovesRunnersWithoutAJob(t *testing.T) {
 	calls := h.github.workerCalls()
 	if !slices.Contains(calls, "DELETE /v1/runners/41?repo=octo%2Fsite&scaleSetId=7") || !slices.Contains(calls, "DELETE /v1/sessions/s1?repo=octo%2Fsite&scaleSetId=7") {
 		t.Errorf("worker calls = %q", calls)
+	}
+}
+
+func TestStopRemovesSocket(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil)
+	waitFor(t, "the status socket", func() bool {
+		_, err := status.Fetch(context.Background(), h.socket)
+		return err == nil
+	})
+	h.stop(t)
+	if _, err := os.Stat(h.socket); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("after Run returned, the status socket is still there: %v", err)
 	}
 }
 

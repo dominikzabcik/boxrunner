@@ -3,6 +3,7 @@ package status
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -85,6 +86,28 @@ func TestServeAndFetch(t *testing.T) {
 	}
 	if want := []bool{true, false, true}; !reflect.DeepEqual(drains, want) {
 		t.Errorf("drain calls = %v, want %v", drains, want)
+	}
+}
+
+func TestServeRemovesSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "s.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- Serve(ctx, socket, func() Snapshot { return Snapshot{} }, func(bool) error { return nil })
+	}()
+	for range 50 {
+		if _, err := Fetch(ctx, socket); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-served; err != nil {
+		t.Errorf("Serve = %v", err)
+	}
+	if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("after Serve returned, the socket is still there: %v", err)
 	}
 }
 
