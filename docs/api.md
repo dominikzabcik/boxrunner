@@ -5,7 +5,7 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 ## Conventions
 
 - Every request carries `Authorization: Bearer <box token>` and `Boxrunner-Version: <agent version>`.
-- Every response carries `Boxrunner-Protocol: 1` and `Cache-Control: no-store`.
+- Every response carries `Boxrunner-Protocol: 1`, `Boxrunner-Worker-Version: <the Worker's release>` and `Cache-Control: no-store`. The agent shows the Worker's release in `status` and `doctor`; a Worker from before the header sends none.
 - Errors have one shape, `{"error": "<code>", "message": "<human sentence>"}`. Only `session_exists` adds a field, `heldBy`.
 - Any other method or path answers `404 not_found` in the same shape.
 
@@ -153,6 +153,7 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 {
   "box": "box-1",
   "version": "0.2.0",
+  "latest": "0.2.2",
   "image": "2.338.0+3f9a2c0b1d4e",
   "disk": { "free": 26000000000, "floor": 10000000000 },
   "classes": [{ "name": "boxrunner", "priority": "normal", "max": 1 }],
@@ -178,6 +179,7 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 |---|---|
 | `box` | The box name, as `owner` in `POST /v1/sessions` |
 | `version` | The agent's semver, at most 64 characters |
+| `latest` | Optional. boxrunner's latest release as the agent last found it, a semver; the dashboard compares the agent's and the Worker's release with it |
 | `image` | The job image's identity, 1 to 128 characters without control characters |
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
 | `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more |

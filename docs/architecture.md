@@ -139,7 +139,7 @@ Measured on a 4-core ARM box, CPU only: four timed threads of a normal job took 
 
 ## Image
 
-`install` builds the job image on the box from GitHub's official `ghcr.io/actions/actions-runner` image, plus `zstd`, `build-essential`, Python, `iptables` for a job's own Docker, the Docker Compose plugin (5.5.1, checked by SHA-256) and `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`. The official image already ships Docker's engine. The image starts as root: its entrypoint starts Docker when the class asks for it, then runs the job as `runner`. The agent checks the runner's latest release daily through the release page's redirect, which needs no API quota. It rebuilds the image only when the version changed, and never while a job of a normal-priority class runs. Runners keep self-update on as a safety net. A class can name any image built `FROM boxrunner/runner`.
+`install` builds the job image on the box from GitHub's official `ghcr.io/actions/actions-runner` image, plus `zstd`, `build-essential`, Python, `iptables` for a job's own Docker, the Docker Compose plugin (5.5.1, checked by SHA-256) and `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`. The official image already ships Docker's engine. The image starts as root: its entrypoint starts Docker when the class asks for it, then runs the job as `runner`. The agent checks the runner's latest release daily through the release page's redirect, which needs no API quota. It rebuilds the image only when the version changed, and never while a job of a normal-priority class runs. It checks boxrunner's own latest release the same way, once a day, so `status`, `doctor` and the dashboard can say when the agent or the Worker is behind. Runners keep self-update on as a safety net. A class can name any image built `FROM boxrunner/runner`.
 
 Each rebuild leaves the previous images behind, a gigabyte or more per runner release. After building, and each time it starts, the agent removes:
 
@@ -169,7 +169,7 @@ The optional `FALLBACK_MINUTES` variable turns on [fallback to GitHub's runners]
 
 Setup happens in the browser, and nobody copies a private key.
 
-1. **Deploy.** Deploy the Worker with `boxrunner worker deploy`, which uses Wrangler. A Deploy to Cloudflare button is planned for when the repository is public. Deploying sets `SETUP_SECRET`.
+1. **Deploy.** Deploy the Worker with the Deploy to Cloudflare button, which copies the `stable` branch's Worker into a repository of yours and asks for `SETUP_SECRET`, or with `bunx wrangler deploy` from a clone and `wrangler secret put SETUP_SECRET`. [Upgrading](upgrading.md) says how to redeploy each.
 2. **Create the App.** Open `/setup` and enter the setup secret, which the form posts rather than putting it in a URL. The page sends GitHub an App manifest with a `state` value that the Worker signs and ties to a cookie. GitHub creates the App under your account and redirects back. The Worker checks `state`, converts the code and keeps the key. The key never reaches your browser, your box or boxrunner's site.
 3. **Install the App** on the repositories that should use the box.
 4. **Install the agent.** The page shows a box token once, with the command that installs the agent.
@@ -201,12 +201,14 @@ One static Go binary for `linux/amd64` and `linux/arm64`, run by one systemd uni
 
 | Command | Does |
 |---|---|
-| `boxrunner install` | Converges the box: Docker, Sysbox with `--sysbox`, `--docker` or a class that needs it, the registry mirror with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. Re-running is the upgrade path. |
-| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration, the disk boxrunner's images take, and classes that hold their starts because their runners fail before taking a job |
+| `boxrunner install` | Converges the box: Docker, Sysbox with `--sysbox`, `--docker` or a class that needs it, the registry mirror with `--docker` or a class with `docker = true`, the slice, the network and firewall, the unit, the config, the image. It restarts the agent when its binary changed. |
+| `boxrunner upgrade [VERSION]` | Downloads that release's installer (the latest by default), checks its build attestation when gh is signed in, and runs it with the box's configuration. Refuses an older release without `--downgrade`. See [upgrading](upgrading.md). |
+| `boxrunner status` | Classes, runners and their jobs, recent jobs with queue wait and duration, the disk boxrunner's images take, classes that hold their starts because their runners fail before taking a job, the Worker's release and whether a newer release than the agent's or the Worker's is out |
 | `boxrunner shell` | Lists job containers, opens a shell in a running job, or in a copy of a failed job's container that its class keeps |
-| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it |
+| `boxrunner doctor` | Checks Docker, cgroup v2, the idle slice, the firewall from inside a container, free disk, clock skew, the Worker and the token, the repositories and classes another box serves, that no class holds its starts, each class's isolation and, under Sysbox, the host uid of a job's root, and with a `docker` class, Sysbox, a Docker daemon inside a job container and the registry mirror as that daemon sees it. It warns when the agent or the Worker is behind boxrunner's latest release. |
 | `boxrunner uninstall` | Closes sessions and removes the unit, containers, registry mirror and its cache, network, rules, slice and files. Docker and Sysbox stay. |
-| `boxrunner worker deploy` | Deploys the Worker with Wrangler and opens its setup page |
+
+The agent does not deploy the Worker. Deploy it with the Deploy to Cloudflare button or with `bunx wrangler deploy` from `worker/`, and redeploy it the same way to upgrade it, as [upgrading](upgrading.md) says.
 
 ## Decisions
 
