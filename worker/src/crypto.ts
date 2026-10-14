@@ -57,6 +57,15 @@ export async function hmac(secret: string, message: string): Promise<string> {
 	return base64url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(message))));
 }
 
+/** Checks GitHub's `X-Hub-Signature-256` header, `sha256=` and the hex HMAC of the body; WebCrypto compares in constant time. */
+export async function sameHmacSha256(secret: string, header: string, body: ArrayBuffer): Promise<boolean> {
+	const signature = /^sha256=([0-9a-f]{64})$/.exec(header)?.[1];
+	if (signature === undefined) return false;
+	const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+	const bytes = Uint8Array.from(signature.match(/../g)!, (pair) => parseInt(pair, 16));
+	return crypto.subtle.verify('HMAC', key, bytes, body);
+}
+
 declare const appKeyBrand: unique symbol;
 /** An RSA private key as base64 PKCS#8 DER, the only form WebCrypto imports. */
 export type AppKey = string & { readonly [appKeyBrand]: true };

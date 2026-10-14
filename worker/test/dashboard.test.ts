@@ -189,6 +189,8 @@ describe('GET /dashboard.json', () => {
 					minutes: 3,
 				},
 			],
+			unserved: [],
+			webhook: { lastDelivery: null, secondsSince: null },
 			totals: { today: { jobs: 1, minutes: 3, dollars: 0.02 }, last30Days: { jobs: 1, minutes: 3, dollars: 0.02 } },
 			dollarsPerMinute: 0.006,
 			repos: null,

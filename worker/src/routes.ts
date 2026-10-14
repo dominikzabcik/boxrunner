@@ -27,7 +27,10 @@ export type ApiRoute =
 	| { name: 'runners.mint' }
 	| { name: 'runners.remove'; id: string };
 
-export type Route = SetupRoute | WebRoute | ApiRoute;
+/** GitHub's webhook deliveries for the App. */
+export type WebhookRoute = { name: 'webhook' };
+
+export type Route = SetupRoute | WebRoute | ApiRoute | WebhookRoute;
 
 const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) => Route]> = [
 	['GET', /^\/setup$/, () => ({ name: 'setup.form' })],
@@ -45,6 +48,7 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['GET', /^\/box-token\/([^/]+)$/, (id) => ({ name: 'web.showToken', id })],
 	['POST', /^\/classes\/pause$/, () => ({ name: 'web.pause' })],
 	['POST', /^\/classes\/resume$/, () => ({ name: 'web.resume' })],
+	['POST', /^\/webhook$/, () => ({ name: 'webhook' })],
 	['POST', /^\/v1\/heartbeat$/, () => ({ name: 'heartbeat' })],
 	['GET', /^\/v1\/repos$/, () => ({ name: 'repos' })],
 	['POST', /^\/v1\/scalesets$/, () => ({ name: 'scalesets.ensure' })],
@@ -74,3 +78,5 @@ export function match(method: string, pathname: string): Route | undefined {
 export const isSetup = (route: Route): route is SetupRoute => route.name.startsWith('setup.');
 
 export const isWeb = (route: Route): route is WebRoute => route.name.startsWith('web.');
+
+export const isWebhook = (route: Route): route is WebhookRoute => route.name === 'webhook';

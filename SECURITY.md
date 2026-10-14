@@ -22,7 +22,10 @@ Defended, and in scope for reports:
 - **The box token.** It can only ask the Worker for scale sets, sessions and one-job runner configs. A way to do more with it is a vulnerability.
 - **One job, one container.** A way for a job to reach a later job, read another job's files, or reach the agent, is a vulnerability.
 - **The firewall.** A way for a job to reach the host, private networks, a tailnet or the cloud metadata service through `boxrunner0` is a vulnerability.
+- **The webhook.** `POST /webhook` acts only on deliveries signed with the App's webhook secret. A way to make the Worker keep or list a job with an unsigned or forged delivery, or to make it log a delivery's body, is a vulnerability.
 - **The setup page.** A way to complete setup without the setup secret, or to replace an existing App, is a vulnerability.
+
+With [unserved jobs](docs/unserved-jobs.md) on, the App also holds the **Actions** permission (read), which lets it read the workflow runs, jobs, logs, artifacts and caches of the repositories it is installed on. The Worker needs it only to receive the `workflow_job` event and never puts it in a token: every token it makes names one repository and only the permission its call needs. Whoever obtained the App key could read that Actions data, on top of what the App can do without it.
 
 Not defended:
 

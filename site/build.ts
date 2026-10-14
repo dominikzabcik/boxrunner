@@ -28,6 +28,7 @@ const DOCS: Doc[] = [
 	{ slug: 'upgrading', src: 'docs/upgrading.md' },
 	{ slug: 'fallback', src: 'docs/fallback.md' },
 	{ slug: 'alerts', src: 'docs/alerts.md' },
+	{ slug: 'unserved-jobs', src: 'docs/unserved-jobs.md' },
 	{ slug: 'api', src: 'docs/api.md' },
 	{ slug: 'dashboard', src: 'docs/dashboard.md' },
 	{ slug: 'decisions', src: 'docs/decisions.md' },

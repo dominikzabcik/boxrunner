@@ -3,6 +3,7 @@ import { variable } from './fallback';
 import { dayOf, forkProblems, newer, type ForkPullRequests, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
 import { retentionDays } from './store';
+import { slowAfterMs, unservedReason, type UnservedReason } from './unserved';
 import { version as workerVersion } from './version';
 import { cause } from './waits';
 
@@ -47,6 +48,19 @@ export type Dashboard = {
 		durationSeconds: number;
 		minutes: number;
 	}[];
+	/** Queued jobs no box here will run, oldest first, from the App's `workflow_job` event; see docs/unserved-jobs.md. */
+	unserved: {
+		repo: string;
+		workflow: string | null;
+		name: string;
+		labels: string[];
+		url: string;
+		reason: UnservedReason;
+		queued: string;
+		waitSeconds: number;
+	}[];
+	/** When GitHub's last signed webhook delivery arrived; null before any did. */
+	webhook: { lastDelivery: string | null; secondsSince: number | null };
 	totals: { today: Totals; last30Days: Totals };
 	dollarsPerMinute: number;
 	/** The served repositories as the agent last fetched them; null before it first did. */
@@ -110,6 +124,8 @@ export function dashboardData(box: Box, now: number): Dashboard {
 	// A box may report a class the Worker no longer serves; its wait still names the pause.
 	const pausedAnywhere = new Set(allPauses.map((pause) => pause.className));
 	const boxes = store.boxes();
+	const servedNow = box.served();
+	const delivered = store.lastDelivery();
 	return {
 		generatedAt: iso(now),
 		workerVersion,
@@ -168,6 +184,13 @@ export function dashboardData(box: Box, now: number): Dashboard {
 			durationSeconds: job.startedAt === null ? 0 : secondsBetween(job.startedAt, job.finishedAt),
 			minutes: job.minutes,
 		})),
+		unserved: store.queuedJobs(now).flatMap((job) => {
+			const reason = unservedReason(job, servedNow, now - job.queuedAt);
+			if (reason === null) return [];
+			const { repo, workflow, name, labels, url } = job;
+			return [{ repo, workflow, name, labels, url, reason, queued: iso(job.queuedAt), waitSeconds: secondsBetween(job.queuedAt, now) }];
+		}),
+		webhook: { lastDelivery: delivered === undefined ? null : iso(delivered), secondsSince: delivered === undefined ? null : secondsBetween(delivered, now) },
 		totals: { today: totals(days.filter((day) => day.day === today)), last30Days: totals(days) },
 		dollarsPerMinute,
 		repos: repos === undefined ? null : servedRepos.map((repo) => repo.name),
@@ -327,6 +350,42 @@ ${table(
 </section>`;
 }
 
+const unservedDocs = 'https://boxrunner.zabcik.me/docs/unserved-jobs/';
+
+const why: Record<UnservedReason, string> = {
+	label: 'runs-on is not one of this Worker’s classes',
+	public: 'The repository is public, which the Worker never serves',
+	archived: 'The repository is archived',
+	unlisted: 'The repository is not in REPOS',
+	paused: 'Its class is paused',
+	slow: `No box took it within ${slowAfterMs / 60_000} minutes`,
+};
+
+function renderUnserved({ unserved, webhook }: Dashboard) {
+	const heading = '<h2 id="unserved">Jobs nobody here runs</h2>';
+	if (webhook.lastDelivery === null || webhook.secondsSince === null) {
+		return `<section aria-labelledby="unserved">
+${heading}
+<p>Off. With the App’s <code>workflow_job</code> event, this lists the jobs that wait for a runner no box here will start (<a href="${unservedDocs}">turning it on</a>).</p>
+</section>`;
+	}
+	return `<section aria-labelledby="unserved">
+${heading}
+${table(
+	[{ title: 'Repository' }, { title: 'Job' }, { title: 'runs-on' }, { title: 'Why' }, { title: 'Waiting', number: true }],
+	unserved.map((job) => [
+		escape(job.repo),
+		`<a href="${escape(job.url)}">${escape(job.workflow === null ? job.name : `${job.workflow} / ${job.name}`)}</a>`,
+		`<code>${escape(job.labels.join(', '))}</code>`,
+		`<span class="alert">${escape(why[job.reason])}</span>`,
+		duration(job.waitSeconds),
+	]),
+	'None.',
+)}
+<p class="hint">From GitHub’s <code>workflow_job</code> event; the last delivery arrived ${time(webhook.lastDelivery, ago(webhook.secondsSince))}.</p>
+</section>`;
+}
+
 function renderFallback({ fallback }: Dashboard) {
 	const name = `<code>${variable}</code>`;
 	const switched = fallback.since === null || fallback.secondsSince === null ? '' : ` The Worker switched ${time(fallback.since, ago(fallback.secondsSince))}.`;
@@ -419,7 +478,7 @@ export function renderLive(data: Dashboard, csrf: string): string {
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
 			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion)).join('\n');
-	return [boxes, renderWaiting(data), renderJobs(data), renderTotals(data), renderServed(data, csrf)].filter(Boolean).join('\n');
+	return [boxes, renderWaiting(data), renderUnserved(data), renderJobs(data), renderTotals(data), renderServed(data, csrf)].filter(Boolean).join('\n');
 }
 
 /** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */

@@ -63,10 +63,23 @@ describe('POST /setup', () => {
 			redirect_url: `${origin}/setup/callback`,
 			callback_urls: [`${origin}/login/callback`],
 			public: false,
-			hook_attributes: { url: origin, active: false },
+			hook_attributes: { url: `${origin}/webhook`, active: false },
 			default_permissions: { administration: 'write', metadata: 'read' },
 			default_events: [],
 		});
+	});
+
+	it('asks for the Actions permission and the workflow_job event when the form asks to report unserved jobs', async () => {
+		await fakeGitHub();
+		const response = await postForm('/setup', { secret: setupSecret, name: 'boxrunner-test', unserved: 'on' });
+		const manifest = /name="manifest" value="([^"]+)"/.exec(await response.text())![1]!.replace(/&quot;/g, '"');
+		expect(JSON.parse(manifest)).toMatchObject({
+			hook_attributes: { url: `${origin}/webhook`, active: true },
+			default_permissions: { administration: 'write', metadata: 'read', actions: 'read' },
+			default_events: ['workflow_job'],
+		});
+		const refused = await postForm('/setup', { secret: 'wrong', name: 'boxrunner-test', unserved: 'on' });
+		expect(await refused.text()).toContain('<input type="checkbox" name="unserved" value="on" checked aria-describedby="unserved-hint">');
 	});
 });
 

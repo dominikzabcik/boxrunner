@@ -20,6 +20,7 @@ import {
 	type ScaleSetId,
 } from './model';
 import type { Store } from './store';
+import type { Served } from './unserved';
 
 const minute = 60_000;
 /** The App JWT and the Actions admin token both live ten minutes; a minute of margin covers clock drift. */
@@ -92,6 +93,19 @@ export class Box {
 		const webhook = alerts.ok ? alerts.webhook : null;
 		const alertMs = alerts.ok && webhook !== null ? alerts.afterMs : null;
 		return { afterMs: fallbackMs ?? alertMs, fallback: fallbackMs !== null, webhook };
+	}
+
+	/** What the Worker serves, for telling which queued jobs it should run. */
+	served(): Served {
+		const classes = this.classes();
+		const all = classes.ok ? classes.classes : [];
+		const paused = new Set(this.store.pauses().map((pause) => pause.className));
+		return { classes: all, paused: all.filter((name) => paused.has(name)), listed: repoFilter(this.env.REPOS) };
+	}
+
+	/** The `WEBHOOK_SECRET` secret when it is set, else the secret GitHub made when setup created the App. */
+	webhookSecret(): string | undefined {
+		return this.env.WEBHOOK_SECRET?.trim() || this.store.app()?.app.webhookSecret || undefined;
 	}
 
 	/** Signs dashboard sessions and their CSRF tokens; made once and forgotten by a reset. */
