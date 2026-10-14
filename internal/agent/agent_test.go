@@ -308,6 +308,9 @@ type harness struct {
 	cgroup string
 	// metrics is where the agent serves metrics, none when zero.
 	metrics netip.AddrPort
+	// cache is the Actions cache's size, none when zero, served at cacheAddr.
+	cache     config.Bytes
+	cacheAddr netip.AddrPort
 
 	mu        sync.Mutex
 	systemctl []string
@@ -334,7 +337,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	for _, f := range change {
 		f(&cfg.Classes[0], h)
 	}
-	cfg.Metrics = h.metrics
+	cfg.Metrics, cfg.Cache = h.metrics, h.cache
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
 	d, err := docker.Dial(context.Background(), socket)
@@ -368,6 +371,8 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			HeartbeatEvery:       50 * time.Millisecond,
 			SysboxDir:            t.TempDir(),
 			CgroupDir:            h.cgroup,
+			CacheDir:             t.TempDir(),
+			CacheAddr:            h.cacheAddr,
 		})
 	}()
 	return h
@@ -703,7 +708,7 @@ func TestIdleSlice(t *testing.T) {
 func TestSpecIdleClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 2 << 30, Pids: 512, Shm: 1 << 30, Priority: config.Idle, Image: "boxrunner/runner:local"}
 	r := scheduler.Runner{Name: "box-1-boxrunner-light-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner-light"}, ScaleSetID: 8, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-light-3f9a2c", Image: "boxrunner/runner:local",
 		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"},
@@ -720,7 +725,7 @@ func TestSpecIdleClass(t *testing.T) {
 func TestSpecDockerClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true, Isolation: config.Sysbox}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-3f9a2c", Image: "boxrunner/runner:local",
 		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_DOCKER=1", "BOXRUNNER_MIRROR=http://172.18.0.1:5000"},
@@ -734,10 +739,68 @@ func TestSpecDockerClass(t *testing.T) {
 	}
 }
 
+func TestSpecCacheClass(t *testing.T) {
+	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Cache: true}
+	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
+	for _, c := range []struct {
+		cache bool
+		url   string
+		want  []string
+	}{
+		{true, "http://172.18.0.1:5001", []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_CACHE=http://172.18.0.1:5001"}},
+		{true, "", []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}},
+		{false, "http://172.18.0.1:5001", []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}},
+	} {
+		class.Cache = c.cache
+		if got := Spec("box-1", class, r, "jit", "", c.url); !reflect.DeepEqual(got.Env, c.want) {
+			t.Errorf("Spec with cache = %v and the cache at %q: env %q; want %q", c.cache, c.url, got.Env, c.want)
+		}
+	}
+}
+
+// TestCache starts the agent with a cache: it serves at its address, and a
+// job of a class with cache = true gets that address.
+func TestCache(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := netip.MustParseAddrPort(l.Addr().String())
+	l.Close()
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) {
+		c.Cache, h.cache, h.cacheAddr = true, config.GiB, addr
+	})
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501,"queueTime":"2026-10-13T21:00:00Z"}`)
+	var env []any
+	waitFor(t, "a job container", func() bool {
+		for _, c := range h.docker.snapshot() {
+			env, _ = c.Body["Env"].([]any)
+			return true
+		}
+		return false
+	})
+	if want := "BOXRUNNER_CACHE=http://" + addr.String(); !slices.Contains(env, any(want)) {
+		t.Errorf("the job's env = %q; want it to hold %s", env, want)
+	}
+	resp, err := http.Get("http://" + addr.String() + "/_boxrunner/upstream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "https://results-receiver.actions.githubusercontent.com" {
+		t.Errorf("the cache names upstream %q", body)
+	}
+	h.stop(t)
+	if _, err := http.Get("http://" + addr.String() + "/_boxrunner/upstream"); err == nil {
+		t.Errorf("the cache still answers after the agent stopped")
+	}
+}
+
 func TestSpecSysboxClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Isolation: config.Sysbox}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
 	if got.Runtime != "sysbox-runc" || !reflect.DeepEqual(got.Env, []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}) {
 		t.Errorf("Spec runtime %q, env %q; want sysbox-runc and no Docker of the job's own", got.Runtime, got.Env)
 	}

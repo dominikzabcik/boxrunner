@@ -44,7 +44,7 @@ COMMIT
 
 var (
 	plain      = Rules{Bridge: "boxrunner0"}
-	withMirror = Rules{Bridge: "boxrunner0", Mirror: netip.MustParseAddrPort("172.18.0.1:5000")}
+	withMirror = Rules{Bridge: "boxrunner0", Open: []netip.AddrPort{netip.MustParseAddrPort("172.18.0.1:5000")}}
 )
 
 // tables simulates iptables and ip6tables: chain name to rules, per command.
@@ -184,5 +184,21 @@ func TestApplyReplacesTheBridgeOnlyInputJump(t *testing.T) {
 	}
 	if got := tb["iptables"]["INPUT"]; !reflect.DeepEqual(got, []string{"-A INPUT -i eth0 -j ACCEPT"}) {
 		t.Errorf("iptables INPUT after Remove = %q", got)
+	}
+}
+
+func TestRestoreInputOpensEachService(t *testing.T) {
+	r := Rules{Bridge: "boxrunner0", Open: []netip.AddrPort{netip.MustParseAddrPort("172.18.0.1:5000"), netip.MustParseAddrPort("172.18.0.1:5001")}}
+	input := ":BOXRUNNER-FORWARD - [0:0]\n" +
+		"-A BOXRUNNER-INPUT -d 172.18.0.1/32 ! -i boxrunner0 -p tcp -m tcp --dport 5000 -j DROP\n" +
+		"-A BOXRUNNER-INPUT -d 172.18.0.1/32 ! -i boxrunner0 -p tcp -m tcp --dport 5001 -j DROP\n" +
+		"-A BOXRUNNER-INPUT ! -i boxrunner0 -j RETURN\n" +
+		"-A BOXRUNNER-INPUT -p udp --dport 53 -j RETURN\n" +
+		"-A BOXRUNNER-INPUT -p tcp --dport 53 -j RETURN\n" +
+		"-A BOXRUNNER-INPUT -d 172.18.0.1/32 -p tcp -m tcp --dport 5000 -j ACCEPT\n" +
+		"-A BOXRUNNER-INPUT -d 172.18.0.1/32 -p tcp -m tcp --dport 5001 -j ACCEPT\n" +
+		"-A BOXRUNNER-INPUT -j DROP\n"
+	if got := V4.RestoreInput(r); !strings.Contains(got, input) {
+		t.Errorf("V4.RestoreInput with the mirror and the cache =\n%s\nwant it to contain\n%s", got, input)
 	}
 }

@@ -43,6 +43,18 @@ RUN case "$(dpkg --print-architecture)" in \
 RUN install -d -o runner -g runner /opt/hostedtoolcache
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 
+# A class with cache = true sends its actions' cache calls to the box. The
+# entrypoint of such a job links each node the runner ships to
+# node.boxrunner, which runs node.real, a second name for the same binary.
+# Jobs of other classes run the runner's node as it is.
+COPY node.boxrunner /usr/local/lib/boxrunner/node.boxrunner
+RUN for bin in /home/runner/externals/node*/bin; do \
+		case "$bin" in *_alpine/bin) continue ;; esac; \
+		ln "$bin/node" "$bin/node.real" \
+		&& cp /usr/local/lib/boxrunner/node.boxrunner "$bin/node.boxrunner" || exit 1; \
+	done \
+	&& ls /home/runner/externals/node*/bin/node.boxrunner
+
 # The runner image ships Docker's engine. A class with docker = true runs
 # under Sysbox, and the entrypoint starts a daemon for the job and removes
 # this shim; other jobs get the shim, which says why there is no daemon.

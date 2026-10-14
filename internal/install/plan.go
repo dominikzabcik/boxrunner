@@ -72,15 +72,15 @@ type Observed struct {
 	// Paths holds every path boxrunner manages that exists.
 	Paths   map[string]File
 	Network Network
-	// Firewall is the state of the rules without the mirror's exception, and
-	// FirewallMirror with it, at the network's gateway.
-	Firewall       firewall.State
-	FirewallMirror firewall.State
-	Mirror         mirror.State
-	Image          bool
-	Containers     int
-	UnitEnabled    bool
-	UnitActive     bool
+	// Firewall is the state of the rules with no service open to jobs, and
+	// FirewallOpen with each set of services open at the network's gateway.
+	Firewall     firewall.State
+	FirewallOpen map[firewall.Services]firewall.State
+	Mirror       mirror.State
+	Image        bool
+	Containers   int
+	UnitEnabled  bool
+	UnitActive   bool
 	// AgentReplaced means the running agent's binary was replaced after it
 	// started, as install.sh does before it runs install.
 	AgentReplaced bool
@@ -104,9 +104,9 @@ type (
 	}
 	DaemonReload  struct{}
 	CreateNetwork struct{}
-	// ApplyFirewall installs the rules, with the mirror's exception when
-	// Mirror is set.
-	ApplyFirewall struct{ Mirror bool }
+	// ApplyFirewall installs the rules, with exceptions for the services
+	// jobs may reach.
+	ApplyFirewall struct{ Services firewall.Services }
 	// StartMirror runs the registry mirror on the network's gateway.
 	StartMirror      struct{}
 	RemoveMirror     struct{}
@@ -138,8 +138,8 @@ func (CreateNetwork) String() string {
 	return "create the Docker network " + layout.Network + " on bridge " + layout.Bridge
 }
 func (s ApplyFirewall) String() string {
-	if s.Mirror {
-		return "apply the firewall rules for " + layout.Bridge + ", which let jobs reach the registry mirror"
+	if s.Services != (firewall.Services{}) {
+		return "apply the firewall rules for " + layout.Bridge + ", which let jobs reach " + s.Services.String()
 	}
 	return "apply the firewall rules for " + layout.Bridge
 }
@@ -318,12 +318,13 @@ func Plan(d Desired, o Observed) []Step {
 	case !wantMirror && o.Mirror != mirror.State{}:
 		steps = append(steps, RemoveMirror{})
 	}
+	services := firewall.Services{Mirror: wantMirror, Cache: cfg.Cache > 0}
 	wall := o.Firewall
-	if wantMirror {
-		wall = o.FirewallMirror
+	if services != (firewall.Services{}) {
+		wall = o.FirewallOpen[services]
 	}
 	if wall != firewall.Current {
-		steps = append(steps, ApplyFirewall{Mirror: wantMirror})
+		steps = append(steps, ApplyFirewall{Services: services})
 	}
 	if !o.Image {
 		steps = append(steps, BuildImage{})

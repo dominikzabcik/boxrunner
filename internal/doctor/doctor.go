@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/cache"
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/disk"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
@@ -86,10 +87,16 @@ func (c Checks) All(ctx context.Context) []Result {
 		}
 	}
 
-	withDocker := c.ConfigErr == nil && slices.ContainsFunc(c.Config.Classes, func(k config.Class) bool { return k.Docker })
+	services := firewall.Services{
+		Mirror: c.ConfigErr == nil && slices.ContainsFunc(c.Config.Classes, func(k config.Class) bool { return k.Docker }),
+		Cache:  c.ConfigErr == nil && c.Config.Cache > 0,
+	}
 	rules := firewall.Rules{Bridge: layout.Bridge}
-	if withDocker && d != nil {
-		rules.Mirror, _ = mirror.Find(ctx, d)
+	var gateway netip.Addr
+	if services != (firewall.Services{}) && d != nil {
+		if gateway, err = d.Gateway(ctx, layout.Network); err == nil {
+			rules = services.Rules(gateway)
+		}
 	}
 	state := firewall.Check(ctx, c.Exec, rules)
 	add("firewall rules", state == firewall.Current, "%s", map[firewall.State]string{
@@ -99,12 +106,16 @@ func (c Checks) All(ctx context.Context) []Result {
 	}[state])
 
 	if d != nil {
-		results = append(results, c.probe(ctx, d)...)
+		results = append(results, c.probe(ctx, d, services.Cache)...)
 		if c.ConfigErr == nil {
 			results = append(results, isolation(ctx, d, c.Config.Classes, sysbox)...)
 		}
-		if withDocker {
-			results = append(results, dockerInJobs(ctx, d, rules.Mirror)...)
+		if services.Mirror {
+			var addr netip.AddrPort
+			if gateway.IsValid() {
+				addr = mirror.Addr(gateway)
+			}
+			results = append(results, dockerInJobs(ctx, d, addr)...)
 		}
 	}
 
@@ -334,11 +345,14 @@ probe host %s 22
 %s
 probe metadata 169.254.169.254 80
 probe github github.com 443
+%s
 `
 
 // probe starts a container like a job's, in the idle slice on the boxrunner
 // network, and tries to reach what jobs must not reach and what they must.
-func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
+// With withCache, it also runs the job image's node wrapper as an action of a
+// class with cache = true would.
+func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool) []Result {
 	var results []Result
 	add := func(name string, ok bool, format string, args ...any) {
 		results = append(results, Result{name, ok, fmt.Sprintf(format, args...)})
@@ -363,10 +377,15 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 		}
 		metrics = fmt.Sprintf("probe metrics %s %d", metricsAt, addr.Port())
 	}
+	cacheURL, cacheProbe := "", ""
+	if gw, err := netip.ParseAddr(gateway); withCache && err == nil {
+		cacheURL = cache.URL(cache.Addr(gw))
+		cacheProbe = fmt.Sprintf(cacheScript, cacheURL, cache.Upstream)
+	}
 	// A doctor that was interrupted leaves its container behind.
 	d.Remove(ctx, "boxrunner-doctor")
 	id, err := d.Create(ctx, docker.ContainerSpec{
-		Name: "boxrunner-doctor", Image: layout.Image, Cmd: []string{"bash", "-c", fmt.Sprintf(probeScript, gateway, private, metrics)}, Tty: true,
+		Name: "boxrunner-doctor", Image: layout.Image, Cmd: []string{"bash", "-c", fmt.Sprintf(probeScript, gateway, private, metrics, cacheProbe)}, Tty: true,
 		CgroupParent: layout.IdleSlice, Network: layout.Network, NanoCPUs: 1e9, Memory: 256 << 20, PidsLimit: 64,
 	})
 	if docker.NotFound(err) {
@@ -427,7 +446,35 @@ func (c Checks) probe(ctx context.Context, d *docker.Client) []Result {
 	}
 	blocked("metadata", "169.254.169.254")
 	add("github", codes["github"] == 0, "github.com:443 from a job container (exit %d)", codes["github"])
+	if cacheURL != "" {
+		results = append(results, Cache(logs, cacheURL))
+	}
 	return results
+}
+
+// cacheScript runs the node wrapper with the cache's URL and GitHub's
+// results service, as the runner starts an action, and prints the
+// ACTIONS_RESULTS_URL the action sees.
+const cacheScript = `node=$(ls /home/runner/externals/node*/bin/node.boxrunner 2>/dev/null | head -n 1)
+echo "cache-url $(BOXRUNNER_CACHE=%s ACTIONS_RESULTS_URL=%s/ "${node:-false}" -e 'console.log(process.env.ACTIONS_RESULTS_URL)' 2>/dev/null)"`
+
+// Cache judges what cacheScript printed: an action of a class with
+// cache = true should see the cache at url.
+func Cache(logs, url string) Result {
+	seen := ""
+	for _, line := range strings.Split(strings.ReplaceAll(logs, "\r", ""), "\n") {
+		if v, ok := strings.CutPrefix(line, "cache-url"); ok {
+			seen = strings.TrimSpace(v)
+		}
+	}
+	switch seen {
+	case url + "/":
+		return Result{"actions cache", true, fmt.Sprintf("actions in a job reach the cache at %s", url)}
+	case "":
+		return Result{"actions cache", false, "the job image has no node wrapper for the cache yet; the agent rebuilds the image when no normal-priority job runs"}
+	default:
+		return Result{"actions cache", false, fmt.Sprintf("%s did not answer a job container, so jobs use GitHub's cache; see journalctl -u %s", url, layout.UnitName)}
+	}
 }
 
 // isolation starts a job container under sysbox-runc when a class runs its

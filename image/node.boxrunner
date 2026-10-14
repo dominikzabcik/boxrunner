@@ -1,0 +1,16 @@
+#!/bin/sh
+# The node of JavaScript actions in a class with cache = true; the
+# entrypoint links the runner's node to it. While the box's Actions cache
+# answers, it points the action's ACTIONS_RESULTS_URL at the cache, which
+# keeps cache entries on the box and passes every other call on to GitHub.
+# Otherwise, and in container jobs, which get no BOXRUNNER_CACHE, it runs
+# node unchanged.
+real=${0%/*}/node.real
+[ -x "$real" ] || { real=$(readlink -f "$0") && real=${real%/*}/node.real; }
+if [ -n "${BOXRUNNER_CACHE:-}" ] && [ -n "${ACTIONS_RESULTS_URL:-}" ] &&
+	upstream=$(curl -fsS --max-time 2 "$BOXRUNNER_CACHE/_boxrunner/upstream" 2>/dev/null) &&
+	[ "${ACTIONS_RESULTS_URL%/}" = "$upstream" ]; then
+	ACTIONS_RESULTS_URL=$BOXRUNNER_CACHE/
+	export ACTIONS_RESULTS_URL
+fi
+exec "$real" "$@"

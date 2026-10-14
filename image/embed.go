@@ -4,5 +4,5 @@ package image
 
 import "embed"
 
-//go:embed Dockerfile docker entrypoint.sh
+//go:embed Dockerfile docker entrypoint.sh node.boxrunner
 var Context embed.FS

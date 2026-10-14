@@ -25,13 +25,9 @@ func Addr(gateway netip.Addr) netip.AddrPort {
 
 // Find returns the mirror's address on the box's job network.
 func Find(ctx context.Context, d *docker.Client) (netip.AddrPort, error) {
-	n, ok, err := d.Network(ctx, layout.Network)
+	gateway, err := d.Gateway(ctx, layout.Network)
 	if err != nil {
-		return netip.AddrPort{}, err
-	}
-	gateway, found := n.Gateway()
-	if !ok || !found {
-		return netip.AddrPort{}, fmt.Errorf("the Docker network %s has no IPv4 gateway for the registry mirror", layout.Network)
+		return netip.AddrPort{}, fmt.Errorf("the registry mirror: %w", err)
 	}
 	return Addr(gateway), nil
 }

@@ -349,3 +349,17 @@ func TestForks(t *testing.T) {
 		}
 	}
 }
+
+func TestCache(t *testing.T) {
+	url := "http://172.18.0.1:5001"
+	for logs, want := range map[string]Result{
+		"host 124\r\ncache-url http://172.18.0.1:5001/\r\n": {"actions cache", true, "actions in a job reach the cache at http://172.18.0.1:5001"},
+		"cache-url https://results-receiver.actions.githubusercontent.com/\r\n": {"actions cache", false,
+			"http://172.18.0.1:5001 did not answer a job container, so jobs use GitHub's cache; see journalctl -u boxrunner.service"},
+		"cache-url \r\n": {"actions cache", false, "the job image has no node wrapper for the cache yet; the agent rebuilds the image when no normal-priority job runs"},
+	} {
+		if got := Cache(logs, url); got != want {
+			t.Errorf("Cache(%q) =\n%+v\nwant\n%+v", logs, got, want)
+		}
+	}
+}
