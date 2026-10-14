@@ -87,6 +87,16 @@ async function markdown(doc: Doc) {
 }
 
 const diagrams: string[] = [];
+// Images the docs embed as HTML (<img src="docs/…">), served at the same path from the repository root.
+const images = new Set<string>();
+
+function image(src: string, from: string) {
+	if (/^([a-z]+:|\/)/i.test(src)) return src;
+	const target = posix.normalize(posix.join(posix.dirname(from), src));
+	if (!existsSync(join(root, target))) throw new Error(`${from} shows ${src}, which does not exist`);
+	images.add(target);
+	return `/${target}`;
+}
 
 async function render(doc: Doc): Promise<Rendered> {
 	const toc: Rendered['toc'] = [];
@@ -97,6 +107,7 @@ async function render(doc: Doc): Promise<Rendered> {
 			if (token.type === 'link') token.href = link(token.href, doc.src);
 			// The README shows Cloudflare's button image; the site serves its own copy, so the CSP stays 'self'.
 			if (token.type === 'image' && token.href === 'https://deploy.workers.cloudflare.com/button') token.href = '/deploy-to-cloudflare.svg';
+			if (token.type === 'html') token.text = token.text.replace(/<img([^>]*?) src="([^"]+)"/g, (_, attrs: string, src: string) => `<img${attrs} src="${image(src, doc.src)}"`);
 		},
 		renderer: {
 			heading({ tokens, depth }) {
@@ -307,6 +318,7 @@ try {
 	const rendered: Rendered[] = [];
 	// One at a time, so diagrams are numbered the same way on every build.
 	for (const doc of DOCS) rendered.push(await render(doc));
+	for (const target of images) cpSync(join(root, target), join(dist, target));
 	const svgs = await renderDiagrams(browser);
 	const pages: Page[] = [{ path: '/', html: landing }, ...rendered.map((r) => docPage(r, rendered, svgs)), notFound].map((p) => ({ ...p, html: withFonts(p.html) }));
 	for (const page of pages) {
