@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS paused_classes (
 `;
 
 export type StoredBox = { status: BoxStatus; seenAt: number };
+
+/** A status stored from an agent or Worker before draining, held classes and scale sets were reported lacks them. */
+function statusFrom(json: string): BoxStatus {
+	const status = JSON.parse(json) as BoxStatus;
+	return { ...status, draining: status.draining ?? false, scaleSets: status.scaleSets ?? [], classes: status.classes.map((c) => ({ ...c, heldUntil: c.heldUntil ?? null })) };
+}
 export type StoredJob = FinishedJob & { minutes: number };
 export type DayTotal = { day: number; jobs: number; minutes: number };
 
@@ -305,8 +311,10 @@ export class Store {
 
 	fallback(): Fallback {
 		const state = this.sql.exec<{ state: string }>('SELECT state FROM fallback').toArray()[0]?.state;
-		// A row from before alerts has no `alert`, and `idle` fills it in.
-		return state === undefined ? idle : { ...idle, ...(JSON.parse(state) as Partial<Fallback>) };
+		// A row from before alerts has no `alert`, one from before waits no `waits` or `alert.waiting`, and `idle` fills them in.
+		if (state === undefined) return idle;
+		const stored = JSON.parse(state) as Partial<Fallback>;
+		return { ...idle, ...stored, alert: { ...idle.alert, ...stored.alert } };
 	}
 
 	saveFallback(state: Fallback) {
@@ -317,7 +325,7 @@ export class Store {
 		return this.sql
 			.exec<{ seen_at: number; status: string }>('SELECT seen_at, status FROM boxes ORDER BY name')
 			.toArray()
-			.map((row) => ({ status: JSON.parse(row.status) as BoxStatus, seenAt: row.seen_at }));
+			.map((row) => ({ status: statusFrom(row.status), seenAt: row.seen_at }));
 	}
 
 	recentJobs(limit: number): StoredJob[] {

@@ -2,6 +2,6 @@
 interface Env {
 	/** The App's client secret, for an App set up before the Worker kept it. */
 	GITHUB_CLIENT_SECRET?: string;
-	/** Where the Worker posts when the box goes silent and when it is back; a secret, since the address is the credential. */
+	/** Where the Worker posts when the box goes silent or jobs wait, and when that ends; a secret, since the address is the credential. */
 	ALERT_WEBHOOK?: string;
 }

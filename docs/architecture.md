@@ -166,12 +166,13 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - each served repository's fork pull request settings, read at most once an hour
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)
 - with [fallback](fallback.md) or [alerts](alerts.md) on, whether every box is down, whether every served repository's `BOXRUNNER_DOWN` variable says so and what the last alert said
+- which scale sets have jobs waiting with no runner, since when, and the box that reported them
 
 The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories.
 
 The optional `FALLBACK_MINUTES` variable turns on [fallback to GitHub's runners](fallback.md). When no heartbeat arrived for that long, a Durable Object alarm sets the Actions variable `BOXRUNNER_DOWN` in every served repository, and workflows that read it in `runs-on` run on GitHub's runners. Once the box has reported for two minutes without a gap, the Worker deletes it. Heartbeats never call GitHub; the alarm does, with a token narrowed to one repository and `actions_variables: write`, a permission the App has only when its owner added it.
 
-The optional `ALERT_WEBHOOK` secret turns on [alerts](alerts.md). The same alarm, with the same notion of down, posts one message to that address when the box goes down and one when it is back. While fallback is off, `ALERT_MINUTES` (10 by default) decides when the box is down.
+The optional `ALERT_WEBHOOK` secret turns on [alerts](alerts.md). The same alarm, with the same notion of down, posts one message to that address when the box goes down and one when it is back. It also posts when a scale set's jobs have waited that long with no runner on the way, and when they no longer wait. Heartbeats decide both, from the scale sets with assigned jobs and the runners each box reports. While fallback is off, `ALERT_MINUTES` (10 by default) decides when the box is down.
 
 ### Setup
 

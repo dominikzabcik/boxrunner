@@ -1,5 +1,7 @@
-import { alertText, postAlert } from './alerts';
+import { alertText, endText, joinAlert, postAlert, waitText } from './alerts';
 import type { Box } from './box';
+import { heartbeatGapMs, type BoxStatus, type Repo } from './model';
+import { cause, changes, overdue, track, type ScaleSetName, type Wait } from './waits';
 
 /** The Durable Object's alarm, which wakes the Worker while the box is silent. */
 export type Alarms = Pick<DurableObjectStorage, 'getAlarm' | 'setAlarm' | 'deleteAlarm'>;
@@ -13,8 +15,6 @@ export const variable = 'BOXRUNNER_DOWN';
 const minute = 60_000;
 /** Jobs go back to the box once it has reported this long without a gap, so a box that keeps restarting does not take them. */
 export const backAfterMs = 2 * minute;
-/** The agent reports every 30 seconds; three missed heartbeats break its run. */
-const gapMs = 90_000;
 /** Failed writes are retried after one minute, then two, four and so on up to an hour. */
 const longestWaitMs = 60 * minute;
 
@@ -31,8 +31,10 @@ export type Fallback = {
 	/** Writes that failed in a row, and why the last one did. */
 	failures: number;
 	problem: string | null;
-	/** What the last alert that reached the webhook said, posts that failed in a row since, and why the last one did. */
-	alert: { down: boolean; failures: number; problem: string | null };
+	/** Scale sets whose jobs wait with no runner on the way, as the boxes' heartbeats report them. */
+	waits: Wait[];
+	/** What the last alert that reached the webhook said (whether the box is down, which scale sets wait too long), posts that failed in a row since, and why the last one did. */
+	alert: { down: boolean; waiting: ScaleSetName[]; failures: number; problem: string | null };
 };
 
 export const idle: Fallback = {
@@ -42,14 +44,25 @@ export const idle: Fallback = {
 	written: false,
 	failures: 0,
 	problem: null,
-	alert: { down: false, failures: 0, problem: null },
+	waits: [],
+	alert: { down: false, waiting: [], failures: 0, problem: null },
 };
 
 /** A heartbeat arrived; `previous` is when the box last reported before it. */
 export function heard(state: Fallback, previous: number | undefined, now: number): Fallback {
 	if (!state.down) return state;
-	const unbroken = state.backSince !== null && previous !== undefined && now - previous <= gapMs;
+	const unbroken = state.backSince !== null && previous !== undefined && now - previous <= heartbeatGapMs;
 	return unbroken ? state : { ...state, backSince: now };
+}
+
+const overdueChanged = (a: Fallback, b: Fallback) => JSON.stringify(overdue(a.waits)) !== JSON.stringify(overdue(b.waits));
+
+/** Takes in the waits a heartbeat brought; a change in which waits are overdue gets a fresh try at the webhook, unless a down or recovery alert is still pending. Returns `state` itself when nothing changes. */
+export function waited(state: Fallback, waits: Wait[]): Fallback {
+	if (JSON.stringify(waits) === JSON.stringify(state.waits)) return state;
+	const next = { ...state, waits };
+	const fresh = overdueChanged(state, next) && state.alert.down === state.down;
+	return fresh ? { ...next, alert: { ...state.alert, failures: 0, problem: null } } : next;
 }
 
 /** Whether jobs should go to GitHub's runners at `now`; returns `state` itself when nothing changes. */
@@ -57,7 +70,7 @@ export function decide(state: Fallback, afterMs: number | null, lastSeen: number
 	let down: boolean;
 	if (afterMs === null) down = false;
 	else if (state.down) {
-		const back = state.backSince !== null && lastSeen !== undefined && now - lastSeen <= gapMs && now - state.backSince >= backAfterMs;
+		const back = state.backSince !== null && lastSeen !== undefined && now - lastSeen <= heartbeatGapMs && now - state.backSince >= backAfterMs;
 		down = !back;
 	} else down = lastSeen !== undefined && now - lastSeen >= afterMs;
 	if (down === state.down) return state;
@@ -68,7 +81,11 @@ export function decide(state: Fallback, afterMs: number | null, lastSeen: number
 const wanted = (state: Fallback, watch: Watch) => state.down && watch.fallback;
 const variableDue = (state: Fallback, watch: Watch) => state.written !== wanted(state, watch);
 /** An alert goes out only for a change the webhook has not heard, so an outage that ends before its alert went out sends nothing. */
-const alertDue = (state: Fallback, watch: Watch) => watch.webhook !== null && state.alert.down !== state.down;
+const alertDue = (state: Fallback, watch: Watch) => {
+	if (watch.webhook === null) return false;
+	const { started, ended } = changes(state.alert.waiting, state.waits);
+	return state.alert.down !== state.down || started.length > 0 || ended.length > 0;
+};
 
 /** When the alarm should fire next, or null when only a heartbeat can change anything. */
 function nextCheck(state: Fallback, watch: Watch, lastSeen: number | undefined, now: number): number | null {
@@ -80,14 +97,27 @@ function nextCheck(state: Fallback, watch: Watch, lastSeen: number | undefined, 
 	return lastSeen + watch.afterMs;
 }
 
-/** Runs on every heartbeat, before the Worker stores it. It never calls GitHub: the alarm does. */
-export async function onHeartbeat(box: Box, now: number): Promise<void> {
+const pausedClasses = (box: Box) => new Set(box.store.pauses().map((pause) => pause.className));
+
+/** Whether the Worker still serves a repository and class, by the repository list the agent last fetched and `CLASSES`. */
+function servedNow(box: Box): (name: ScaleSetName) => boolean {
+	const listed = box.store.lastCached('repos');
+	const repos = listed === undefined ? null : new Set((JSON.parse(listed) as Repo[]).map((repo) => repo.name.toLowerCase()));
+	const classes = box.classes();
+	return ({ repo, className }) => (repos === null || repos.has(repo.toLowerCase())) && (!classes.ok || classes.classes.includes(className));
+}
+
+/** Runs on every heartbeat, before the Worker stores it. It never calls GitHub or the webhook: the alarm does. */
+export async function onHeartbeat(box: Box, status: BoxStatus, now: number): Promise<void> {
 	const watch = box.watch();
 	const stored = box.store.fallback();
-	if (watch.afterMs === null && !stored.down && !stored.written) return;
-	const state = heard(stored, box.store.lastSeen(), now);
+	const boxes = [...box.store.boxes().filter((other) => other.status.box !== status.box), { status, seenAt: now }];
+	const waits = track(stored.waits, boxes, servedNow(box), watch.afterMs, now);
+	const state = waited(heard(stored, box.store.lastSeen(), now), waits);
 	if (state !== stored) box.store.saveFallback(state);
+	if (watch.afterMs === null && !state.down && !state.written) return;
 	if (decide(state, watch.afterMs, now, now) !== state) return box.alarms.setAlarm(now);
+	if (overdueChanged(stored, state) && alertDue(state, watch)) return box.alarms.setAlarm(now);
 	if ((await box.alarms.getAlarm()) !== null) return;
 	const at = nextCheck(state, watch, now, now);
 	if (at !== null) await box.alarms.setAlarm(at);
@@ -100,7 +130,7 @@ export async function check(box: Box, now: number): Promise<void> {
 	const stored = box.store.fallback();
 	let state = decide(stored, watch.afterMs, lastSeen, now);
 	if (state !== stored) box.store.saveFallback(state);
-	// A heartbeat may move `backSince` while GitHub or the webhook answers, so each result lands on a fresh read; nothing but this alarm changes the rest.
+	// A heartbeat may move `backSince` or the waits while GitHub or the webhook answers, so each result lands on a fresh read; nothing but this alarm changes the rest.
 	if (variableDue(state, watch)) {
 		const set = wanted(state, watch);
 		const problem = await box.writeFallback(set, state.since);
@@ -111,14 +141,23 @@ export async function check(box: Box, now: number): Promise<void> {
 		else console.warn(`Could not ${set ? 'set' : 'delete'} ${variable} (attempt ${state.failures}): ${problem}`);
 	}
 	if (watch.webhook !== null && alertDue(state, watch)) {
-		const down = state.down;
-		const problem = await postAlert(watch.webhook, alertText(down, watch.fallback, lastSeen, box.store.boxes().find((b) => b.seenAt === lastSeen)?.status.box));
+		const { down, waits } = state;
+		const boxes = box.store.boxes();
+		const paused = pausedClasses(box);
+		const { started, ended } = changes(state.alert.waiting, waits);
+		const lines = [
+			...(state.alert.down === down ? [] : [alertText(down, watch.fallback, lastSeen, boxes.find((b) => b.seenAt === lastSeen)?.status.box)]),
+			...started.map((wait) => waitText(wait, cause(wait, boxes, paused, now))),
+			...ended.map(endText),
+		];
+		const what = state.alert.down === down ? 'waiting jobs' : down ? 'down' : 'recovery';
+		const problem = await postAlert(watch.webhook, joinAlert(lines));
 		const fresh = box.store.fallback();
-		const alert = problem === null ? { down, failures: 0, problem: null } : { ...fresh.alert, failures: fresh.alert.failures + 1, problem };
+		const alert = problem === null ? { down, waiting: overdue(waits), failures: 0, problem: null } : { ...fresh.alert, failures: fresh.alert.failures + 1, problem };
 		state = { ...fresh, alert };
 		box.store.saveFallback(state);
-		if (problem === null) console.log(`Alert sent: ${down ? 'the box is down' : 'the box is back'}.`);
-		else console.warn(`Could not send the ${down ? 'down' : 'recovery'} alert (attempt ${alert.failures}): ${problem}`);
+		if (problem === null) console.log(`Alert sent: ${{ down: 'the box is down', recovery: 'the box is back', 'waiting jobs': 'jobs wait or stopped waiting' }[what]}.`);
+		else console.warn(`Could not send the ${what} alert (attempt ${alert.failures}): ${problem}`);
 	}
 	const at = nextCheck(state, watch, lastSeen, now);
 	if (at === null) await box.alarms.deleteAlarm();

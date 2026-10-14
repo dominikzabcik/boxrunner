@@ -1,4 +1,5 @@
 import { variable } from './fallback';
+import type { ScaleSetName, Wait } from './waits';
 
 const timeoutMs = 10_000;
 
@@ -10,6 +11,24 @@ export function alertText(down: boolean, fallback: boolean, lastSeen: number | u
 	const since = lastSeen === undefined ? '' : ` since ${minuteUtc(lastSeen)}`;
 	const jobs = fallback ? `Workflows that read ${variable} run on GitHub’s runners.` : 'Queued jobs wait for it.';
 	return `boxrunner: no box has reported${since}. ${jobs}`;
+}
+
+/** What the owner reads when a scale set's jobs have waited too long. */
+export function waitText(wait: Wait, cause: string | null): string {
+	const likely = cause === null ? '' : ` Likely cause: ${cause}.`;
+	return `boxrunner: ${wait.repo} has had jobs for class ${wait.className} waiting since ${minuteUtc(wait.since)} with no runner starting.${likely}`;
+}
+
+export const endText = ({ repo, className }: ScaleSetName) => `boxrunner: ${repo} no longer has jobs for class ${className} waiting without a runner.`;
+
+/** Discord refuses a message over 2,000 characters, so a post holds at most this many lines. */
+const mostLines = 5;
+
+/** One post for every change the webhook has not heard, one line each. */
+export function joinAlert(lines: readonly string[]): string {
+	if (lines.length <= mostLines) return lines.join('\n');
+	const rest = lines.length - mostLines + 1;
+	return [...lines.slice(0, mostLines - 1), `boxrunner: and ${rest} more repositories and classes whose jobs started or stopped waiting.`].join('\n');
 }
 
 /**

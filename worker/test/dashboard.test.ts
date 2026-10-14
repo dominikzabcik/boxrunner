@@ -172,6 +172,7 @@ describe('GET /dashboard.json', () => {
 					],
 				},
 			],
+			waiting: [],
 			jobs: [
 				{
 					runner: 'box-1-boxrunner-aaaaaa',

@@ -161,7 +161,7 @@ export type AlertConfig = { ok: true; webhook: URL | null; afterMs: number } | {
 
 /**
  * Reads the optional `ALERT_WEBHOOK` secret, an https address the Worker posts
- * to when the box goes silent and when it is back, and `ALERT_MINUTES`.
+ * to when the box goes silent or jobs wait and when that ends, and `ALERT_MINUTES`.
  * Empty turns alerts off. A problem never quotes the address: it is a secret.
  */
 export function parseAlerts(webhook: string | undefined, minutes: string | undefined): AlertConfig {
@@ -204,6 +204,9 @@ export type FinishedJob = {
 	finishedAt: number;
 };
 
+/** A scale set the box listens to and its assigned jobs, including those runners already took. */
+export type BoxScaleSet = { repo: RepoName; className: ClassName; assigned: number };
+
 export type BoxStatus = {
 	box: BoxName;
 	version: string;
@@ -211,13 +214,21 @@ export type BoxStatus = {
 	latest: string | null;
 	image: string;
 	disk: { free: number; floor: number };
-	classes: { name: ClassName; priority: Priority; max: number }[];
+	/** `heldUntil` is set while the class's runners fail before taking a job, so the box starts them slowly. */
+	classes: { name: ClassName; priority: Priority; max: number; heldUntil: number | null }[];
 	runners: BoxRunner[];
+	/** Whether `boxrunner drain` closed the box's sessions. */
+	draining: boolean;
+	/** The scale sets the box listens to; empty from an agent too old to send them. */
+	scaleSets: BoxScaleSet[];
 };
 
 export type Heartbeat = BoxStatus & { jobs: FinishedJob[] };
 
-export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50 } as const;
+/** The agent reports every 30 seconds; three missed heartbeats break its run. */
+export const heartbeatGapMs = 90_000;
+
+export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50, scaleSets: 128 } as const;
 
 const dayMs = 86_400_000;
 /** The UTC day a time falls on, counted from the epoch. */
@@ -276,6 +287,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						name: need(parse.className(value.name), `${at}.name`),
 						priority: need(oneOf<Priority>(['normal', 'idle'])(value.priority), `${at}.priority`),
 						max: need(positiveInteger(value.max), `${at}.max`),
+						heldUntil: value.heldUntil === undefined ? null : need(instant(value.heldUntil), `${at}.heldUntil`),
 					};
 				}),
 				runners: list(body.runners, 'runners', heartbeatLimits.runners).map((raw, i) => {
@@ -287,6 +299,16 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						className: need(parse.className(value.class), `${at}.class`),
 						state: need(oneOf(runnerStates)(value.state), `${at}.state`),
 						since: need(instant(value.since), `${at}.since`),
+					};
+				}),
+				draining: body.draining === undefined ? false : need(typeof body.draining === 'boolean' ? body.draining : undefined, 'draining'),
+				scaleSets: list(body.scaleSets ?? [], 'scaleSets', heartbeatLimits.scaleSets).map((raw, i) => {
+					const at = `scaleSets[${i}]`;
+					const value = record(raw, at);
+					return {
+						repo: need(parse.repo(value.repo), `${at}.repo`),
+						className: need(parse.className(value.class), `${at}.class`),
+						assigned: need(count(value.assigned), `${at}.assigned`),
 					};
 				}),
 				jobs: list(body.jobs, 'jobs', heartbeatLimits.jobs).map((raw, i) => {
