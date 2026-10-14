@@ -1,4 +1,10 @@
-export type SetupRoute = { name: 'setup.form' } | { name: 'setup.start' } | { name: 'setup.callback' } | { name: 'setup.rotate' } | { name: 'setup.reset' };
+export type SetupRoute =
+	| { name: 'setup.form' }
+	| { name: 'setup.start' }
+	| { name: 'setup.callback' }
+	| { name: 'setup.rotate' }
+	| { name: 'setup.showToken'; id: string }
+	| { name: 'setup.reset' };
 
 export type WebRoute =
 	| { name: 'web.dashboard' }
@@ -7,6 +13,7 @@ export type WebRoute =
 	| { name: 'web.callback' }
 	| { name: 'web.logout' }
 	| { name: 'web.token' }
+	| { name: 'web.showToken'; id: string }
 	| { name: 'web.pause' }
 	| { name: 'web.resume' };
 
@@ -27,6 +34,7 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['POST', /^\/setup$/, () => ({ name: 'setup.start' })],
 	['GET', /^\/setup\/callback$/, () => ({ name: 'setup.callback' })],
 	['POST', /^\/setup\/token$/, () => ({ name: 'setup.rotate' })],
+	['GET', /^\/setup\/token\/([^/]+)$/, (id) => ({ name: 'setup.showToken', id })],
 	['POST', /^\/setup\/reset$/, () => ({ name: 'setup.reset' })],
 	['GET', /^\/$/, () => ({ name: 'web.dashboard' })],
 	['GET', /^\/dashboard\.json$/, () => ({ name: 'web.data' })],
@@ -34,6 +42,7 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['GET', /^\/login\/callback$/, () => ({ name: 'web.callback' })],
 	['POST', /^\/logout$/, () => ({ name: 'web.logout' })],
 	['POST', /^\/box-token$/, () => ({ name: 'web.token' })],
+	['GET', /^\/box-token\/([^/]+)$/, (id) => ({ name: 'web.showToken', id })],
 	['POST', /^\/classes\/pause$/, () => ({ name: 'web.pause' })],
 	['POST', /^\/classes\/resume$/, () => ({ name: 'web.resume' })],
 	['POST', /^\/v1\/heartbeat$/, () => ({ name: 'heartbeat' })],

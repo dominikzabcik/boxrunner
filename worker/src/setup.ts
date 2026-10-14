@@ -1,7 +1,7 @@
 import type { Box } from './box';
 import { appKeyFromPem, boxTokenHash, hmac, randomBytes, hex, randomToken, sameSecret } from './crypto';
 import { convertManifest, GitHubError } from './github';
-import { alert, escape, messagePage as message, page as htmlPage, readCookie, type Page } from './page';
+import { alert, escape, messagePage as message, page as htmlPage, readCookie, seeOther, tokenShownPage, type Page } from './page';
 import type { SetupRoute } from './routes';
 
 /** The one place the installer's address lives. */
@@ -13,7 +13,8 @@ const appNamePattern = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,33}$/;
 
 export async function handleSetup(box: Box, request: Request, route: SetupRoute): Promise<Response> {
 	const origin = new URL(request.url).origin;
-	if (route.name === 'setup.rotate') return rotate(box, request, origin);
+	if (route.name === 'setup.rotate') return rotate(box, request);
+	if (route.name === 'setup.showToken') return showToken(box, route.id, origin);
 	if (route.name === 'setup.reset') return reset(box, request);
 	if (box.store.app()) return donePage(410);
 	const secret = box.setupSecret;
@@ -114,13 +115,20 @@ async function callback(box: Box, request: Request, secret: string, origin: stri
 	}
 }
 
-async function rotate(box: Box, request: Request, origin: string) {
+async function rotate(box: Box, request: Request) {
 	const stored = box.store.app();
 	if (!stored) return messagePage(503, 'Setup has not finished', 'There is no box token to replace yet.', true);
 	const secret = box.setupSecret;
 	if (!secret) return messagePage(503, 'Setup is locked', 'Set the SETUP_SECRET secret to at least 32 characters.');
 	if (!(await sameSecret(formText(await form(request), 'secret'), secret))) return donePage(401, 'That is not the setup secret.');
-	return tokenPage(200, 'New box token', stored.app.slug, origin, await box.replaceBoxToken(), false);
+	return seeOther(`/setup/token/${await box.replaceBoxToken('setup', Date.now())}`);
+}
+
+async function showToken(box: Box, id: string, origin: string) {
+	const stored = box.store.app();
+	const token = stored && (await box.takeNewToken(id, 'setup', Date.now()));
+	if (!token) return tokenShownPage({ href: '/setup', text: 'Replace it on the setup page' });
+	return tokenPage(200, 'New box token', stored.app.slug, origin, token, false);
 }
 
 async function reset(box: Box, request: Request) {

@@ -4,7 +4,7 @@ import { dashboardData, refreshScript, renderLive } from './dashboard';
 import * as github from './github';
 import { ApiError, errorResponse, json } from './http';
 import { parse, type App } from './model';
-import { escape, messagePage, page, readCookie } from './page';
+import { escape, messagePage, page, readCookie, seeOther, tokenShownPage } from './page';
 import type { WebRoute } from './routes';
 import { endSession, readSession, startSession, type Session } from './session';
 
@@ -36,6 +36,8 @@ export async function handleWeb(box: Box, request: Request, route: WebRoute): Pr
 				return await callback(box, app, request, origin, key, now);
 			case 'web.logout':
 				return await logout(request, session);
+			case 'web.showToken':
+				return await showToken(box, route.id, session, now);
 			case 'web.token':
 			case 'web.pause':
 			case 'web.resume':
@@ -154,7 +156,7 @@ async function logout(request: Request, session: Session | undefined) {
 	if (session && !(await formOf(request, session))) {
 		return messagePage(403, 'This sign-out did not come from your dashboard', 'Sign out with the button on the dashboard.', openDashboard);
 	}
-	return new Response(null, { status: 303, headers: { location: '/', 'cache-control': 'no-store', 'set-cookie': endSession } });
+	return seeOther('/', { 'set-cookie': endSession });
 }
 
 /** The dashboard's actions. Each is a form post carrying the session's CSRF token. */
@@ -162,7 +164,7 @@ async function act(box: Box, request: Request, action: 'web.token' | 'web.pause'
 	if (!session) return messagePage(401, 'Sign in first', 'This browser is not signed in to the dashboard, so nothing changed.', { href: '/login', text: 'Sign in' });
 	const form = await formOf(request, session);
 	if (!form) return messagePage(403, 'This action did not come from your dashboard', 'Nothing changed. Use the buttons on the dashboard.', openDashboard);
-	if (action === 'web.token') return tokenPage(await box.replaceBoxToken());
+	if (action === 'web.token') return seeOther(`/box-token/${await box.replaceBoxToken('dashboard', now)}`);
 	const classes = box.classes();
 	const className = parse.className(form.get('class'));
 	if (!className || !classes.ok || !classes.classes.includes(className)) {
@@ -170,7 +172,13 @@ async function act(box: Box, request: Request, action: 'web.token' | 'web.pause'
 	}
 	if (action === 'web.pause') box.store.pause(className, session.login, now);
 	else box.store.resume(className);
-	return new Response(null, { status: 303, headers: { location: '/#classes', 'cache-control': 'no-store' } });
+	return seeOther('/#classes');
+}
+
+async function showToken(box: Box, id: string, session: Session | undefined, now: number) {
+	if (!session) return messagePage(401, 'Sign in first', 'Only a browser signed in to the dashboard can see a new box token.', { href: '/login', text: 'Sign in' });
+	const token = await box.takeNewToken(id, 'dashboard', now);
+	return token ? tokenPage(token) : tokenShownPage({ href: '/#token', text: 'Replace it on the dashboard' });
 }
 
 function tokenPage(token: string) {

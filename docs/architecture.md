@@ -174,7 +174,7 @@ Setup happens in the browser, and nobody copies a private key.
 3. **Install the App** on the repositories that should use the box.
 4. **Install the agent.** The page shows a box token once, with the command that installs the agent.
 
-After that, `/setup` answers 410 and offers two forms, each needing the setup secret: `POST /setup/token` replaces the box token, and `POST /setup/reset` makes the Worker forget its App so setup can run again. A signed-in admin can also replace the box token from the [dashboard](dashboard.md).
+After that, `/setup` answers 410 and offers two forms, each needing the setup secret: `POST /setup/token` replaces the box token and redirects to a page that shows the new one once, and `POST /setup/reset` makes the Worker forget its App so setup can run again. A signed-in admin can also replace the box token from the [dashboard](dashboard.md).
 
 The setup secret must be at least 32 characters, or the setup pages refuse to work. The browser's state cookie expires after an hour.
 
