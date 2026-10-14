@@ -30,7 +30,7 @@ The Worker changes the variable only when it switches. Jobs whose `runs-on` does
 2. **Set `FALLBACK_MINUTES`** on the Worker: a whole number of minutes from 2 to 1440. Set it in `wrangler.jsonc` and run `bunx wrangler deploy`, or in the Cloudflare dashboard under the Worker's **Settings**, **Variables and Secrets**. Choose a time longer than your agent usually stays stopped, for example during an upgrade, so a planned restart does not switch.
 3. **Read the variable in your workflows**, as above.
 
-The dashboard shows whether fallback is on, whether the box is down and why the last change of the variable failed, if it did.
+The dashboard shows whether fallback is on, whether the box is down and why the last change of the variable failed, if it did. To hear when the Worker switches, turn on [alerts](alerts.md) too.
 
 ## Jobs that already wait for the box
 
@@ -65,5 +65,5 @@ gh variable delete BOXRUNNER_DOWN -R octo/site
 
 ## What it costs
 
-- **Cloudflare.** The Worker wakes itself with a Durable Object alarm, never a cron trigger, so fallback takes none of the five cron triggers the free plan allows per account. While the box reports, the alarm fires once every `FALLBACK_MINUTES`: 288 times a day at 5 minutes, each one request and, because setting an alarm is billed as a row written, one row. While the box is down it fires once an hour. With fallback off it never fires.
+- **Cloudflare.** The Worker wakes itself with a Durable Object alarm, never a cron trigger, so fallback takes none of the five cron triggers the free plan allows per account. While the box reports, the alarm fires once every `FALLBACK_MINUTES`: 288 times a day at 5 minutes, each one request and, because setting an alarm is billed as a row written, one row. While the box is down it fires once an hour. With fallback and [alerts](alerts.md) off it never fires. Alerts use the same alarm, so turning both on costs no more.
 - **GitHub.** Each switch costs, per served repository, one installation token and one or two variable calls, plus the repository list, which the Worker reads at most once a minute. An installation may make 5,000 requests an hour.

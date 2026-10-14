@@ -47,7 +47,7 @@ You need a Linux box with systemd (Ubuntu 22.04 or newer, Debian 11 or newer; am
    ```
 4. **Use it.** In a workflow, `runs-on: boxrunner`, or `runs-on: boxrunner-light` for jobs that should only use idle cores.
 
-   To run jobs on GitHub's runners while the box is down, turn on [fallback](docs/fallback.md) and pick the label from a variable the Worker sets: `runs-on: ${{ vars.BOXRUNNER_DOWN && 'ubuntu-latest' || 'boxrunner' }}`.
+   To run jobs on GitHub's runners while the box is down, turn on [fallback](docs/fallback.md) and pick the label from a variable the Worker sets: `runs-on: ${{ vars.BOXRUNNER_DOWN && 'ubuntu-latest' || 'boxrunner' }}`. To hear when the box goes silent, give the Worker an [alert webhook](docs/alerts.md) for ntfy, Discord or Slack.
 
 <img src="docs/art/install.svg" width="100%" alt="The installer downloads boxrunner 0.2.0, checks its checksum, installs Docker, writes the systemd units and the token, creates the job network and firewall rules, builds the job image and starts the service. boxrunner doctor then reports every check as ok.">
 
