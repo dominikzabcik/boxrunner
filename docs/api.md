@@ -93,7 +93,7 @@ Response:
 }
 ```
 
-`409 session_exists` while an earlier session is still open. The Worker keeps which box opened each session until that box closes it. When that is a box other than `owner` whose last heartbeat is at most two minutes old, the answer names it:
+`409 session_exists` while an earlier session is still open. The Worker keeps which box opened or last refreshed each session until that box closes it. When that is a box other than `owner` whose last heartbeat is at most two minutes old, the answer names it:
 
 ```json
 { "error": "session_exists", "message": "box-2 holds the session of scale set 7, so it serves octo/site boxrunner.", "heldBy": "box-2" }
@@ -103,11 +103,13 @@ A session `owner` itself left open, or one of a box that stopped reporting, answ
 
 ## `PATCH /v1/sessions/{sessionId}`
 
-Refreshes a session whose queue token expired or will soon. The body names the repository and scale set, and the response has the same shape as opening one.
+Refreshes a session whose queue token expired or will soon. The body names the repository, the scale set and the box that holds the session, and the response has the same shape as opening one.
 
 ```json
-{ "repo": "octo/site", "scaleSetId": 7 }
+{ "repo": "octo/site", "scaleSetId": 7, "owner": "box-1" }
 ```
+
+`owner` is optional. When it is present, the Worker records that box as the session's holder, the same way opening does, so a session opened before the Worker kept holders is named in a `409` after its next refresh. The agent refreshes every hour. Older agents leave `owner` out.
 
 `404 not_found` when the session is gone; open a new one.
 

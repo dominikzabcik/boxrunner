@@ -24,7 +24,7 @@ const RefreshAfter = 60 * time.Minute
 
 type Worker interface {
 	OpenSession(ctx context.Context, repo string, scaleSetID int64, owner string) (worker.Session, error)
-	RefreshSession(ctx context.Context, repo string, scaleSetID int64, sessionID string) (worker.Session, error)
+	RefreshSession(ctx context.Context, repo string, scaleSetID int64, sessionID, owner string) (worker.Session, error)
 	CloseSession(ctx context.Context, repo string, scaleSetID int64, sessionID string) error
 }
 
@@ -152,7 +152,7 @@ func (l *listener) open(ctx context.Context) error {
 }
 
 func (l *listener) refresh(ctx context.Context) error {
-	s, err := l.Worker.RefreshSession(ctx, l.ScaleSet.Repo, l.ScaleSetID, l.session.ID)
+	s, err := l.Worker.RefreshSession(ctx, l.ScaleSet.Repo, l.ScaleSetID, l.session.ID, l.Owner)
 	if worker.Is(err, worker.NotFound) {
 		return l.open(ctx)
 	}

@@ -277,10 +277,12 @@ func (c *Client) OpenSession(ctx context.Context, repo string, scaleSetID int64,
 	return out.session(), err
 }
 
-func (c *Client) RefreshSession(ctx context.Context, repo string, scaleSetID int64, sessionID string) (Session, error) {
+// RefreshSession renews a session's queue token. It names the owner so a
+// Worker that started keeping session holders after the session opened learns it.
+func (c *Client) RefreshSession(ctx context.Context, repo string, scaleSetID int64, sessionID, owner string) (Session, error) {
 	var out sessionResponse
 	err := c.do(ctx, "refresh session", http.MethodPatch, "/v1/sessions/"+url.PathEscape(sessionID), nil,
-		map[string]any{"repo": repo, "scaleSetId": scaleSetID}, &out)
+		map[string]any{"repo": repo, "scaleSetId": scaleSetID, "owner": owner}, &out)
 	return out.session(), err
 }
 

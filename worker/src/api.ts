@@ -187,9 +187,12 @@ async function refreshSession(context: Context, routeId: string) {
 	const input = await body(context.request);
 	const name = field(parse.repo(input.repo), 'repo');
 	const id = field(parse.scaleSetId(input.scaleSetId), 'scaleSetId');
+	// Older agents send no owner. A session opened before the Worker kept holders gets one here.
+	const owner = input.owner === undefined ? undefined : field(parse.boxName(input.owner), 'owner');
 	const scaleSet = await owned(context, name, id);
 	await context.box.assertEligible(context.app, scaleSet.repo);
 	const result = await context.box.actions(context.app, scaleSet.repo, (c) => github.refreshSession(c, id, sessionId));
+	if (result.kind === 'open' && owner !== undefined) context.box.store.holdSession(scaleSet.repo.id, id, result.session.sessionId, owner);
 	return sessionResponse(context, scaleSet, result, true);
 }
 

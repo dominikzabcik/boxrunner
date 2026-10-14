@@ -210,6 +210,30 @@ describe('sessions', () => {
 		expect(await answer(await open('box-1'))).toEqual(orphaned);
 	});
 
+	it('learns who holds a session from a refresh that names its owner, as after a Worker upgrade', async () => {
+		time('2026-10-14T10:00:00Z');
+		const { github, call } = await ready();
+		const id = await scaleSet(call);
+		const sessionId = crypto.randomUUID();
+		github.sessions.set(scaleSetKey(123, id), sessionId);
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2', runners: [] }))).status).toBe(200);
+		const refresh = (body: Record<string, unknown>) => call('PATCH', `/v1/sessions/${sessionId}`, { repo: 'octo/site', scaleSetId: id, ...body });
+		const open = async () => {
+			const response = await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner: 'box-1' });
+			return { status: response.status, body: await response.json() };
+		};
+
+		expect((await refresh({})).status).toBe(200);
+		expect(await open()).toEqual({ status: 409, body: { error: 'session_exists', message: `Another session holds scale set ${id}.` } });
+
+		expect((await refresh({ owner: 'box-2' })).status).toBe(200);
+		expect(await open()).toEqual({
+			status: 409,
+			body: { error: 'session_exists', message: `box-2 holds the session of scale set ${id}, so it serves octo/site boxrunner.`, heldBy: 'box-2' },
+		});
+		await expectError(await refresh({ owner: 'not a box' }), 400, 'bad_request', '"owner" is missing or malformed.');
+	});
+
 	it('forgets who holds a session when setup starts over', async () => {
 		time('2026-10-14T10:00:00Z');
 		const { github, call } = await ready();

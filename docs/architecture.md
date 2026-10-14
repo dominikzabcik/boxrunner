@@ -145,7 +145,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - the App's id, slug, private key and webhook secret
 - the SHA-256 hash of the box token
 - the scale sets it created or adopted, by repository and class
-- which box opened each scale set's session, until that box closes it
+- which box opened or last refreshed each scale set's session, until that box closes it
 - the classes paused on the dashboard, with who paused each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)
