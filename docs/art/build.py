@@ -120,10 +120,16 @@ def text(face, s, size, x, y, fill, tracking=0.0, anchor="start", stroke=None, e
         w = face.width(s, size, tracking)
         x -= w if anchor == "end" else w / 2
     uses, w = face.path(s, size, x, y, tracking)
-    paint = (
-        f'fill="none" stroke="{stroke[0]}" stroke-width="{stroke[1] * face.upem / size:.4g}"' if stroke else f'fill="{fill}"'
-    )
-    return f"<g {paint} {extra}>{uses}</g>", w
+    if not stroke:
+        return f'<g fill="{fill}" {extra}>{uses}</g>', w
+    # Variable fonts keep overlapping contours, so a plain stroke draws their
+    # seams inside the letters. Stroke at twice the width, then cover the
+    # inside with the background: only the outer half of the stroke remains.
+    width = 2 * stroke[1] * face.upem / size
+    return (
+        f'<g fill="none" stroke="{stroke[0]}" stroke-width="{width:.4g}" stroke-linejoin="round" {extra}>{uses}</g>'
+        f'<g fill="{C["night"]}" {extra}>{uses}</g>'
+    ), w
 
 
 def runs(parts, size, x, y):
