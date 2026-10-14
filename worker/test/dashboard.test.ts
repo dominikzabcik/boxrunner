@@ -170,6 +170,7 @@ describe('GET /dashboard.json', () => {
 			classesProblem: null,
 			paused: [],
 			fallback: { minutes: null, configProblem: null, down: false, since: null, secondsSince: null, written: false, problem: null },
+			alerts: { host: null, minutes: null, configProblem: null, sentDown: false, problem: null },
 		});
 		const page = await (await view()).text();
 		expect(/<div id="live">\n([\s\S]*)\n<\/div>/.exec(page)?.[1]).toBe(html);

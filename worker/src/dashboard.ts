@@ -1,7 +1,8 @@
+import type { Box } from './box';
 import { variable } from './fallback';
-import { dayOf, newer, type Classes, type FallbackConfig, type Priority, type Repo, type RunnerState } from './model';
+import { dayOf, newer, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
-import { retentionDays, type Store } from './store';
+import { retentionDays } from './store';
 import { version as workerVersion } from './version';
 
 /** GitHub's published price for its standard (2-core) Linux runner. */
@@ -63,6 +64,17 @@ export type Dashboard = {
 		/** Why the last write of the variable failed. */
 		problem: string | null;
 	};
+	alerts: {
+		/** The webhook's host, null while alerts are off. The rest of its address is a secret and never shown. */
+		host: string | null;
+		/** Minutes without a heartbeat before the Worker posts; `fallback.minutes` while fallback is on. */
+		minutes: number | null;
+		configProblem: string | null;
+		/** Whether the last alert that reached the webhook said the box is down. */
+		sentDown: boolean;
+		/** Why the last post failed. */
+		problem: string | null;
+	};
 };
 
 const iso = (time: number) => new Date(time).toISOString();
@@ -75,7 +87,12 @@ function totals(days: { jobs: number; minutes: number }[]): Totals {
 }
 
 /** Reads only the Durable Object: a page view never calls GitHub. */
-export function dashboardData(store: Store, classes: Classes, fallback: FallbackConfig, now: number): Dashboard {
+export function dashboardData(box: Box, now: number): Dashboard {
+	const { store } = box;
+	const classes = box.classes();
+	const fallback = box.fallback();
+	const alerts = box.alerts();
+	const { webhook, afterMs } = box.watch();
 	const today = dayOf(now);
 	const watch = store.fallback();
 	const days = store.daysFrom(today - retentionDays + 1);
@@ -146,6 +163,13 @@ export function dashboardData(store: Store, classes: Classes, fallback: Fallback
 			secondsSince: watch.since === 0 ? null : secondsBetween(watch.since, now),
 			written: watch.written,
 			problem: watch.problem,
+		},
+		alerts: {
+			host: webhook?.host ?? null,
+			minutes: webhook === null || afterMs === null ? null : afterMs / 60_000,
+			configProblem: alerts.ok ? null : alerts.problem,
+			sentDown: watch.alert.down,
+			problem: watch.alert.problem,
 		},
 	};
 }
@@ -278,6 +302,20 @@ function renderFallback({ fallback }: Dashboard) {
 	return `<h3>Fallback to GitHub’s runners</h3>\n${lines.join('\n')}`;
 }
 
+function renderAlerts({ alerts, fallback }: Dashboard) {
+	const lines: string[] = [];
+	if (alerts.configProblem !== null) lines.push(`<p class="alert">The Worker’s ${escape(alerts.configProblem)}, so alerts are off.</p>`);
+	else if (alerts.host === null || alerts.minutes === null) lines.push('<p>Off: set <code>ALERT_WEBHOOK</code> to hear when the box goes silent.</p>');
+	else {
+		const host = `<code>${escape(alerts.host)}</code>`;
+		lines.push(`<p>After ${plural(alerts.minutes, 'minute')} without a heartbeat, the Worker posts to ${host}, and again once the box is back.</p>`);
+		if (alerts.sentDown !== fallback.down && alerts.problem !== null) {
+			lines.push(`<p class="alert">The Worker could not post the ${fallback.down ? 'down' : 'recovery'} alert: ${escape(alerts.problem)}. It tries again.</p>`);
+		}
+	}
+	return `<h3>Alerts</h3>\n${lines.join('\n')}`;
+}
+
 function classAction(csrf: string, name: string, paused: boolean) {
 	const [action, verb] = paused ? ['resume', 'Resume'] : ['pause', 'Pause'];
 	return `<form method="post" action="/classes/${action}">
@@ -313,6 +351,7 @@ ${
 <h3 id="classes">Classes</h3>
 ${renderClasses(data, csrf)}
 ${renderFallback(data)}
+${renderAlerts(data)}
 </section>`;
 }
 
