@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds a release into dist/: the agent for linux/amd64 and linux/arm64,
 # checksums.txt, and install.sh with the version and checksums written in.
+# The Worker is deployed from source, so its version must already name the release.
 #
 #   scripts/build-release.sh 0.1.0
 set -euo pipefail
@@ -8,6 +9,10 @@ set -euo pipefail
 version=${1:?usage: scripts/build-release.sh VERSION}
 version=${version#v}
 cd "$(dirname "$0")/.."
+grep -qx "export const version = '$version';" worker/src/version.ts || {
+	echo "worker/src/version.ts does not name version $version; set it in the release commit" >&2
+	exit 1
+}
 rm -rf dist
 mkdir dist
 

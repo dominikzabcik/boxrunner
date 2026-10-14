@@ -248,3 +248,28 @@ func TestUnreadableAnswerIsNotRetried(t *testing.T) {
 		t.Errorf("err = %v after %d requests", err, len(*seen))
 	}
 }
+
+func TestWorkerVersion(t *testing.T) {
+	versions := []string{"0.2.2", ""}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if v := versions[0]; v != "" {
+			w.Header().Set("Boxrunner-Worker-Version", v)
+		}
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	c := New(Options{URL: u, Token: "box-token", Version: "0.2.2"})
+	if v, ok := c.WorkerVersion(); v != "" || ok {
+		t.Errorf("before any answer, WorkerVersion = %q, %v", v, ok)
+	}
+	c.SendHeartbeat(context.Background(), Heartbeat{Box: "box-1"})
+	if v, ok := c.WorkerVersion(); v != "0.2.2" || !ok {
+		t.Errorf("WorkerVersion = %q, %v; want 0.2.2", v, ok)
+	}
+	versions = versions[1:]
+	c.SendHeartbeat(context.Background(), Heartbeat{Box: "box-1"})
+	if v, ok := c.WorkerVersion(); v != "" || !ok {
+		t.Errorf("after a Worker without a version answered, WorkerVersion = %q, %v", v, ok)
+	}
+}

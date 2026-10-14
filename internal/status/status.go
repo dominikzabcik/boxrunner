@@ -5,6 +5,7 @@ package status
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/dominikzabcik/boxrunner/internal/release"
 )
 
 type Snapshot struct {
@@ -37,6 +40,11 @@ type Snapshot struct {
 	// adopt, or a session an earlier owner left open: jobs a box that died had
 	// acquired may be stranded at GitHub.
 	FreshStart bool `json:"freshStart,omitempty"`
+	// Worker is the Worker's release, empty before it answered or when it
+	// names none.
+	Worker string `json:"worker,omitempty"`
+	// Latest is boxrunner's latest release, once the agent has found it.
+	Latest string `json:"latest,omitempty"`
 }
 
 // strandedHint is how long after a fresh start status points to recovering
@@ -256,8 +264,14 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	if s.Image.Disk > 0 {
 		images = "  images " + gigabytes(s.Image.Disk)
 	}
-	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
-		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	fmt.Fprintf(w, "%s  boxrunner %s  worker %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
+		s.Box, s.Version, cmp.Or(s.Worker, "unknown"), orNone(s.Image.Built), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	if release.Newer(s.Latest, s.Version) {
+		fmt.Fprintf(w, "boxrunner %s is out. Upgrade this agent with: sudo boxrunner upgrade\n\n", s.Latest)
+	}
+	if release.Newer(s.Latest, s.Worker) {
+		fmt.Fprintf(w, "The Worker runs %s. Redeploy it from %s: see docs/upgrading.md.\n\n", s.Worker, s.Latest)
+	}
 	if s.FreshStart && now.Sub(s.Started) < strandedHint {
 		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")
 	}

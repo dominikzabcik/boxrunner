@@ -158,3 +158,41 @@ func TestHeld(t *testing.T) {
 		t.Errorf("Held = %+v, want %+v", got, want)
 	}
 }
+
+func TestVersions(t *testing.T) {
+	upgrade := Result{"release", false, "boxrunner 0.2.2 is out and this agent is 0.2.1; upgrade with: sudo boxrunner upgrade"}
+	cases := []struct {
+		name           string
+		agent, latest  string
+		latestErr      error
+		worker         string
+		workerAnswered bool
+		want           []Result
+	}{
+		{
+			name: "both current", agent: "0.2.2", latest: "0.2.2", worker: "0.2.2", workerAnswered: true,
+			want: []Result{{"release", true, "agent 0.2.2, latest release 0.2.2"}, {"worker release", true, "Worker 0.2.2"}},
+		},
+		{
+			name: "both behind", agent: "0.2.1", latest: "0.2.2", worker: "0.2.1", workerAnswered: true,
+			want: []Result{upgrade, {"worker release", false, "the Worker runs 0.2.1 and 0.2.2 is out; redeploy it as docs/upgrading.md says"}},
+		},
+		{
+			name: "a Worker that names no version", agent: "0.2.1", latest: "0.2.2", worker: "", workerAnswered: true,
+			want: []Result{upgrade, {"worker release", false, "the Worker names no version, so it is older than the release that added it; redeploy it as docs/upgrading.md says"}},
+		},
+		{
+			name: "a Worker that did not answer", agent: "0.2.1", latest: "0.2.2",
+			want: []Result{upgrade},
+		},
+		{
+			name: "github.com out of reach", agent: "0.2.2", latestErr: errors.New("latest release: timeout"), worker: "0.2.2", workerAnswered: true,
+			want: []Result{{"release", false, "could not find boxrunner's latest release: latest release: timeout"}, {"worker release", true, "Worker 0.2.2"}},
+		},
+	}
+	for _, c := range cases {
+		if got := Versions(c.agent, c.latest, c.latestErr, c.worker, c.workerAnswered); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: Versions =\n%+v\nwant\n%+v", c.name, got, c.want)
+		}
+	}
+}

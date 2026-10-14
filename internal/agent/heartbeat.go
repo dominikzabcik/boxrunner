@@ -63,7 +63,7 @@ func (a *Agent) heartbeat(ctx context.Context) {
 
 func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 	hb := worker.Heartbeat{
-		Box: snap.Box, Version: snap.Version, Image: snap.Image.Built,
+		Box: snap.Box, Version: snap.Version, Latest: snap.Latest, Image: snap.Image.Built,
 		Disk:    worker.HeartbeatDisk{Free: max(snap.DiskFree, 0), Floor: snap.DiskFloor},
 		Classes: []worker.HeartbeatClass{},
 		Runners: []worker.HeartbeatRunner{},

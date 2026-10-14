@@ -70,7 +70,7 @@ func TestServeAndFetch(t *testing.T) {
 
 func TestPrint(t *testing.T) {
 	snap := Snapshot{
-		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
+		Box: "box-1", Version: "0.1.0", Worker: "0.1.0", Latest: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
 		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
 		ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 1}},
@@ -85,7 +85,7 @@ func TestPrint(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
-	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.1.0  worker 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB
 
 If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
@@ -123,7 +123,7 @@ func TestPrintHeldClass(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0)
-	want := "box-1  boxrunner 0.1.0  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
 		"Runners of class web exit before taking a job; next try at " + t0.Add(4*time.Minute).Local().Format("15:04:05") + ". See `journalctl -u boxrunner` for their output.\n\n" +
 		"CLASS      PRIORITY  RUNNERS  MAX\n"
 	if got := b.String(); !strings.HasPrefix(got, want) {
@@ -134,5 +134,33 @@ func TestPrintHeldClass(t *testing.T) {
 	}
 	if got := snap.Classes[0].NextTry(t0); got != "" {
 		t.Errorf("NextTry of a class that works = %q", got)
+	}
+}
+
+func TestPrintSaysWhenANewerReleaseIsOut(t *testing.T) {
+	header := func(s Snapshot) string {
+		var b strings.Builder
+		Print(&b, s, t0)
+		head, _, _ := strings.Cut(b.String(), "CLASS")
+		return head
+	}
+	snap := Snapshot{Box: "box-1", Version: "0.2.1", Worker: "0.2.0", Latest: "0.2.2", DiskFloor: 10e9}
+	want := `box-1  boxrunner 0.2.1  worker 0.2.0  image none (latest none)  disk 0.0 GB free, floor 10.0 GB
+
+boxrunner 0.2.2 is out. Upgrade this agent with: sudo boxrunner upgrade
+
+The Worker runs 0.2.0. Redeploy it from 0.2.2: see docs/upgrading.md.
+
+`
+	if got := header(snap); got != want {
+		t.Errorf("behind:\n%s\nwant\n%s", got, want)
+	}
+
+	snap.Version, snap.Worker = "0.2.2", ""
+	want = `box-1  boxrunner 0.2.2  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB
+
+`
+	if got := header(snap); got != want {
+		t.Errorf("current, with a Worker that names no version:\n%s\nwant\n%s", got, want)
 	}
 }

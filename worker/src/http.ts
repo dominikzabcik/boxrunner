@@ -1,3 +1,5 @@
+import { version } from './version';
+
 /** Every error the agent API answers with, and its status. docs/api.md holds the same table. */
 export const errorStatus = {
 	bad_request: 400,
@@ -27,7 +29,7 @@ export class ApiError extends Error {
 	}
 }
 
-const apiHeaders = { 'boxrunner-protocol': '1', 'cache-control': 'no-store' };
+const apiHeaders = { 'boxrunner-protocol': '1', 'boxrunner-worker-version': version, 'cache-control': 'no-store' };
 
 export const json = (body: unknown, status = 200) => Response.json(body, { status, headers: apiHeaders });
 

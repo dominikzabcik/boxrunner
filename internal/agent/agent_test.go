@@ -197,6 +197,7 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			g.calls = append(g.calls, strings.TrimSpace(fmt.Sprintf("%s %s %s", r.Method, r.URL.RequestURI(), body)))
 			g.mu.Unlock()
 			w.Header().Set("Boxrunner-Protocol", "1")
+			w.Header().Set("Boxrunner-Worker-Version", "0.1.0")
 		}
 		session := fmt.Sprintf(`{"sessionId":"s1","queueUrl":"%s/queue/7","queueToken":"q1","acquireJobsUrl":"%s/acquire","statistics":{"totalAssignedJobs":0}}`, srv.URL, srv.URL)
 		switch {
@@ -238,6 +239,8 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			fmt.Fprintf(w, `{"count":1,"value":%s}`, body)
 		case r.URL.Path == "/releases/latest":
 			http.Redirect(w, r, "/releases/tag/v2.338.0", http.StatusFound)
+		case r.URL.Path == "/dominikzabcik/boxrunner/releases/latest":
+			http.Redirect(w, r, "/dominikzabcik/boxrunner/releases/tag/v0.2.2", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
 			g.mu.Lock()
 			json.NewEncoder(w).Encode(map[string]any{"paused": append([]string{}, g.paused...)})
@@ -302,14 +305,15 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	go func() {
 		h.done <- Run(ctx, Options{
 			Config: cfg, Docker: d, Version: "0.1.0", Log: log,
-			Worker:         worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
-			Run:            func(context.Context, string, string, ...string) (string, error) { return "", nil },
-			JobsLog:        h.jobs,
-			Socket:         h.socket,
-			ReleasesURL:    srv.URL + "/releases/latest",
-			Tick:           50 * time.Millisecond,
-			HeartbeatEvery: 50 * time.Millisecond,
-			SysboxDir:      t.TempDir(),
+			Worker:               worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
+			Run:                  func(context.Context, string, string, ...string) (string, error) { return "", nil },
+			JobsLog:              h.jobs,
+			Socket:               h.socket,
+			ReleasesURL:          srv.URL + "/releases/latest",
+			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
+			Tick:                 50 * time.Millisecond,
+			HeartbeatEvery:       50 * time.Millisecond,
+			SysboxDir:            t.TempDir(),
 		})
 	}()
 	return h
@@ -754,4 +758,15 @@ func TestStartRemovesSupersededImages(t *testing.T) {
 	if snap.Image.Disk != 2_980_000_000 {
 		t.Errorf("image disk use = %d, want 2980000000", snap.Image.Disk)
 	}
+}
+
+func TestStatusVersions(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil)
+	defer h.stop(t)
+	var got [2]string
+	waitFor(t, "the Worker's version and the latest release in the status", func() bool {
+		s, err := status.Fetch(context.Background(), h.socket)
+		got = [2]string{s.Worker, s.Latest}
+		return err == nil && got == [2]string{"0.1.0", "0.2.2"}
+	})
 }
