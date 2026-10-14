@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -141,6 +142,9 @@ type Config struct {
 	Box       string
 	DiskFloor Bytes
 	Classes   []Class
+	// Metrics is where the agent serves Prometheus metrics; the zero value
+	// serves none.
+	Metrics netip.AddrPort
 }
 
 func (c Config) Class(name string) (Class, bool) {
@@ -164,10 +168,12 @@ const (
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 type rawConfig struct {
-	Worker    string     `toml:"worker"`
-	Box       string     `toml:"box"`
-	DiskFloor string     `toml:"disk_floor"`
-	Classes   []rawClass `toml:"class"`
+	Worker        string     `toml:"worker"`
+	Box           string     `toml:"box"`
+	DiskFloor     string     `toml:"disk_floor"`
+	Metrics       string     `toml:"metrics"`
+	MetricsPublic bool       `toml:"metrics_public"`
+	Classes       []rawClass `toml:"class"`
 }
 
 type rawClass struct {
@@ -220,6 +226,10 @@ func Parse(data []byte, hostname string) (Config, error) {
 		}
 	}
 
+	if cfg.Metrics, err = parseMetrics(raw.Metrics, raw.MetricsPublic); err != nil {
+		errs = append(errs, err)
+	}
+
 	if len(raw.Classes) == 0 {
 		errs = append(errs, errors.New("no [[class]]: at least one is needed"))
 	}
@@ -259,6 +269,23 @@ func parseWorker(s string) (*url.URL, error) {
 		return nil, fmt.Errorf("worker: %q must use https", s)
 	}
 	return u, nil
+}
+
+func parseMetrics(s string, public bool) (netip.AddrPort, error) {
+	if s == "" {
+		if public {
+			return netip.AddrPort{}, errors.New("metrics_public: set without metrics")
+		}
+		return netip.AddrPort{}, nil
+	}
+	addr, err := netip.ParseAddrPort(s)
+	if err != nil || addr.Port() == 0 {
+		return netip.AddrPort{}, fmt.Errorf("metrics: %q must be an IP address and port, such as 127.0.0.1:9464", s)
+	}
+	if !addr.Addr().IsLoopback() && !public {
+		return netip.AddrPort{}, fmt.Errorf("metrics: %s can be reached from other machines, which then read the names of your repositories; use 127.0.0.1, or set metrics_public = true", s)
+	}
+	return addr, nil
 }
 
 func parseClass(rc rawClass, box string) (Class, []error) {

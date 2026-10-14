@@ -1,0 +1,120 @@
+# HELP boxrunner_agent_info The agent's version and box name.
+# TYPE boxrunner_agent_info gauge
+boxrunner_agent_info{box="box-1",version="0.4.0"} 1
+# HELP boxrunner_worker_info The Worker's version, once it answered.
+# TYPE boxrunner_worker_info gauge
+boxrunner_worker_info{version="0.4.0"} 1
+# HELP boxrunner_runner_image_info The Actions runner version the job image was built with.
+# TYPE boxrunner_runner_image_info gauge
+boxrunner_runner_image_info{version="2.330.0"} 1
+# HELP boxrunner_class_runners Runners of the class in each phase.
+# TYPE boxrunner_class_runners gauge
+boxrunner_class_runners{class="boxrunner",phase="requested"} 0
+boxrunner_class_runners{class="boxrunner",phase="starting"} 1
+boxrunner_class_runners{class="boxrunner",phase="running"} 1
+boxrunner_class_runners{class="boxrunner",phase="removing"} 0
+boxrunner_class_runners{class="boxrunner",phase="exited"} 0
+boxrunner_class_runners{class="boxrunner-light",phase="requested"} 0
+boxrunner_class_runners{class="boxrunner-light",phase="starting"} 0
+boxrunner_class_runners{class="boxrunner-light",phase="running"} 0
+boxrunner_class_runners{class="boxrunner-light",phase="removing"} 0
+boxrunner_class_runners{class="boxrunner-light",phase="exited"} 0
+# HELP boxrunner_class_max_runners Runners of the class the box starts or runs at once, for all its repositories together.
+# TYPE boxrunner_class_max_runners gauge
+boxrunner_class_max_runners{class="boxrunner"} 2
+boxrunner_class_max_runners{class="boxrunner-light"} 1
+# HELP boxrunner_class_held 1 while the class holds its starts because its runners exit before taking a job.
+# TYPE boxrunner_class_held gauge
+boxrunner_class_held{class="boxrunner"} 0
+boxrunner_class_held{class="boxrunner-light"} 1
+# HELP gha_assigned_jobs Number of jobs assigned to this scale set.
+# TYPE gha_assigned_jobs gauge
+gha_assigned_jobs{name="boxrunner-light",organization="octo",repository="docs"} 0
+gha_assigned_jobs{name="boxrunner",organization="octo",repository="site"} 1
+# HELP gha_completed_jobs_total Total number of jobs completed since the agent started.
+# TYPE gha_completed_jobs_total counter
+gha_completed_jobs_total{name="boxrunner-light",organization="octo",repository="docs",job_result="failed"} 1
+gha_completed_jobs_total{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 1
+# HELP gha_job_execution_duration_seconds Time spent executing workflow jobs by the scale set (in seconds).
+# TYPE gha_job_execution_duration_seconds histogram
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="1"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="5"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="10"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="30"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="60"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="120"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="300"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="900"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="1800"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="3600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="7200"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="21600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="+Inf"} 1
+gha_job_execution_duration_seconds_sum{name="boxrunner-light",organization="octo",repository="docs",job_result="failed"} 45
+gha_job_execution_duration_seconds_count{name="boxrunner-light",organization="octo",repository="docs",job_result="failed"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="1"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="5"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="10"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="30"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="60"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="120"} 0
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="300"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="900"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="1800"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="3600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="7200"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="21600"} 1
+gha_job_execution_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="+Inf"} 1
+gha_job_execution_duration_seconds_sum{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 180
+gha_job_execution_duration_seconds_count{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 1
+# HELP boxrunner_job_queue_duration_seconds Time from when a job was queued to when a runner took it, counted when the job finishes.
+# TYPE boxrunner_job_queue_duration_seconds histogram
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="1"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="5"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="10"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="30"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="60"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="120"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="300"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="600"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="900"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="1800"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="3600"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="7200"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="21600"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner-light",organization="octo",repository="docs",job_result="failed",le="+Inf"} 0
+boxrunner_job_queue_duration_seconds_sum{name="boxrunner-light",organization="octo",repository="docs",job_result="failed"} 0
+boxrunner_job_queue_duration_seconds_count{name="boxrunner-light",organization="octo",repository="docs",job_result="failed"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="1"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="5"} 0
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="10"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="30"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="60"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="120"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="300"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="600"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="900"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="1800"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="3600"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="7200"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="21600"} 1
+boxrunner_job_queue_duration_seconds_bucket{name="boxrunner",organization="octo",repository="site",job_result="succeeded",le="+Inf"} 1
+boxrunner_job_queue_duration_seconds_sum{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 8
+boxrunner_job_queue_duration_seconds_count{name="boxrunner",organization="octo",repository="site",job_result="succeeded"} 1
+# HELP boxrunner_disk_free_bytes Free space on Docker's or Sysbox's filesystem, whichever has less.
+# TYPE boxrunner_disk_free_bytes gauge
+boxrunner_disk_free_bytes 120000000000
+# HELP boxrunner_disk_floor_bytes Free space below which no runner starts.
+# TYPE boxrunner_disk_floor_bytes gauge
+boxrunner_disk_floor_bytes 10000000000
+# HELP boxrunner_images_bytes Space the job, class and runner images take, measured after the last image prune.
+# TYPE boxrunner_images_bytes gauge
+boxrunner_images_bytes 2980000000
+# HELP boxrunner_draining 1 while the box drains and starts no runner.
+# TYPE boxrunner_draining gauge
+boxrunner_draining 1
+# HELP boxrunner_heartbeat_last_success_timestamp_seconds When the Worker last took a heartbeat, in seconds since 1970; 0 before the first.
+# TYPE boxrunner_heartbeat_last_success_timestamp_seconds gauge
+boxrunner_heartbeat_last_success_timestamp_seconds 1791925470.25
