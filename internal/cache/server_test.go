@@ -388,7 +388,8 @@ func TestCapabilities(t *testing.T) {
 	if len(capability) != 43 {
 		t.Errorf("download capability %q is not 256 bits in base64", capability)
 	}
-	if code, _ := b.get(b.srv.URL + "/cache/download/" + capability[:42] + "A"); code != http.StatusNotFound {
+	changed := capability[:42] + map[bool]string{true: "B", false: "A"}[capability[42] == 'A']
+	if code, _ := b.get(b.srv.URL + "/cache/download/" + changed); code != http.StatusNotFound {
 		t.Errorf("download with a changed capability = %d", code)
 	}
 	b.advance(downloadFor + time.Second)

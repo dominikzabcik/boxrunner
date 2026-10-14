@@ -274,7 +274,7 @@ func (a *Agent) serveCache(ctx context.Context) func() {
 	upstream, _ := url.Parse(cache.Upstream)
 	srv := &cache.Server{
 		Store: store, Base: cache.URL(a.CacheAddr), Upstream: upstream, Log: a.Log, Now: time.Now,
-		Keys: &cache.Keys{URL: cache.KeysURL, Issuer: cache.Issuer, HTTP: &http.Client{Timeout: 30 * time.Second}},
+		Keys: &cache.Keys{URL: cache.KeysURL, Issuer: cache.Issuer, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: a.Log},
 	}
 	a.cache = srv.Base
 	size, entries := store.Size()

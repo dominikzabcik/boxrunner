@@ -126,7 +126,6 @@ func (s *Server) claims(w http.ResponseWriter, r *http.Request, body any) (Claim
 		if errors.Is(err, ErrToken) {
 			twirpError(w, http.StatusUnauthorized, "unauthenticated", err.Error())
 		} else {
-			s.Log.Warn("cache: checking a runtime token", "err", err)
 			twirpError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
 		}
 		return Claims{}, false

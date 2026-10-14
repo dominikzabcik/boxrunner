@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -51,6 +52,8 @@ type Keys struct {
 	URL    string
 	Issuer string
 	HTTP   *http.Client
+	// Log, when set, hears when the keys cannot be read.
+	Log *slog.Logger
 
 	mu      sync.Mutex
 	keys    map[string]*rsa.PublicKey
@@ -139,10 +142,13 @@ func (k *Keys) key(ctx context.Context, kid string, now time.Time) (*rsa.PublicK
 	if (!ok || now.Sub(k.fetched) > time.Hour) && now.Sub(k.fetched) > time.Minute {
 		keys, err := k.fetch(ctx)
 		if err != nil {
+			if k.Log != nil {
+				k.Log.Warn("cache: reading the token issuer's keys", "url", k.URL, "err", err)
+			}
 			if ok {
 				return key, nil
 			}
-			return nil, fmt.Errorf("reading the token issuer's keys: %w", err)
+			return nil, errors.New("the token issuer's keys cannot be read")
 		}
 		k.keys, k.fetched = keys, now
 		key, ok = keys[kid]
