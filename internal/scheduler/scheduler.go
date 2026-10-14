@@ -5,6 +5,7 @@ package scheduler
 
 import (
 	"cmp"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -24,6 +25,14 @@ const ResultWait = 30 * time.Second
 
 // BuildRetry is how long a failed image build waits before the next attempt.
 const BuildRetry = time.Hour
+
+// After failuresBeforeHold runners of a class in a row fail before taking a
+// job, the class holds its starts for a minute, then twice as long after each
+// further failure, up to maxHold.
+const (
+	failuresBeforeHold = 3
+	maxHold            = 30 * time.Minute
+)
 
 // Key names a scale set: one repository and one class.
 type Key struct {
@@ -85,9 +94,31 @@ type Class struct {
 	KeepFailed time.Duration
 	// Warm names the repositories, lower case, that keep one idle runner ready.
 	Warm []string
+	// MaxDuration stops a runner whose job runs longer; 0 never does.
+	MaxDuration time.Duration
 }
 
 func (c Class) warm(repo string) bool { return slices.Contains(c.Warm, strings.ToLower(repo)) }
+
+// Backoff is a class whose runners fail before they take a job: their
+// containers exit, or fail to start.
+type Backoff struct {
+	// Failures counts the failures in a row.
+	Failures int
+	// Until is when the class may start a runner again; zero until it holds.
+	Until time.Time
+	// Runner is the runner whose failure set Until.
+	Runner string
+}
+
+func (b Backoff) holding() bool { return b.Failures >= failuresBeforeHold }
+
+func hold(failures int) time.Duration {
+	if n := failures - failuresBeforeHold; n < 5 {
+		return min(time.Minute<<n, maxHold)
+	}
+	return maxHold
+}
 
 type Image struct {
 	Built    string
@@ -108,6 +139,8 @@ type State struct {
 	// Observed is false until the first look at Docker; nothing is decided before.
 	Observed bool
 	Image    Image
+	// Backoff holds the classes whose runners fail before a job, by class.
+	Backoff map[string]Backoff
 }
 
 func New(cfg config.Config) State {
@@ -117,9 +150,10 @@ func New(cfg config.Config) State {
 		HeldBy:    map[Key]string{},
 		Runners:   map[string]Runner{},
 		DiskFloor: int64(cfg.DiskFloor),
+		Backoff:   map[string]Backoff{},
 	}
 	for _, c := range cfg.Classes {
-		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority, KeepFailed: c.KeepFailed, Warm: c.Warm}
+		s.Classes[c.Name] = Class{Max: c.Max, Priority: c.Priority, KeepFailed: c.KeepFailed, Warm: c.Warm, MaxDuration: c.MaxDuration}
 	}
 	return s
 }
@@ -132,11 +166,14 @@ type Action interface{ action() }
 type Start struct{ ScaleSet Key }
 
 // Remove removes a runner's container; with Deregister it first removes the
-// runner at GitHub, which refuses when the runner already took a job.
+// runner at GitHub, which refuses when the runner already took a job. With
+// Logs, its container's last lines are logged first: its exit made its class
+// hold.
 type Remove struct {
 	Runner     string
 	Deregister bool
 	Reason     string
+	Logs       bool
 }
 
 // Build rebuilds the job image for a runner version.
@@ -155,6 +192,7 @@ func Decide(s State, now time.Time) []Action {
 	warm := Warm(s)
 	removing := false
 	for _, r := range sortedRunners(s) {
+		maxDuration := s.Classes[r.ScaleSet.Class].MaxDuration
 		switch {
 		case r.Phase == Removing:
 			removing = true
@@ -162,9 +200,12 @@ func Decide(s State, now time.Time) []Action {
 		case r.Phase == Exited && r.TookJob && r.Result == "" && s.Classes[r.ScaleSet.Class].KeepFailed > 0 && now.Sub(r.Since) < ResultWait:
 			// The container stopped before GitHub's message said how the job ended; a failed one is kept.
 		case r.Phase == Exited:
-			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited"})
+			logs := !r.TookJob && s.Backoff[r.ScaleSet.Class].Runner == r.Name
+			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited", Logs: logs})
 		case r.Phase == Starting && !warm[r.Name] && now.Sub(r.Since) >= IdleTimeout:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "took no job within 3 minutes"})
+		case r.Phase == Running && maxDuration > 0 && now.Sub(r.Since) >= maxDuration:
+			actions = append(actions, Remove{Runner: r.Name, Reason: fmt.Sprintf("job ran longer than max_duration (%s)", maxDuration)})
 		}
 	}
 
@@ -181,7 +222,7 @@ func Decide(s State, now time.Time) []Action {
 	}
 
 	if s.DiskFree >= s.DiskFloor {
-		actions = append(actions, starts(s)...)
+		actions = append(actions, starts(s, now)...)
 	}
 
 	if img := s.Image; img.Latest != "" && img.Latest != img.Built && !img.Building && !now.Before(img.RetryAt) && !normalBusy(s, warm) {
@@ -195,10 +236,14 @@ type waiting struct {
 	key    Key
 }
 
-func starts(s State) []Action {
+func starts(s State, now time.Time) []Action {
 	var actions []Action
 	for _, class := range slices.Sorted(maps.Keys(s.Classes)) {
-		active := 0
+		backoff := s.Backoff[class]
+		if backoff.holding() && now.Before(backoff.Until) {
+			continue
+		}
+		active, pending := 0, 0
 		held := map[Key]int{}
 		for _, r := range s.Runners {
 			if r.ScaleSet.Class != class {
@@ -207,11 +252,18 @@ func starts(s State) []Action {
 			if r.Phase != Exited {
 				active++
 			}
+			if r.Phase == Requested || r.Phase == Starting {
+				pending++
+			}
 			if r.holdsJob() {
 				held[r.ScaleSet]++
 			}
 		}
 		room := s.Classes[class].Max - active
+		if backoff.holding() {
+			// After a hold, one runner at a time tries whether the class works again.
+			room = min(room, 1-pending)
+		}
 		if room <= 0 {
 			continue
 		}
@@ -341,7 +393,12 @@ type Started struct {
 	ID     int64
 }
 
-type StartFailed struct{ Runner string }
+// StartFailed means a runner did not start. Container is set when its
+// container failed to be created or started, which counts toward a Backoff.
+type StartFailed struct {
+	Runner    string
+	Container bool
+}
 
 type Removed struct{ Runner string }
 
@@ -374,11 +431,26 @@ func Apply(s State, e Event, now time.Time) State {
 	s.Runners = maps.Clone(s.Runners)
 	s.ScaleSets = maps.Clone(s.ScaleSets)
 	s.HeldBy = maps.Clone(s.HeldBy)
+	s.Backoff = maps.Clone(s.Backoff)
+	if s.Backoff == nil {
+		s.Backoff = map[string]Backoff{}
+	}
 	update := func(name string, f func(*Runner)) {
 		if r, ok := s.Runners[name]; ok {
 			f(&r)
 			s.Runners[name] = r
+			if r.TookJob {
+				delete(s.Backoff, r.ScaleSet.Class)
+			}
 		}
+	}
+	failed := func(r Runner) {
+		b := s.Backoff[r.ScaleSet.Class]
+		b.Failures++
+		if b.holding() {
+			b.Until, b.Runner = now.Add(hold(b.Failures)), r.Name
+		}
+		s.Backoff[r.ScaleSet.Class] = b
 	}
 	switch e := e.(type) {
 	case Update:
@@ -412,7 +484,13 @@ func Apply(s State, e Event, now time.Time) State {
 	case Observed:
 		s.Observed = true
 		s.DiskFree = e.DiskFree
+		before := maps.Clone(s.Runners)
 		s.Runners = observe(s.Runners, e.Containers, now)
+		for _, name := range slices.Sorted(maps.Keys(s.Runners)) {
+			if r := s.Runners[name]; before[name].Phase == Starting && r.Phase == Exited && !r.TookJob {
+				failed(r)
+			}
+		}
 	case StartDispatched:
 		s.Runners[e.Runner] = Runner{
 			Name: e.Runner, ScaleSet: e.ScaleSet, ScaleSetID: s.ScaleSets[e.ScaleSet].ID,
@@ -430,6 +508,9 @@ func Apply(s State, e Event, now time.Time) State {
 			}
 		})
 	case StartFailed:
+		if r, ok := s.Runners[e.Runner]; ok && e.Container {
+			failed(r)
+		}
 		delete(s.Runners, e.Runner)
 	case Removed:
 		delete(s.Runners, e.Runner)

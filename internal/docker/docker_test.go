@@ -233,3 +233,42 @@ func TestInfoReadsRuntimesAndPools(t *testing.T) {
 		t.Errorf("Info =\n%+v\nwant\n%+v", got, want)
 	}
 }
+
+func TestTailReadsFrames(t *testing.T) {
+	frame := func(stream byte, s string) string {
+		return string([]byte{stream, 0, 0, 0, 0, 0, 0, byte(len(s))}) + s
+	}
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, frame(1, "Connected to GitHub\n")+frame(2, "exec /entrypoint.sh: no such file or directory\n"))
+	})
+	got, err := c.Tail(context.Background(), "box-1-web-3f9a2c", 20)
+	want := []string{"Connected to GitHub", "exec /entrypoint.sh: no such file or directory"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Tail = %q, %v", got, err)
+	}
+	if uri := (*requests)[0].uri; uri != "/v1.47/containers/box-1-web-3f9a2c/logs?stderr=1&stdout=1&tail=20" {
+		t.Errorf("uri = %s", uri)
+	}
+}
+
+func TestImagesAndEveryContainer(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.47/images/json" {
+			io.WriteString(w, `[{"Id":"sha256:j337","ParentId":"","RepoTags":[],"Labels":{"boxrunner.image":"2.337.0+3f9a2c0b1d4e"},"Size":1490}]`)
+			return
+		}
+		io.WriteString(w, `[{"Id":"abc","Labels":{},"State":"exited","ImageID":"sha256:j337"}]`)
+	})
+	images, err := c.Images(context.Background())
+	want := []ImageSummary{{ID: "sha256:j337", RepoTags: []string{}, Labels: map[string]string{"boxrunner.image": "2.337.0+3f9a2c0b1d4e"}, Size: 1490}}
+	if err != nil || !reflect.DeepEqual(images, want) {
+		t.Errorf("Images = %+v, %v", images, err)
+	}
+	list, err := c.List(context.Background(), "", false)
+	if err != nil || len(list) != 1 || list[0].ImageID != "sha256:j337" {
+		t.Errorf("List = %+v, %v", list, err)
+	}
+	if uri := (*requests)[1].uri; uri != "/v1.47/containers/json?all=1" {
+		t.Errorf("List without a label asked for %s", uri)
+	}
+}

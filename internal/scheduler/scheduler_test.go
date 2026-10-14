@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
 	"testing"
@@ -269,7 +270,7 @@ func TestApply(t *testing.T) {
 		{
 			name:   "a failed start and a finished removal forget the runner",
 			before: state(1, 2, map[Key]ScaleSet{}, Runner{Name: "r1", Phase: Requested}, Runner{Name: "r2", Phase: Removing}),
-			events: []Event{StartFailed{"r1"}, Removed{"r2"}},
+			events: []Event{StartFailed{Runner: "r1"}, Removed{"r2"}},
 			want:   map[string]Runner{},
 		},
 		{
@@ -473,5 +474,158 @@ func TestKeepFailed(t *testing.T) {
 	plain := Apply(state(1, 2, map[Key]ScaleSet{}, running), failed, at(5))
 	if got, want := Decide(plain, at(5)), []Action{Remove{Runner: "r1", Reason: "exited"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("without keep_failed Decide = %v, want %v", got, want)
+	}
+}
+
+// drive plays the agent for a while: it carries out every decision at once,
+// and every runner's container exits five seconds after it starts, before it
+// takes a job. It returns the seconds at which runners started and the
+// runners whose logs were asked for.
+func drive(s State, until time.Time) (started []float64, logged []string) {
+	n := 0
+	for now := at(0); now.Before(until); now = now.Add(5 * time.Second) {
+		s = Apply(s, Observed{DiskFree: 50 * gb}, now)
+		for _, a := range Decide(s, now) {
+			switch a := a.(type) {
+			case Start:
+				n++
+				name := fmt.Sprintf("r%d", n)
+				s = Apply(Apply(s, StartDispatched{name, a.ScaleSet}, now), Started{name, int64(n)}, now)
+				started = append(started, now.Sub(t0).Seconds())
+			case Remove:
+				if a.Logs {
+					logged = append(logged, a.Runner)
+				}
+				s = Apply(Apply(s, RemoveDispatched{a.Runner}, now), Removed{a.Runner}, now)
+			}
+		}
+	}
+	return started, logged
+}
+
+// Without the hold, a class whose containers exit at once starts a runner on
+// every decision: 1,440 in two hours here. With it, the class tries three
+// times, then after 1, 2, 4, 8, 16 and 30 minutes.
+func TestCrashLoopHolds(t *testing.T) {
+	started, logged := drive(state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(0)}}), at(120))
+	if want := []float64{0, 5, 10, 75, 200, 445, 930, 1895, 3700, 5505}; !reflect.DeepEqual(started, want) {
+		t.Errorf("runners started at %v s, want %v", started, want)
+	}
+	if want := []string{"r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"}; !reflect.DeepEqual(logged, want) {
+		t.Errorf("logs asked for %v, want %v", logged, want)
+	}
+}
+
+// After a hold, a class with room for two jobs tries one runner at a time.
+func TestCrashLoopTriesOneRunner(t *testing.T) {
+	s := state(1, 2, map[Key]ScaleSet{siteLight: {ID: 8, Jobs: jobs(0, 1)}})
+	s.Backoff = map[string]Backoff{"boxrunner-light": {Failures: 3, Until: at(10), Runner: "r3"}}
+	if got := Decide(s, at(9)); got != nil {
+		t.Errorf("Decide while held = %#v", got)
+	}
+	if got, want := Decide(s, at(10)), []Action{Start{siteLight}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide after the hold = %#v, want %#v", got, want)
+	}
+	s = Apply(s, StartDispatched{"r4", siteLight}, at(10))
+	if got := Decide(s, at(10)); got != nil {
+		t.Errorf("Decide while the one runner waits = %#v", got)
+	}
+	s = Apply(s, Update{ScaleSet: siteLight, ID: 8, Jobs: jobs(0, 1), Started: []string{"r4"}}, at(10.5))
+	if got, want := Decide(s, at(10.5)), []Action{Start{siteLight}}; !reflect.DeepEqual(got, want) || len(s.Backoff) != 0 {
+		t.Errorf("once it takes a job: Decide = %#v, backoff %v", got, s.Backoff)
+	}
+}
+
+func TestBackoffCounts(t *testing.T) {
+	starting := func(name string) Runner {
+		return Runner{Name: name, ScaleSet: siteMain, ScaleSetID: 7, Phase: Starting, Since: at(0)}
+	}
+	cases := []struct {
+		name   string
+		before State
+		events []Event
+		want   map[string]Backoff
+	}{
+		{
+			name:   "a container that exits before a job counts",
+			before: state(1, 2, map[Key]ScaleSet{}, starting("r1")),
+			events: []Event{Observed{DiskFree: 50 * gb}},
+			want:   map[string]Backoff{"boxrunner": {Failures: 1}},
+		},
+		{
+			name:   "the third failure holds the class for a minute",
+			before: state(1, 2, map[Key]ScaleSet{}, starting("r1"), starting("r2"), starting("r3")),
+			events: []Event{Observed{DiskFree: 50 * gb}},
+			want:   map[string]Backoff{"boxrunner": {Failures: 3, Until: at(11), Runner: "r3"}},
+		},
+		{
+			name:   "a container that failed to start counts; a runner config that could not be minted does not",
+			before: state(1, 2, map[Key]ScaleSet{}, starting("r1"), starting("r2")),
+			events: []Event{StartFailed{Runner: "r1", Container: true}, StartFailed{Runner: "r2"}},
+			want:   map[string]Backoff{"boxrunner": {Failures: 1}},
+		},
+		{
+			name:   "a runner removed for taking no job does not count",
+			before: state(1, 2, map[Key]ScaleSet{}, starting("r1")),
+			events: []Event{RemoveDispatched{"r1"}, Removed{"r1"}, Observed{DiskFree: 50 * gb}},
+			want:   map[string]Backoff{},
+		},
+		{
+			name: "a runner that takes a job ends the hold",
+			before: func() State {
+				s := state(1, 2, map[Key]ScaleSet{}, starting("r1"))
+				s.Backoff = map[string]Backoff{"boxrunner": {Failures: 5, Until: at(4), Runner: "r0"}, "boxrunner-light": {Failures: 1}}
+				return s
+			}(),
+			events: []Event{Update{ScaleSet: siteMain, ID: 7, Started: []string{"r1"}}},
+			want:   map[string]Backoff{"boxrunner-light": {Failures: 1}},
+		},
+		{
+			name: "so does a job that completes before its start is reported",
+			before: func() State {
+				s := state(1, 2, map[Key]ScaleSet{}, starting("r1"))
+				s.Backoff = map[string]Backoff{"boxrunner": {Failures: 2}}
+				return s
+			}(),
+			events: []Event{Observed{DiskFree: 50 * gb}, Update{ScaleSet: siteMain, ID: 7, Completed: []queue.JobCompleted{{RunnerName: "r1", Result: "succeeded"}}}},
+			want:   map[string]Backoff{},
+		},
+		{
+			name: "the hold doubles and stops at 30 minutes",
+			before: func() State {
+				s := state(1, 2, map[Key]ScaleSet{}, starting("r9"))
+				s.Backoff = map[string]Backoff{"boxrunner": {Failures: 7, Until: at(5), Runner: "r8"}}
+				return s
+			}(),
+			events: []Event{Observed{DiskFree: 50 * gb}},
+			want:   map[string]Backoff{"boxrunner": {Failures: 8, Until: at(40), Runner: "r9"}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.before
+			for _, e := range c.events {
+				s = Apply(s, e, at(10))
+			}
+			if !reflect.DeepEqual(s.Backoff, c.want) {
+				t.Errorf("backoff = %+v, want %+v", s.Backoff, c.want)
+			}
+		})
+	}
+}
+
+func TestMaxDuration(t *testing.T) {
+	s := state(1, 2, map[Key]ScaleSet{},
+		Runner{Name: "r1", ScaleSet: siteMain, Phase: Running, TookJob: true, Since: at(0)},
+		Runner{Name: "r2", ScaleSet: siteLight, Phase: Running, TookJob: true, Since: at(0)})
+	c := s.Classes["boxrunner"]
+	c.MaxDuration = 6 * time.Hour
+	s.Classes["boxrunner"] = c
+	if got := Decide(s, at(359)); got != nil {
+		t.Errorf("Decide before 6 hours = %#v", got)
+	}
+	want := []Action{Remove{Runner: "r1", Reason: "job ran longer than max_duration (6h0m0s)"}}
+	if got := Decide(s, at(360)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide after 6 hours = %#v, want %#v", got, want)
 	}
 }

@@ -33,6 +33,7 @@ type container struct {
 	State   string
 	Created int64
 	Body    map[string]any
+	ImageID string
 }
 
 // fakeDocker keeps containers in memory and serves the Engine API calls the
@@ -43,6 +44,13 @@ type fakeDocker struct {
 	network    bool
 	volumes    map[string]bool
 	runtimes   []string
+	// exitOnStart makes every container exit as soon as it starts.
+	exitOnStart bool
+	// logs names the containers whose output was read.
+	logs []string
+	// images are what /images/json lists; removing one takes it out.
+	images        []docker.ImageSummary
+	removedImages []string
 }
 
 // matches applies a containers/json label filter, key or key=value.
@@ -97,6 +105,13 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				return
 			}
 			io.WriteString(w, `{}`)
+		case path == "/images/json":
+			json.NewEncoder(w).Encode(f.images)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/images/"):
+			ref := strings.TrimPrefix(path, "/images/")
+			f.removedImages = append(f.removedImages, ref)
+			f.images = slices.DeleteFunc(f.images, func(img docker.ImageSummary) bool { return img.ID == ref || slices.Contains(img.RepoTags, ref) })
+			io.WriteString(w, `[]`)
 		case strings.HasPrefix(path, "/images/"):
 			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+runnerimage.Identity("2.338.0")+`"}}}`)
 		case path == "/containers/json":
@@ -105,7 +120,7 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				if !c.matches(r.URL.Query().Get("filters")) {
 					continue
 				}
-				list = append(list, map[string]any{"Id": c.Name, "Names": []string{"/" + c.Name}, "Labels": c.Labels, "State": c.State, "Created": c.Created})
+				list = append(list, map[string]any{"Id": c.Name, "Names": []string{"/" + c.Name}, "Labels": c.Labels, "State": c.State, "Created": c.Created, "ImageID": c.ImageID})
 			}
 			json.NewEncoder(w).Encode(list)
 		case path == "/containers/create":
@@ -119,8 +134,11 @@ func (f *fakeDocker) serve(t *testing.T) string {
 			f.containers[name] = &container{Name: name, Labels: labels, State: "created", Created: time.Now().Unix(), Body: body}
 			fmt.Fprintf(w, `{"Id":%q}`, name)
 		case len(parts) == 3 && parts[2] == "start":
-			f.containers[parts[1]].State = "running"
+			f.containers[parts[1]].State = map[bool]string{false: "running", true: "exited"}[f.exitOnStart]
 			w.WriteHeader(204)
+		case len(parts) == 3 && parts[2] == "logs":
+			f.logs = append(f.logs, parts[1])
+			io.WriteString(w, "\x02\x00\x00\x00\x00\x00\x00\x12exec format error\n")
 		case r.Method == http.MethodDelete && parts[0] == "containers":
 			if _, ok := f.containers[parts[1]]; !ok {
 				http.Error(w, `{"message":"no such container"}`, 404)
@@ -670,5 +688,70 @@ func TestHasEntries(t *testing.T) {
 		if got := hasEntries(path); got != want {
 			t.Errorf("hasEntries(%s) = %v, want %v", filepath.Base(path), got, want)
 		}
+	}
+}
+
+// Containers that exit before taking a job: after three, the class holds its
+// starts for a minute, logs the third one's output and status says so.
+func TestCrashLoopHoldsTheClass(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.docker.exitOnStart = true })
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
+	var snap status.Snapshot
+	waitFor(t, "the class to hold", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && len(snap.Classes) == 1 && !snap.Classes[0].HeldUntil.IsZero()
+	})
+	if wait := time.Until(snap.Classes[0].HeldUntil); wait < 50*time.Second || wait > time.Minute {
+		t.Errorf("held for %s, want a minute", wait)
+	}
+	time.Sleep(500 * time.Millisecond)
+	h.stop(t)
+	minted := 0
+	for _, c := range h.github.workerCalls() {
+		if strings.HasPrefix(c, "POST /v1/runners") {
+			minted++
+		}
+	}
+	h.docker.mu.Lock()
+	logs := slices.Clone(h.docker.logs)
+	h.docker.mu.Unlock()
+	if minted != 3 || len(logs) != 1 || len(h.docker.snapshot()) != 0 {
+		t.Errorf("minted %d runners, read the output of %v, left %v; want 3, one and none", minted, logs, h.docker.snapshot())
+	}
+}
+
+// On start the agent removes the job image of runner 2.337.0 and the tags of
+// old runner images, keeps the 2.336.0 job image another container uses, and
+// status shows what the rest takes.
+func TestStartRemovesSupersededImages(t *testing.T) {
+	job := func(id, version string, size int64, tags ...string) docker.ImageSummary {
+		return docker.ImageSummary{ID: id, RepoTags: tags, Labels: map[string]string{"boxrunner.image": version + "+3f9a2c0b1d4e"}, Size: size}
+	}
+	runner := func(id, version string, size int64) docker.ImageSummary {
+		return docker.ImageSummary{ID: id, RepoTags: []string{"ghcr.io/actions/actions-runner:" + version}, Size: size}
+	}
+	h := startAgent(t, map[string]*container{"other": {Name: "other", State: "running", ImageID: "sha256:j336"}}, nil, func(_ *config.Class, h *harness) {
+		h.docker.images = []docker.ImageSummary{
+			runner("sha256:b338", "2.338.0", 1_000_000_000), job("sha256:j338", "2.338.0", 1_500_000_000, "boxrunner/runner:local"),
+			runner("sha256:b337", "2.337.0", 990_000_000), job("sha256:j337", "2.337.0", 1_490_000_000),
+			runner("sha256:b336", "2.336.0", 980_000_000), job("sha256:j336", "2.336.0", 1_480_000_000),
+		}
+	})
+	var snap status.Snapshot
+	waitFor(t, "the image disk use in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Disk > 0
+	})
+	h.stop(t)
+	h.docker.mu.Lock()
+	removed := slices.Clone(h.docker.removedImages)
+	h.docker.mu.Unlock()
+	if want := []string{"sha256:j337", "ghcr.io/actions/actions-runner:2.336.0", "ghcr.io/actions/actions-runner:2.337.0"}; !reflect.DeepEqual(removed, want) {
+		t.Errorf("removed images %q, want %q", removed, want)
+	}
+	if snap.Image.Disk != 2_980_000_000 {
+		t.Errorf("image disk use = %d, want 2980000000", snap.Image.Disk)
 	}
 }

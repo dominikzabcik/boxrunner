@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseBytes(t *testing.T) {
@@ -352,6 +353,28 @@ func TestParseWarm(t *testing.T) {
 		_, err := Parse([]byte(class(1, lines)), "")
 		if want = "config:\nclass \"web\": " + want; err == nil || err.Error() != want {
 			t.Errorf("Parse(%s) error = %v\nwant %s", lines, err, want)
+		}
+	}
+}
+
+func TestParseMaxDuration(t *testing.T) {
+	class := func(line string) string {
+		return "worker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n" + line + "\n"
+	}
+	got, err := Parse([]byte(class(`max_duration = "6h"`)), "")
+	if err != nil || got.Classes[0].MaxDuration != 6*time.Hour {
+		t.Errorf("max_duration = %v, %v", got.Classes[0].MaxDuration, err)
+	}
+	if off, _ := Parse([]byte(class("")), ""); off.Classes[0].MaxDuration != 0 {
+		t.Errorf("without max_duration = %v", off.Classes[0].MaxDuration)
+	}
+	for line, want := range map[string]string{
+		`max_duration = "6"`:   `max_duration: "6" is not a duration like 90m or 6h`,
+		`max_duration = "30s"`: "max_duration: 30s must be at least 1m",
+	} {
+		_, err := Parse([]byte(class(line)), "")
+		if want = "config:\nclass \"web\": " + want; err == nil || err.Error() != want {
+			t.Errorf("Parse(%s) error = %v\nwant %s", line, err, want)
 		}
 	}
 }

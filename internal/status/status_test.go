@@ -70,9 +70,9 @@ func TestServeAndFetch(t *testing.T) {
 
 func TestPrint(t *testing.T) {
 	snap := Snapshot{
-		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0"},
+		Box: "box-1", Version: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
-		Classes:   []Class{{"boxrunner", "normal", 2, 2}, {"boxrunner-light", "idle", 2, 0}},
+		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
 		ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 1}},
 		Elsewhere: []Elsewhere{{"octo/docs", "boxrunner", "box-2"}},
 		Runners: []Runner{
@@ -85,7 +85,7 @@ func TestPrint(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
-	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  disk 41.2 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB
 
 If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
@@ -113,5 +113,26 @@ FINISHED      REPOSITORY  CLASS      JOB   RESULT     QUEUED FOR  TOOK
 	Print(&b, snap, t0.Add(30*time.Minute))
 	if strings.Contains(b.String(), "replaced") {
 		t.Errorf("30 minutes after the start, Print still points to replacing a box:\n%s", b.String())
+	}
+}
+
+func TestPrintHeldClass(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
+		Classes: []Class{{Name: "boxrunner", Priority: "normal", Max: 1}, {Name: "web", Priority: "normal", Max: 1, HeldUntil: t0.Add(4 * time.Minute)}},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	want := "box-1  boxrunner 0.1.0  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
+		"Runners of class web exit before taking a job; next try at " + t0.Add(4*time.Minute).Local().Format("15:04:05") + ". See `journalctl -u boxrunner` for their output.\n\n" +
+		"CLASS      PRIORITY  RUNNERS  MAX\n"
+	if got := b.String(); !strings.HasPrefix(got, want) {
+		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
+	}
+	if got, want := snap.Classes[1].NextTry(t0.Add(5*time.Minute)), "trying one runner now"; got != want {
+		t.Errorf("NextTry after the hold = %q, want %q", got, want)
+	}
+	if got := snap.Classes[0].NextTry(t0); got != "" {
+		t.Errorf("NextTry of a class that works = %q", got)
 	}
 }

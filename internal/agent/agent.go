@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
@@ -85,6 +87,8 @@ type Agent struct {
 
 	mu       sync.Mutex
 	snapshot status.Snapshot
+	// imageDisk is what boxrunner's images take on disk after the last prune.
+	imageDisk atomic.Int64
 }
 
 // Run serves jobs until ctx ends. It returns an error only for a problem a
@@ -252,8 +256,12 @@ func (a *Agent) dispatch(ctx context.Context, s scheduler.State, action schedule
 	case scheduler.Remove:
 		r := s.Runners[act.Runner]
 		a.Log.Info("removing runner", "runner", r.Name, "repo", r.ScaleSet.Repo, "reason", act.Reason)
+		if act.Logs {
+			b := s.Backoff[r.ScaleSet.Class]
+			a.Log.Warn("runners of this class exit before taking a job; holding new starts", "class", r.ScaleSet.Class, "failures", b.Failures, "nextTry", b.Until)
+		}
 		s = scheduler.Apply(s, scheduler.RemoveDispatched{Runner: act.Runner}, now)
-		a.spawn(func() { a.remove(work, r, act.Deregister) })
+		a.spawn(func() { a.remove(work, r, act.Deregister, act.Logs) })
 	case scheduler.Build:
 		s = scheduler.Apply(s, scheduler.BuildDispatched{}, now)
 		a.spawn(func() { a.build(ctx, act.Version) })
@@ -343,16 +351,27 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 		if err := a.Worker.RemoveRunner(cleanup, r.ScaleSet.Repo, r.ScaleSetID, r.ID); err != nil {
 			log.Warn("removing the unstarted runner failed", "err", err)
 		}
-		a.post(scheduler.StartFailed{Runner: r.Name})
+		a.post(scheduler.StartFailed{Runner: r.Name, Container: true})
 		return
 	}
 	log.Info("runner started", "class", class.Name)
 	a.post(scheduler.Started{Runner: r.Name, ID: r.ID})
 }
 
-func (a *Agent) remove(ctx context.Context, r scheduler.Runner, deregister bool) {
+// tailLines is how much of a failed container's output the agent logs.
+const tailLines = 20
+
+func (a *Agent) remove(ctx context.Context, r scheduler.Runner, deregister, logs bool) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if logs {
+		lines, err := a.Docker.Tail(ctx, r.Name, tailLines)
+		if err != nil {
+			a.Log.Warn("reading the exited container's output failed", "runner", r.Name, "err", err)
+		} else {
+			a.Log.Warn("the exited container's last lines", "runner", r.Name, "class", r.ScaleSet.Class, "output", strings.Join(lines, "\n"))
+		}
+	}
 	if deregister && r.ID != 0 {
 		err := a.Worker.RemoveRunner(ctx, r.ScaleSet.Repo, r.ScaleSetID, r.ID)
 		if worker.Is(err, worker.RunnerBusy) {
@@ -392,7 +411,8 @@ func (a *Agent) build(ctx context.Context, version string) {
 	a.post(scheduler.ImageBuilt{Version: version})
 }
 
-// ensureClasses rebuilds the class images whose job image or files changed.
+// ensureClasses rebuilds the class images whose job image or files changed,
+// then removes the images those builds and earlier ones superseded.
 func (a *Agent) ensureClasses(ctx context.Context) {
 	built, err := runnerimage.EnsureClasses(ctx, a.Docker, a.Config.Classes)
 	for _, class := range built {
@@ -401,6 +421,14 @@ func (a *Agent) ensureClasses(ctx context.Context) {
 	if err != nil {
 		a.Log.Error("building a class image failed", "err", err)
 	}
+	removed, disk, err := runnerimage.Prune(ctx, a.Docker)
+	for _, ref := range removed {
+		a.Log.Info("removed a superseded image", "image", ref)
+	}
+	if err != nil {
+		a.Log.Warn("removing superseded images", "err", err)
+	}
+	a.imageDisk.Store(disk)
 }
 
 // shutdown removes runners that have not taken a job, so GitHub hands their
@@ -411,7 +439,7 @@ func (a *Agent) shutdown(s scheduler.State) {
 	var wg sync.WaitGroup
 	for _, r := range s.Runners {
 		if r.Phase == scheduler.Starting {
-			wg.Go(func() { a.remove(ctx, r, true) })
+			wg.Go(func() { a.remove(ctx, r, true, false) })
 		}
 	}
 	wg.Wait()
@@ -528,7 +556,7 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 func (a *Agent) publish(s scheduler.State) {
 	snap := status.Snapshot{
 		Box: a.Config.Box, Version: a.Version,
-		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest},
+		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
 	}
@@ -541,7 +569,7 @@ func (a *Agent) publish(s scheduler.State) {
 		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since, Warm: warm[r.Name]})
 	}
 	for _, c := range a.Config.Classes {
-		snap.Classes = append(snap.Classes, status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name]})
+		snap.Classes = append(snap.Classes, status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until})
 	}
 	for key, ss := range s.ScaleSets {
 		snap.ScaleSets = append(snap.ScaleSets, status.ScaleSet{Repo: key.Repo, Class: key.Class, Assigned: len(ss.Jobs)})

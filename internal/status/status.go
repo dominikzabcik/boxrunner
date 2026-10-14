@@ -48,6 +48,22 @@ type Class struct {
 	Priority string `json:"priority"`
 	Max      int    `json:"max"`
 	Active   int    `json:"active"`
+	// HeldUntil is set while the class's runners fail before taking a job:
+	// it starts no runner before then, and one at a time after.
+	HeldUntil time.Time `json:"heldUntil,omitzero"`
+}
+
+// NextTry says when a class that holds its starts tries again, or "" when
+// it does not hold.
+func (c Class) NextTry(now time.Time) string {
+	switch {
+	case c.HeldUntil.IsZero():
+		return ""
+	case now.Before(c.HeldUntil):
+		return "next try at " + c.HeldUntil.Local().Format("15:04:05")
+	default:
+		return "trying one runner now"
+	}
 }
 
 type ScaleSet struct {
@@ -83,6 +99,8 @@ type Runner struct {
 type ImageStatus struct {
 	Built  string `json:"built"`
 	Latest string `json:"latest"`
+	// Disk is what the job, class and runner images take, 0 when unknown.
+	Disk int64 `json:"disk,omitempty"`
 }
 
 // Job is one line of the job log.
@@ -234,10 +252,19 @@ func Fetch(ctx context.Context, socket string) (Snapshot, error) {
 
 // Print writes a snapshot for people.
 func Print(w io.Writer, s Snapshot, now time.Time) {
-	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)  disk %s free, floor %s\n\n",
-		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	images := ""
+	if s.Image.Disk > 0 {
+		images = "  images " + gigabytes(s.Image.Disk)
+	}
+	fmt.Fprintf(w, "%s  boxrunner %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
+		s.Box, s.Version, orNone(s.Image.Built), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
 	if s.FreshStart && now.Sub(s.Started) < strandedHint {
 		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")
+	}
+	for _, c := range s.Classes {
+		if next := c.NextTry(now); next != "" {
+			fmt.Fprintf(w, "Runners of class %s exit before taking a job; %s. See `journalctl -u boxrunner` for their output.\n\n", c.Name, next)
+		}
 	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
