@@ -57,6 +57,7 @@ describe('POST /setup', () => {
 			name: 'boxrunner-test',
 			url: origin,
 			redirect_url: `${origin}/setup/callback`,
+			callback_urls: [`${origin}/login/callback`],
 			public: false,
 			hook_attributes: { url: origin, active: false },
 			default_permissions: { administration: 'write', metadata: 'read' },

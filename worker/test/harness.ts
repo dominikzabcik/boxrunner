@@ -24,7 +24,8 @@ export async function fakeGitHub() {
 	return github;
 }
 
-export const send = (path: string, init?: RequestInit) => exports.default.fetch(new Request(`${origin}${path}`, init));
+/** Sends a request as a browser's first hop: redirects come back as they are. */
+export const send = (path: string, init?: RequestInit) => exports.default.fetch(new Request(`${origin}${path}`, { redirect: 'manual', ...init }));
 
 export const postForm = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) =>
 	send(path, { method: 'POST', body: new URLSearchParams(fields), headers });
@@ -78,3 +79,71 @@ export async function expectError(response: Response, status: number, error: str
 	expect(response.headers.get('boxrunner-protocol')).toBe('1');
 	expect(response.headers.get('cache-control')).toBe('no-store');
 }
+
+/** Signs in through /login and GitHub's authorize page as `login`; `cookie` is the session, if one was set. */
+export async function signIn(github: FakeGitHub, login = 'octo') {
+	const start = await send('/login');
+	const state = new URL(start.headers.get('location') ?? 'https://invalid').searchParams.get('state') ?? '';
+	const nonce = /__Host-boxrunner-login=([^;]+)/.exec(start.headers.get('set-cookie') ?? '')?.[1];
+	const response = await send(`/login/callback?code=${github.authorize(login)}&state=${encodeURIComponent(state)}`, {
+		headers: { cookie: `__Host-boxrunner-login=${nonce}` },
+	});
+	const session = response.headers
+		.getSetCookie()
+		.map((cookie) => /^__Host-boxrunner-session=([^;]+)/.exec(cookie)?.[1])
+		.find(Boolean);
+	return { response, cookie: session ? `__Host-boxrunner-session=${session}` : undefined };
+}
+
+/** Sets Worker variables or secrets for one test, as `wrangler secret put` would. */
+export async function withEnv(vars: Record<string, string>, run: () => Promise<void>) {
+	const stub = env.BOX.getByName('box');
+	const set = (values: Record<string, string | undefined>) =>
+		runInDurableObject(stub, (instance) => {
+			Object.assign((instance as unknown as { env: Record<string, unknown> }).env, values);
+		});
+	const before = await runInDurableObject(stub, (instance) => {
+		const current = (instance as unknown as { env: Record<string, string | undefined> }).env;
+		return Object.fromEntries(Object.keys(vars).map((name) => [name, current[name]]));
+	});
+	await set(vars);
+	try {
+		await run();
+	} finally {
+		await set(before);
+	}
+}
+
+export const time = (iso: string) => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date(iso));
+};
+
+export const heartbeatBody = (overrides: Record<string, unknown> = {}) => ({
+	box: 'box-1',
+	version: '0.2.0',
+	image: '2.338.0+3f9a2c0b1d4e',
+	disk: { free: 26_000_000_000, floor: 10_000_000_000 },
+	classes: [
+		{ name: 'boxrunner', priority: 'normal', max: 1 },
+		{ name: 'boxrunner-light', priority: 'idle', max: 2 },
+	],
+	runners: [
+		{ name: 'box-1-boxrunner-3f9a2c', repo: 'octo/site', class: 'boxrunner', state: 'running', since: '2026-10-14T09:55:00Z' },
+		{ name: 'box-1-boxrunner-light-1b2c3d', repo: 'octo/docs', class: 'boxrunner-light', state: 'starting', since: '2026-10-14T09:59:30Z' },
+	],
+	jobs: [],
+	...overrides,
+});
+
+export const job = (runner: string, queued: string, started: string | null, finished: string, extra: Record<string, unknown> = {}) => ({
+	runner,
+	repo: 'octo/site',
+	class: 'boxrunner',
+	name: 'test',
+	result: 'succeeded',
+	queued,
+	started,
+	finished,
+	...extra,
+});

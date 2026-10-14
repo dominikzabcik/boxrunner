@@ -1,4 +1,4 @@
-import type { BoxName, RepoName, RunnerId, RunnerName, ScaleSetId, SessionId } from './model';
+import { parse, type BoxName, type Login, type RepoName, type RunnerId, type RunnerName, type ScaleSetId, type SessionId } from './model';
 
 /** GitHub answered with a status the call does not expect, or a body it cannot read. */
 export class GitHubError extends Error {
@@ -23,13 +23,16 @@ type Call = {
 	/** Statuses the caller handles itself; anything else throws a GitHubError. */
 	expect: readonly number[];
 	rest?: boolean;
+	accept?: string;
 };
 
-async function send({ method, url, label, authorization, body, expect, rest = true }: Call) {
+async function send({ method, url, label, authorization, body, expect, rest = true, accept }: Call) {
 	const headers: Record<string, string> = { 'user-agent': userAgent };
 	if (rest) {
 		headers.accept = 'application/vnd.github+json';
 		headers['x-github-api-version'] = '2022-11-28';
+	} else if (accept) {
+		headers.accept = accept;
 	}
 	if (authorization) headers.authorization = authorization;
 	if (body !== undefined) headers['content-type'] = 'application/json';
@@ -158,6 +161,41 @@ export async function convertManifest(code: string): Promise<ManifestApp> {
 			owner: owner ?? null,
 		};
 	});
+}
+
+/** The App's OAuth client id and owner, for an App set up before the Worker kept them. */
+export async function appProfile(jwt: string): Promise<{ clientId: string; owner: Login }> {
+	const response = await rest('GET', '/app', `Bearer ${jwt}`, [200]);
+	return read(response, 'GET /app', (body) => {
+		const clientId = text(body.client_id);
+		const owner = isObject(body.owner) ? parse.login(body.owner.login) : undefined;
+		return clientId && owner ? { clientId, owner } : undefined;
+	});
+}
+
+// ---- Signing in to the dashboard, as a user of the App ----
+
+export type OAuthClient = { id: string; secret: string };
+
+/** Trades the code GitHub sent back for a user access token, or undefined when GitHub refuses the code. */
+export async function userToken(client: OAuthClient, code: string, redirectUri: string): Promise<string | undefined> {
+	const response = await send({
+		method: 'POST',
+		url: 'https://github.com/login/oauth/access_token',
+		label: '/login/oauth/access_token',
+		body: { client_id: client.id, client_secret: client.secret, code, redirect_uri: redirectUri },
+		expect: [200],
+		rest: false,
+		accept: 'application/json',
+	});
+	// GitHub answers 200 with an "error" field when it refuses the code.
+	const body: unknown = await response.json().catch(() => undefined);
+	return isObject(body) ? text(body.access_token) : undefined;
+}
+
+export async function userLogin(token: string): Promise<Login> {
+	const response = await rest('GET', '/user', `Bearer ${token}`, [200]);
+	return read(response, 'GET /user', (body) => parse.login(body.login));
 }
 
 // ---- The Actions service, which owns runner scale sets ----

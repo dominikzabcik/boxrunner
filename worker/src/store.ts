@@ -1,5 +1,8 @@
 import type { AppKey } from './crypto';
-import type { App, ClassName, ScaleSetId } from './model';
+import { billedMinutes, dayOf, startOfDay, type App, type BoxStatus, type ClassName, type FinishedJob, type Heartbeat, type ScaleSetId } from './model';
+
+/** Jobs, their daily totals and boxes that stopped reporting are kept this many days. */
+export const retentionDays = 30;
 
 const schema = `
 CREATE TABLE IF NOT EXISTS app (
@@ -23,7 +26,32 @@ CREATE TABLE IF NOT EXISTS cache (
 	value TEXT NOT NULL,
 	expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS keys (
+	name TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS boxes (
+	name TEXT PRIMARY KEY,
+	seen_at INTEGER NOT NULL,
+	status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jobs (
+	runner TEXT PRIMARY KEY,
+	job TEXT NOT NULL,
+	finished_at INTEGER NOT NULL,
+	minutes INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS jobs_by_finish ON jobs (finished_at);
+CREATE TABLE IF NOT EXISTS job_days (
+	day INTEGER PRIMARY KEY,
+	jobs INTEGER NOT NULL,
+	minutes INTEGER NOT NULL
+);
 `;
+
+export type StoredBox = { status: BoxStatus; seenAt: number };
+export type StoredJob = FinishedJob & { minutes: number };
+export type DayTotal = { day: number; jobs: number; minutes: number };
 
 /** The Durable Object's SQLite tables. Every method is synchronous, so a caller's check and write cannot interleave with another request. */
 export class Store {
@@ -78,9 +106,23 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets and every cached token, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets, every cached token and the session key, so setup can run again. */
 	reset() {
-		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache;');
+		this.sql.exec('DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM cache; DELETE FROM keys;');
+	}
+
+	/** Fills in the OAuth client id and owner of an App set up before the Worker kept them. */
+	saveAppProfile(clientId: string, owner: string) {
+		this.sql.exec('UPDATE app SET client_id = ?, owner_login = ?', clientId, owner);
+	}
+
+	/** A random key made once and kept, such as the one that signs dashboard sessions. */
+	key(name: string, make: () => string): string {
+		const stored = this.sql.exec<{ value: string }>('SELECT value FROM keys WHERE name = ?', name).toArray()[0]?.value;
+		if (stored !== undefined) return stored;
+		const value = make();
+		this.sql.exec('INSERT INTO keys (name, value) VALUES (?, ?)', name, value);
+		return value;
 	}
 
 	replaceBoxToken(boxTokenSha256: string) {
@@ -120,11 +162,70 @@ export class Store {
 			.toArray()[0]?.value;
 	}
 
+	/** The last value cached under `key`, expired or not, for pages that must not ask GitHub. */
+	lastCached(key: string): string | undefined {
+		return this.sql.exec<{ value: string }>('SELECT value FROM cache WHERE key = ?', key).toArray()[0]?.value;
+	}
+
 	cache(key: string, value: string, expiresAt: number) {
 		this.sql.exec('INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)', key, value, expiresAt);
 	}
 
 	forget(key: string) {
 		this.sql.exec('DELETE FROM cache WHERE key = ?', key);
+	}
+
+	/**
+	 * Keeps the box's latest status and upserts its finished jobs. The agent
+	 * sends the same jobs every 30 seconds, so a job is written only when it
+	 * is new or changed: the free plan allows 100,000 rows written a day.
+	 */
+	saveHeartbeat({ jobs, ...status }: Heartbeat, receivedAt: number) {
+		this.sql.exec('INSERT OR REPLACE INTO boxes (name, seen_at, status) VALUES (?, ?, ?)', status.box, receivedAt, JSON.stringify(status));
+		const changedDays = new Set<number>();
+		for (const job of jobs) {
+			const json = JSON.stringify(job);
+			const old = this.sql.exec<{ job: string; finished_at: number }>('SELECT job, finished_at FROM jobs WHERE runner = ?', job.runner).toArray()[0];
+			if (old?.job === json) continue;
+			if (old) changedDays.add(dayOf(old.finished_at));
+			changedDays.add(dayOf(job.finishedAt));
+			this.sql.exec(
+				'INSERT OR REPLACE INTO jobs (runner, job, finished_at, minutes) VALUES (?, ?, ?, ?)',
+				job.runner,
+				json,
+				job.finishedAt,
+				billedMinutes(job),
+			);
+		}
+		for (const day of changedDays) {
+			this.sql.exec(
+				'INSERT OR REPLACE INTO job_days (day, jobs, minutes) SELECT ?, COUNT(*), COALESCE(SUM(minutes), 0) FROM jobs WHERE finished_at >= ? AND finished_at < ?',
+				day,
+				startOfDay(day),
+				startOfDay(day + 1),
+			);
+		}
+		const firstKeptDay = dayOf(receivedAt) - retentionDays + 1;
+		this.sql.exec('DELETE FROM jobs WHERE finished_at < ?', startOfDay(firstKeptDay));
+		this.sql.exec('DELETE FROM job_days WHERE day < ?', firstKeptDay);
+		this.sql.exec('DELETE FROM boxes WHERE seen_at < ?', startOfDay(firstKeptDay));
+	}
+
+	boxes(): StoredBox[] {
+		return this.sql
+			.exec<{ seen_at: number; status: string }>('SELECT seen_at, status FROM boxes ORDER BY name')
+			.toArray()
+			.map((row) => ({ status: JSON.parse(row.status) as BoxStatus, seenAt: row.seen_at }));
+	}
+
+	recentJobs(limit: number): StoredJob[] {
+		return this.sql
+			.exec<{ job: string; minutes: number }>('SELECT job, minutes FROM jobs ORDER BY finished_at DESC, runner LIMIT ?', limit)
+			.toArray()
+			.map((row) => ({ ...(JSON.parse(row.job) as FinishedJob), minutes: row.minutes }));
+	}
+
+	daysFrom(firstDay: number): DayTotal[] {
+		return this.sql.exec<DayTotal>('SELECT day, jobs, minutes FROM job_days WHERE day >= ?', firstDay).toArray();
 	}
 }

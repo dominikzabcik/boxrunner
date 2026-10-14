@@ -13,7 +13,10 @@
 		"CLASSES": "boxrunner,boxrunner-light",
 		// Optional: only these repositories (owner/name, comma-separated) out of
 		// the private ones the App is installed on. Empty serves them all.
-		"REPOS": ""
+		"REPOS": "",
+		// Optional: GitHub logins (comma-separated) that may open the dashboard
+		// besides the App's owner.
+		"ADMINS": ""
 	},
 	"secrets": {
 		"required": ["SETUP_SECRET"]

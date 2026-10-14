@@ -2,7 +2,7 @@ import type { Box } from './box';
 import { matchesBoxToken } from './crypto';
 import * as github from './github';
 import { ApiError, errorResponse, json, noContent } from './http';
-import { parse, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
+import { parse, parseHeartbeat, semverPattern, type App, type ClassName, type OwnedScaleSet, type RepoName, type ScaleSetId } from './model';
 import type { ApiRoute } from './routes';
 
 /** Agent major versions this Worker speaks protocol 1 with. */
@@ -34,7 +34,7 @@ export async function handleApi(box: Box, request: Request, route: ApiRoute): Pr
 }
 
 function checkVersion(header: string | null) {
-	const major = /^(\d+)\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$/.exec(header ?? '')?.[1];
+	const major = semverPattern.exec(header ?? '')?.[1];
 	if (major !== undefined && servedMajors.includes(Number(major))) return;
 	throw new ApiError(
 		'upgrade_required',
@@ -50,10 +50,17 @@ async function authenticate(request: Request, boxTokenSha256: string) {
 }
 
 async function body(request: Request): Promise<Record<string, unknown>> {
-	if (Number(request.headers.get('content-length') ?? 0) > maxBodyBytes) {
-		throw new ApiError('bad_request', 'The body is larger than 16 KB.');
+	const tooLarge = new ApiError('bad_request', 'The body is larger than 16 KB.');
+	if (Number(request.headers.get('content-length') ?? 0) > maxBodyBytes) throw tooLarge;
+	// A chunked body has no Content-Length, so the bytes are counted too.
+	const bytes = await request.arrayBuffer();
+	if (bytes.byteLength > maxBodyBytes) throw tooLarge;
+	let value: unknown;
+	try {
+		value = JSON.parse(new TextDecoder().decode(bytes));
+	} catch {
+		value = undefined;
 	}
-	const value: unknown = await request.json().catch(() => undefined);
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new ApiError('bad_request', 'The body must be a JSON object.');
 	}
@@ -107,6 +114,8 @@ function sessionResponse(context: Context, scaleSet: OwnedScaleSet, result: gith
 
 function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 	switch (route.name) {
+		case 'heartbeat':
+			return heartbeat(context);
 		case 'repos':
 			return repos(context);
 		case 'scalesets.ensure':
@@ -122,6 +131,13 @@ function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 		case 'runners.remove':
 			return removeRunner(context, route.id);
 	}
+}
+
+async function heartbeat(context: Context) {
+	const parsed = parseHeartbeat(await body(context.request));
+	if (!parsed.ok) throw new ApiError('bad_request', `"${parsed.field}" is missing or malformed.`);
+	context.box.store.saveHeartbeat(parsed.heartbeat, Date.now());
+	return noContent();
 }
 
 async function repos({ box, app, classes }: Context) {

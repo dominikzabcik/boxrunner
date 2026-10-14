@@ -26,6 +26,9 @@
 			},
 			"REPOS": {
 				"description": "Optional. Only these repositories (`owner/name`, comma-separated) of the private ones the App is installed on. Leave empty to serve them all."
+			},
+			"ADMINS": {
+				"description": "Optional. GitHub logins (comma-separated) that may sign in to the dashboard besides the App's owner. Leave empty for the owner alone."
 			}
 		}
 	}

@@ -1,7 +1,18 @@
-import { signAppJwt } from './crypto';
+import { randomToken, signAppJwt } from './crypto';
 import * as github from './github';
 import { ApiError } from './http';
-import { parseClasses, repoFilter, type App, type ClassName, type Classes, type Repo, type RepoName, type ScaleSetId } from './model';
+import {
+	mayOpenDashboard,
+	parseClasses,
+	repoFilter,
+	type App,
+	type ClassName,
+	type Classes,
+	type Login,
+	type Repo,
+	type RepoName,
+	type ScaleSetId,
+} from './model';
 import type { Store } from './store';
 
 const minute = 60_000;
@@ -38,6 +49,34 @@ export class Box {
 
 	classes(): Classes {
 		return parseClasses(this.env.CLASSES);
+	}
+
+	/** Signs dashboard sessions and their CSRF tokens; made once and forgotten by a reset. */
+	sessionKey(): string {
+		return this.store.key('session', randomToken);
+	}
+
+	mayOpenDashboard(owner: string | null): (login: Login) => boolean {
+		return mayOpenDashboard(owner, this.env.ADMINS);
+	}
+
+	/** Setup keeps the App's client secret; an App set up before that needs the GITHUB_CLIENT_SECRET secret. */
+	canSignIn(app: App): boolean {
+		return this.clientSecret(app) !== undefined;
+	}
+
+	private clientSecret(app: App): string | undefined {
+		return app.clientSecret ?? (this.env.GITHUB_CLIENT_SECRET || undefined);
+	}
+
+	/** The App's OAuth client and owner. An App set up before the Worker kept them gets them from GitHub once. */
+	async oauthClient(app: App): Promise<{ client: github.OAuthClient; owner: string } | undefined> {
+		const secret = this.clientSecret(app);
+		if (secret === undefined) return undefined;
+		if (app.clientId !== null && app.owner !== null) return { client: { id: app.clientId, secret }, owner: app.owner };
+		const profile = await this.once('profile', async () => github.appProfile(await this.jwt(app)));
+		this.store.saveAppProfile(profile.clientId, profile.owner);
+		return { client: { id: profile.clientId, secret }, owner: profile.owner };
 	}
 
 	/** Takes one request from the budget, or answers how many milliseconds until one is free. */

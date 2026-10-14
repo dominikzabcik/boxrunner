@@ -48,7 +48,9 @@ describe('every /v1 call', () => {
 	it('answers 404 JSON to anything that is not a route', async () => {
 		const { call } = await ready();
 		for (const [method, path] of [
-			['GET', '/'],
+			['GET', '/index.html'],
+			['POST', '/'],
+			['GET', '/v1/heartbeat'],
 			['GET', '/v1/scalesets'],
 			['PUT', '/v1/runners'],
 			['GET', '/v1/repos/'],

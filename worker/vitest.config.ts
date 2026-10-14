@@ -6,7 +6,7 @@ export default defineConfig({
 	plugins: [
 		cloudflareTest({
 			wrangler: { configPath: './wrangler.jsonc' },
-			miniflare: { bindings: { SETUP_SECRET: setupSecret } },
+			miniflare: { bindings: { SETUP_SECRET: setupSecret, ADMINS: ' Hubot , mona ' } },
 		}),
 	],
 });

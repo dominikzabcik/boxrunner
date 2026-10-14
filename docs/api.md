@@ -128,9 +128,55 @@ The agent passes `jitConfig` to the container as `ACTIONS_RUNNER_INPUT_JITCONFIG
 
 Removes a runner that has not taken a job. Answers 204, including when the runner was already gone, `409 runner_busy` when it is running a job, and `404 not_found` when the runner belongs to another scale set.
 
+## `POST /v1/heartbeat`
+
+Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The agent sends one every 30 seconds: 2,880 requests a day per box, 120 an hour of the token's 1,800, and under 3% of the free plan's 100,000 requests a day. Answers 204.
+
+```json
+{
+  "box": "box-1",
+  "version": "0.2.0",
+  "image": "2.338.0+3f9a2c0b1d4e",
+  "disk": { "free": 26000000000, "floor": 10000000000 },
+  "classes": [{ "name": "boxrunner", "priority": "normal", "max": 1 }],
+  "runners": [
+    { "name": "box-1-boxrunner-3f9a2c", "repo": "octo/site", "class": "boxrunner", "state": "running", "since": "2026-10-14T09:00:00Z" }
+  ],
+  "jobs": [
+    {
+      "runner": "box-1-boxrunner-3f9a2c",
+      "repo": "octo/site",
+      "class": "boxrunner",
+      "name": "test",
+      "result": "succeeded",
+      "queued": "2026-10-14T08:59:40Z",
+      "started": "2026-10-14T09:00:05Z",
+      "finished": "2026-10-14T09:03:10Z"
+    }
+  ]
+}
+```
+
+| Field | Rule |
+|---|---|
+| `box` | The box name, as `owner` in `POST /v1/sessions` |
+| `version` | The agent's semver, at most 64 characters |
+| `image` | The job image's identity, 1 to 128 characters without control characters |
+| `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
+| `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more |
+| `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state |
+| `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started |
+
+Times are RFC 3339. Repositories and classes are stored as the box sends them: the box is trusted with its own state, so the Worker does not check them against `GET /v1/repos` or `CLASSES`. Fields the Worker does not know are ignored, so a newer agent can add some. A malformed field gets `400 bad_request` naming it, as in `"runners[0].state" is missing or malformed.`
+
+The body must fit in 16 KB like every other call. Fifty jobs with long repository and job names can pass that, so the agent leaves out the oldest jobs until it fits.
+
+The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
+
 ## What the Worker checks on every call
 
-- The box token, compared in constant time.
+The box token, compared in constant time. Then, on every call but `POST /v1/heartbeat`, which only reports the box's own state:
+
 - The repository is in the list `GET /v1/repos` would return.
 - The class is in `CLASSES`.
 - The scale set id belongs to that repository and was created for one of the Worker's classes.

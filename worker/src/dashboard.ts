@@ -1,0 +1,268 @@
+import { dayOf, type Classes, type Priority, type Repo, type RunnerState } from './model';
+import { escape } from './page';
+import { retentionDays, type Store } from './store';
+
+/** GitHub's published price for its standard (2-core) Linux runner. */
+export const dollarsPerMinute = 0.006;
+/** The agent reports every 30 seconds; four missed heartbeats mean the box is off. */
+const offlineAfterSeconds = 120;
+const recentJobCount = 30;
+
+type Totals = { jobs: number; minutes: number; dollars: number };
+
+/** What `GET /dashboard.json` answers and the page shows. Times are ISO 8601; ages are seconds before `generatedAt`. */
+export type Dashboard = {
+	generatedAt: string;
+	boxes: {
+		name: string;
+		version: string;
+		image: string;
+		lastSeen: string;
+		secondsSinceSeen: number;
+		online: boolean;
+		disk: { free: number; floor: number };
+		classes: { name: string; priority: Priority; max: number; running: number; starting: number }[];
+		runners: { name: string; repo: string; class: string; state: RunnerState; since: string; seconds: number }[];
+	}[];
+	jobs: {
+		runner: string;
+		repo: string;
+		class: string;
+		name: string;
+		result: string;
+		queued: string;
+		started: string | null;
+		finished: string;
+		secondsSinceFinished: number;
+		waitSeconds: number | null;
+		durationSeconds: number;
+		minutes: number;
+	}[];
+	totals: { today: Totals; last30Days: Totals };
+	dollarsPerMinute: number;
+	/** The served repositories as the agent last fetched them; null before it first did. */
+	repos: string[] | null;
+	classes: string[];
+	classesProblem: string | null;
+};
+
+const iso = (time: number) => new Date(time).toISOString();
+const secondsBetween = (from: number, to: number) => Math.max(0, Math.round((to - from) / 1000));
+
+function totals(days: { jobs: number; minutes: number }[]): Totals {
+	const jobs = days.reduce((sum, day) => sum + day.jobs, 0);
+	const minutes = days.reduce((sum, day) => sum + day.minutes, 0);
+	return { jobs, minutes, dollars: Math.round(minutes * dollarsPerMinute * 100) / 100 };
+}
+
+/** Reads only the Durable Object: a page view never calls GitHub. */
+export function dashboardData(store: Store, classes: Classes, now: number): Dashboard {
+	const today = dayOf(now);
+	const days = store.daysFrom(today - retentionDays + 1);
+	const repos = store.lastCached('repos');
+	return {
+		generatedAt: iso(now),
+		boxes: store.boxes().map(({ status, seenAt }) => {
+			const secondsSinceSeen = secondsBetween(seenAt, now);
+			return {
+				name: status.box,
+				version: status.version,
+				image: status.image,
+				lastSeen: iso(seenAt),
+				secondsSinceSeen,
+				online: secondsSinceSeen <= offlineAfterSeconds,
+				disk: status.disk,
+				classes: status.classes.map(({ name, priority, max }) => {
+					const states = status.runners.filter((runner) => runner.className === name).map((runner) => runner.state);
+					return {
+						name,
+						priority,
+						max,
+						running: states.filter((state) => state === 'running').length,
+						starting: states.filter((state) => state === 'requested' || state === 'starting').length,
+					};
+				}),
+				runners: status.runners.map((runner) => ({
+					name: runner.name,
+					repo: runner.repo,
+					class: runner.className,
+					state: runner.state,
+					since: iso(runner.since),
+					seconds: secondsBetween(runner.since, seenAt),
+				})),
+			};
+		}),
+		jobs: store.recentJobs(recentJobCount).map((job) => ({
+			runner: job.runner,
+			repo: job.repo,
+			class: job.className,
+			name: job.name,
+			result: job.result,
+			queued: iso(job.queuedAt),
+			started: job.startedAt === null ? null : iso(job.startedAt),
+			finished: iso(job.finishedAt),
+			secondsSinceFinished: secondsBetween(job.finishedAt, now),
+			waitSeconds: job.startedAt === null ? null : secondsBetween(job.queuedAt, job.startedAt),
+			durationSeconds: job.startedAt === null ? 0 : secondsBetween(job.startedAt, job.finishedAt),
+			minutes: job.minutes,
+		})),
+		totals: { today: totals(days.filter((day) => day.day === today)), last30Days: totals(days) },
+		dollarsPerMinute,
+		repos: repos === undefined ? null : (JSON.parse(repos) as Repo[]).map((repo) => repo.name),
+		classes: classes.ok ? [...classes.classes] : [],
+		classesProblem: classes.ok ? null : classes.problem,
+	};
+}
+
+// ---- Rendering ----
+
+const integer = new Intl.NumberFormat('en-US');
+const plural = (count: number, unit: string) => `${integer.format(count)} ${unit}${count === 1 ? '' : 's'}`;
+
+function ago(seconds: number) {
+	if (seconds < 60) return `${plural(seconds, 'second')} ago`;
+	if (seconds < 3600) return `${plural(Math.floor(seconds / 60), 'minute')} ago`;
+	if (seconds < 172_800) return `${plural(Math.floor(seconds / 3600), 'hour')} ago`;
+	return `${plural(Math.floor(seconds / 86_400), 'day')} ago`;
+}
+
+function duration(seconds: number) {
+	if (seconds < 60) return `${seconds} s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes} min ${seconds % 60} s`;
+	return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+const gigabytes = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
+const dollars = (amount: number) => `$${amount.toFixed(2)}`;
+const time = (at: string, text: string) => `<time datetime="${at}">${escape(text)}</time>`;
+
+type Column = { title: string; number?: boolean };
+
+function table(columns: Column[], rows: string[][], empty: string) {
+	if (rows.length === 0) return `<p>${escape(empty)}</p>`;
+	const cell = (column: Column, html: string) => `<td${column.number ? ' class="number"' : ''}>${html}</td>`;
+	return `<div class="scroll"><table>
+<thead><tr>${columns.map((c) => `<th scope="col"${c.number ? ' class="number"' : ''}>${escape(c.title)}</th>`).join('')}</tr></thead>
+<tbody>
+${rows.map((row) => `<tr>${row.map((html, i) => cell(columns[i]!, html)).join('')}</tr>`).join('\n')}
+</tbody>
+</table></div>`;
+}
+
+function renderTotals({ totals: { today, last30Days } }: Dashboard) {
+	const row = (label: string, t: Totals) =>
+		`<tr><th scope="row">${label}</th><td class="number">${integer.format(t.jobs)}</td><td class="number">${integer.format(t.minutes)}</td><td class="number">${dollars(t.dollars)}</td></tr>`;
+	return `<section aria-labelledby="totals">
+<h2 id="totals">GitHub minutes not billed</h2>
+<div class="scroll"><table>
+<thead><tr><td></td><th scope="col" class="number">Jobs</th><th scope="col" class="number">Minutes</th><th scope="col" class="number">At GitHub’s price</th></tr></thead>
+<tbody>
+${row('Today (UTC)', today)}
+${row('Last 30 days', last30Days)}
+</tbody>
+</table></div>
+<p class="hint">Each job’s time is rounded up to whole minutes, as GitHub bills it, and valued at $${dollarsPerMinute} a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan’s free allowance would not have cost money.</p>
+</section>`;
+}
+
+function renderBox(box: Dashboard['boxes'][number], index: number) {
+	const seen = `last seen ${time(box.lastSeen, ago(box.secondsSinceSeen))}`;
+	const belowFloor = box.disk.free < box.disk.floor;
+	return `<section aria-labelledby="box-${index}">
+<h2 id="box-${index}">${escape(box.name)}</h2>
+${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>`}
+<dl>
+<dt>Agent</dt><dd>${escape(box.version)}</dd>
+<dt>Image</dt><dd><code>${escape(box.image)}</code></dd>
+<dt>Disk</dt><dd${belowFloor ? ' class="alert"' : ''}>${gigabytes(box.disk.free)} free, floor ${gigabytes(box.disk.floor)}${belowFloor ? ', so no runner starts' : ''}</dd>
+</dl>
+<h3>Classes</h3>
+${table(
+	[{ title: 'Class' }, { title: 'Priority' }, { title: 'Running', number: true }, { title: 'Starting', number: true }, { title: 'Max', number: true }],
+	box.classes.map((c) => [escape(c.name), c.priority, String(c.running), String(c.starting), String(c.max)]),
+	'The box reported no classes.',
+)}
+<h3>Runners</h3>
+${table(
+	[{ title: 'Runner' }, { title: 'Repository' }, { title: 'Class' }, { title: 'State' }, { title: 'For', number: true }],
+	box.runners.map((r) => [escape(r.name), escape(r.repo), escape(r.class), r.state, duration(r.seconds)]),
+	'No runners right now.',
+)}
+</section>`;
+}
+
+function renderJobs({ jobs }: Dashboard) {
+	return `<section aria-labelledby="jobs">
+<h2 id="jobs">Recent jobs</h2>
+${table(
+	[
+		{ title: 'Repository' },
+		{ title: 'Class' },
+		{ title: 'Job' },
+		{ title: 'Result' },
+		{ title: 'Waited', number: true },
+		{ title: 'Took', number: true },
+		{ title: 'Finished' },
+	],
+	jobs.map((job) => [
+		escape(job.repo),
+		escape(job.class),
+		escape(job.name),
+		job.result === 'failed' ? `<span class="alert">${escape(job.result)}</span>` : escape(job.result),
+		job.waitSeconds === null ? 'Never started' : duration(job.waitSeconds),
+		duration(job.durationSeconds),
+		time(job.finished, ago(job.secondsSinceFinished)),
+	]),
+	'No finished jobs in the last 30 days.',
+)}
+</section>`;
+}
+
+function renderServed({ repos, classes, classesProblem }: Dashboard) {
+	return `<section aria-labelledby="served">
+<h2 id="served">What this Worker serves</h2>
+<h3>Repositories</h3>
+${
+	repos === null
+		? '<p>The box has not asked for its repositories yet.</p>'
+		: repos.length === 0
+			? '<p>None: install the App on a private repository.</p>'
+			: `<ul>\n${repos.map((repo) => `<li>${escape(repo)}</li>`).join('\n')}\n</ul>`
+}
+<h3>Classes</h3>
+${classesProblem === null ? `<p>${classes.map(escape).join(', ')}</p>` : `<p class="alert">The Worker’s ${escape(classesProblem)}.</p>`}
+</section>`;
+}
+
+/** The part of the page the script refreshes. */
+export function renderLive(data: Dashboard): string {
+	const boxes =
+		data.boxes.length === 0
+			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
+			: data.boxes.map(renderBox).join('\n');
+	return [boxes, renderJobs(data), renderTotals(data), renderServed(data)].join('\n');
+}
+
+/** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */
+export const refreshScript = `const live = document.getElementById('live');
+const note = document.getElementById('refreshing');
+note.hidden = false;
+let timer;
+const schedule = () => { clearTimeout(timer); if (!document.hidden) timer = setTimeout(refresh, 10000); };
+async function refresh() {
+  // Replacing the tables would drop the focus of someone scrolling one with the keyboard.
+  if (live.contains(document.activeElement)) return schedule();
+  try {
+    const response = await fetch('/dashboard.json', { cache: 'no-store' });
+    if (response.status === 401) return location.reload();
+    if (!response.ok) throw new Error(String(response.status));
+    live.innerHTML = (await response.json()).html;
+    note.textContent = 'Updates every 10 seconds.';
+  } catch {
+    note.textContent = 'The last update failed. Trying again in 10 seconds.';
+  }
+  schedule();
+}
+document.addEventListener('visibilitychange', () => (document.hidden ? clearTimeout(timer) : refresh()));
+schedule();`;

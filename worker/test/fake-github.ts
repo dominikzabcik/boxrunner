@@ -59,12 +59,24 @@ export class FakeGitHub {
 	/** Answers to force for a path, checked before the fake's own logic. */
 	failures = new Map<string, { status: number; body?: unknown }>();
 	manifestCode = 'code-from-github';
+	/** An App made before the Worker kept its OAuth client: the conversion leaves out the client and the owner. */
+	legacyApp = false;
+	clientSecret = 'client-secret';
+	private oauthCodes = new Map<string, { login: string; redirectUri: string }>();
+	private userTokens = new Map<string, string>();
 	private tokens = new Map<string, Token>();
 	private adminTokens = new Map<string, number>();
 	private registrationTokens = new Map<string, number>();
 	private nextId = 1;
 
 	constructor(private readonly publicKey: CryptoKey, private readonly pem: string) {}
+
+	/** A user approves the App on GitHub's authorize page; GitHub sends the browser back with this code. */
+	authorize(login: string, redirectUri = 'https://box.test/login/callback') {
+		const code = `oauth-code-${this.nextId++}`;
+		this.oauthCodes.set(code, { login, redirectUri });
+		return code;
+	}
 
 	count(method: string, path: string | RegExp) {
 		return this.calls.filter((call) => call.method === method && (typeof path === 'string' ? call.path === path : path.test(call.path))).length;
@@ -85,6 +97,10 @@ export class FakeGitHub {
 		if (request.headers.get('user-agent') !== 'boxrunner-worker') return json({ message: 'no user agent' }, 403);
 		const auth = request.headers.get('authorization') ?? '';
 		if (url.hostname === 'api.github.com') return this.rest(request.method, url, body, auth);
+		if (url.hostname === 'github.com' && request.method === 'POST' && path === '/login/oauth/access_token') {
+			if (request.headers.get('accept') !== 'application/json') return new Response('access_token=form-encoded', { status: 200 });
+			return this.exchange(body as Record<string, string>);
+		}
 		if (url.hostname === 'actions.fake.test') {
 			if (url.searchParams.get('api-version') !== '6.0-preview') return json({ message: 'api-version' }, 400);
 			const repoId = this.adminTokens.get(auth.replace(/^Bearer /, ''));
@@ -126,10 +142,19 @@ export class FakeGitHub {
 	private async rest(method: string, url: URL, body: unknown, auth: string): Promise<Response> {
 		const path = url.pathname;
 		if (method === 'POST' && path === `/app-manifests/${this.manifestCode}/conversions`) {
-			return json({ id: appId, slug: 'boxrunner-test', pem: this.pem, webhook_secret: 'hook-secret', client_id: 'Iv1.test', client_secret: 'client-secret', owner: { login: 'octo' } }, 201);
+			const client = this.legacyApp ? {} : { client_id: 'Iv1.test', client_secret: this.clientSecret, owner: { login: 'octo' } };
+			return json({ id: appId, slug: 'boxrunner-test', pem: this.pem, webhook_secret: 'hook-secret', ...client }, 201);
 		}
 		if (method === 'POST' && path.startsWith('/app-manifests/')) return json({ message: 'Not Found' }, 404);
 
+		if (method === 'GET' && path === '/app') {
+			if (!(await this.validJwt(auth))) return json({ message: 'bad JWT' }, 401);
+			return json({ id: appId, slug: 'boxrunner-test', client_id: 'Iv1.test', owner: { login: 'octo' } });
+		}
+		if (method === 'GET' && path === '/user') {
+			const login = this.userTokens.get(auth.replace(/^Bearer /, ''));
+			return login ? json({ login, id: 9 }) : json({ message: 'Bad credentials' }, 401);
+		}
 		if (method === 'GET' && path === '/app/installations') {
 			if (!(await this.validJwt(auth))) return json({ message: 'bad JWT' }, 401);
 			return json(url.searchParams.get('page') === '1' ? [{ id: installationId }] : []);
@@ -170,6 +195,18 @@ export class FakeGitHub {
 			return json({ full_name: repo.full_name, id: repo.id, private: repo.private, archived: repo.archived });
 		}
 		return json({ message: `fake has no ${method} ${path}` }, 404);
+	}
+
+	/** GitHub answers 200 even when it refuses a code, with an `error` field instead of a token. */
+	private exchange(body: Record<string, string>): Response {
+		const grant = this.oauthCodes.get(body.code ?? '');
+		if (body.client_id !== 'Iv1.test' || body.client_secret !== this.clientSecret) return json({ error: 'incorrect_client_credentials' });
+		if (!grant) return json({ error: 'bad_verification_code' });
+		if (grant.redirectUri !== body.redirect_uri) return json({ error: 'redirect_uri_mismatch' });
+		this.oauthCodes.delete(body.code!);
+		const token = `ghu_${this.nextId++}`;
+		this.userTokens.set(token, grant.login);
+		return json({ access_token: token, token_type: 'bearer', scope: '' });
 	}
 
 	/** Scale sets belong to a repository: an admin token sees only its own repository's. */
