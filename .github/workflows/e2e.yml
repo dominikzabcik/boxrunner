@@ -1,0 +1,61 @@
+name: End to end
+
+# Installs, checks, reinstalls and uninstalls boxrunner on fresh GitHub VMs
+# with scripts/e2e/run.sh. It changes the machine it runs on, so it runs only
+# on GitHub-hosted runners, never on a box of ours.
+on:
+  pull_request:
+    paths:
+      - cmd/**
+      - internal/install/**
+      - internal/firewall/**
+      - internal/doctor/**
+      - install.sh
+      - scripts/build-release.sh
+      - scripts/e2e/**
+      - .github/workflows/e2e.yml
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: ${{ matrix.os }}, ${{ matrix.mode }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm]
+        mode: [runc, sysbox, docker]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # GitHub's images run Docker with the cgroupfs driver and a cgroup parent
+      # of their own. install refuses that and says to switch, as a person would.
+      - name: Switch Docker to the systemd cgroup driver
+        run: |
+          sudo cat /etc/docker/daemon.json || true
+          if [ "$(docker info --format '{{.CgroupDriver}}')" != systemd ]; then
+            { sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}'; } |
+              jq '."exec-opts" = ["native.cgroupdriver=systemd"] | del(."cgroup-parent")' >"$RUNNER_TEMP/daemon.json"
+            sudo install -m 644 "$RUNNER_TEMP/daemon.json" /etc/docker/daemon.json
+            sudo systemctl restart docker
+          fi
+          test "$(docker info --format '{{.CgroupDriver}}')" = systemd
+      - name: Install, doctor, install again, uninstall
+        env:
+          MODE: ${{ matrix.mode }}
+        run: scripts/e2e/run.sh "$MODE"
