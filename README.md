@@ -40,6 +40,10 @@ For `services:`, `container:` jobs and `docker build`, add `--docker` to the ins
 
 `sudo boxrunner doctor` checks the box, including that a job cannot reach the host, your private network or the cloud metadata service. `sudo boxrunner status` shows what runs, and `sudo boxrunner shell` opens a shell in a running job, or in a failed one a class keeps for you. When a new box takes over from one that died, [replacing a box](docs/architecture.md#replacing-a-box) says how to recover the jobs the old one had acquired.
 
+<img src="docs/install.svg" alt="The installer downloads boxrunner 0.2.0, checks its checksum, installs Docker, writes the systemd units and the token, creates the job network and firewall rules, builds the job image and starts the service. boxrunner doctor then reports every check as ok." width="760">
+
+<sub>Install and `doctor` on a fresh Ubuntu 24.04 VM, with the Worker and token passed as `BOXRUNNER_WORKER` and `BOXRUNNER_TOKEN`. Doctor's last line, the Worker check, is cut because it names our own Worker. Pauses longer than 1.5 s are shortened; building the job image took about seven minutes.</sub>
+
 ## Why
 
 - **One job, one container.** Each job starts in a clean container from the same image, and the container is removed when the job ends. Nothing one job leaves behind reaches the next.
