@@ -144,7 +144,9 @@ func Run(ctx context.Context, o Options) error {
 	a.draining.Store(err == nil)
 	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String(), "draining", a.draining.Load())
 
+	served := make(chan struct{})
 	go func() {
+		defer close(served)
 		if err := status.Serve(ctx, a.Socket, a.status, a.drain); err != nil {
 			a.Log.Error("status socket", "err", err)
 		}
@@ -164,6 +166,7 @@ func Run(ctx context.Context, o Options) error {
 	err = a.schedule(ctx)
 	cancel()
 	<-supervised
+	<-served
 	executors := make(chan struct{})
 	go func() {
 		a.work.Wait()
