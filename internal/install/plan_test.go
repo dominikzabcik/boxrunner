@@ -432,6 +432,7 @@ func TestPlanUninstall(t *testing.T) {
 	o := installed()
 	o.Containers = 2
 	o.Mirror = mirror.State{Identity: mirror.Identity(netip.MustParseAddrPort("172.18.0.1:5000")), Volume: true}
+	o.Paths["/run/boxrunner.sock"] = File{Mode: fs.ModeSocket | 0o600}
 	want := []string{
 		"stop and disable boxrunner.service (closes sessions)",
 		"remove the job containers",
@@ -444,6 +445,7 @@ func TestPlanUninstall(t *testing.T) {
 		"remove /etc/systemd/system/boxrunner_idle.slice",
 		"remove /etc/boxrunner",
 		"remove /var/lib/boxrunner",
+		"remove /run/boxrunner.sock",
 		"remove /usr/local/bin/boxrunner",
 		"reload systemd",
 	}
