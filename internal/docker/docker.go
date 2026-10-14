@@ -88,6 +88,7 @@ type Info struct {
 	// Runtimes are the OCI runtimes a container can name, by name.
 	Runtimes            map[string]struct{} `json:"Runtimes"`
 	DefaultAddressPools []AddressPool       `json:"DefaultAddressPools"`
+	LiveRestore         bool                `json:"LiveRestoreEnabled"`
 }
 
 // AddressPool is a range Docker carves new networks' subnets from.

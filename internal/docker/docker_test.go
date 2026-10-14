@@ -216,7 +216,7 @@ func TestBuildFromLocalBaseWithLabels(t *testing.T) {
 
 func TestInfoReadsRuntimesAndPools(t *testing.T) {
 	c, _ := fakeDaemon(t, "1.47", func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, `{"ServerVersion":"29.1.3","CgroupDriver":"systemd",
+		io.WriteString(w, `{"ServerVersion":"29.1.3","CgroupDriver":"systemd","LiveRestoreEnabled":true,
 			"Runtimes":{"runc":{"path":"runc"},"sysbox-runc":{"path":"/usr/bin/sysbox-runc"}},
 			"DefaultAddressPools":[{"Base":"172.17.0.0/16","Size":16},{"Base":"192.168.0.0/16","Size":20}]}`)
 	})
@@ -225,7 +225,7 @@ func TestInfoReadsRuntimesAndPools(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Info{
-		ServerVersion: "29.1.3", CgroupDriver: "systemd",
+		ServerVersion: "29.1.3", CgroupDriver: "systemd", LiveRestore: true,
 		Runtimes:            map[string]struct{}{"runc": {}, "sysbox-runc": {}},
 		DefaultAddressPools: []AddressPool{{"172.17.0.0/16", 16}, {"192.168.0.0/16", 20}},
 	}

@@ -87,6 +87,15 @@ A workflow cannot say "this label, or GitHub's runners if nobody serves it": eve
 
 The Worker wakes itself with a Durable Object alarm rather than a cron trigger. A cron trigger in `wrangler.jsonc` would run in every deployment, opted in or not, and take one of the free plan's five cron triggers per account. The alarm is set only while fallback is on and fires once every `FALLBACK_MINUTES` while the box reports. The variable goes back to the box only after two minutes of heartbeats without a gap, so a box that keeps crashing does not take jobs between crashes. Jobs GitHub already queued for the box's label stay there: GitHub picks the runner at queue time, and the App has no Actions permission to cancel and re-run them.
 
+## Docker's live-restore stays off
+
+Docker stops every container when its daemon stops, unless `live-restore` is on in `daemon.json` ([Docker's docs](https://docs.docker.com/engine/daemon/live-restore/)). Turning it on would let jobs survive an upgrade of Docker's packages. `install` does not turn it on, for two reasons:
+
+- **Sysbox breaks DNS in containers that survive.** Sysbox rewrites the DNS rules inside a container on a user-defined network, as every job is on `boxrunner`. A restart of Docker with live-restore puts Docker's own rules back over them, and DNS inside the container stops working. Sysbox's maintainers reproduced this in [nestybox/sysbox#270](https://github.com/nestybox/sysbox/issues/270), which has been open since April 2021. Its workaround, starting `sysbox-mgr` with `alias-dns=false`, turns off what that flag's own help calls "required for system containers on user-defined Docker bridge networks".
+- **It does not cover the cases that matter most.** A reboot stops every container anyway. Docker restores containers only across patch releases, and may not after a change to daemon options such as `bip`, which `install` writes.
+
+Sysbox's documentation does not mention live-restore, and it was not tried on a box with boxrunner. `boxrunner drain` covers every case instead: no job runs when Docker or the box restarts. `doctor` shows whether live-restore is on, for a box whose owner turned it on.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

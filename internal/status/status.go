@@ -45,6 +45,26 @@ type Snapshot struct {
 	Worker string `json:"worker,omitempty"`
 	// Latest is boxrunner's latest release, once the agent has found it.
 	Latest string `json:"latest,omitempty"`
+	// Draining means `boxrunner drain` closed the sessions: the agent starts
+	// no runner until `boxrunner resume`.
+	Draining bool `json:"draining,omitempty"`
+}
+
+// Drained is true once a draining agent has closed every session and no job
+// container runs or is about to.
+func (s Snapshot) Drained() bool {
+	return s.Draining && len(s.ScaleSets) == 0 && len(s.Busy()) == 0
+}
+
+// Busy are the runners whose container runs or is about to.
+func (s Snapshot) Busy() []Runner {
+	var busy []Runner
+	for _, r := range s.Runners {
+		if r.Phase != "exited" {
+			busy = append(busy, r)
+		}
+	}
+	return busy
 }
 
 // strandedHint is how long after a fresh start status points to recovering
@@ -210,9 +230,10 @@ func Recent(path string, n int) ([]Job, error) {
 	return jobs[max(0, len(jobs)-n):], s.Err()
 }
 
-// Serve answers GET /status on a unix socket until ctx ends. snapshot is
-// called for every request.
-func Serve(ctx context.Context, socket string, snapshot func() Snapshot) error {
+// Serve answers GET /status, POST /drain and POST /resume on a unix socket
+// until ctx ends. snapshot is called for every status request, and drain with
+// true to drain and false to resume.
+func Serve(ctx context.Context, socket string, snapshot func() Snapshot, drain func(bool) error) error {
 	os.Remove(socket)
 	l, err := net.Listen("unix", socket)
 	if err != nil {
@@ -223,12 +244,19 @@ func Serve(ctx context.Context, socket string, snapshot func() Snapshot) error {
 		return err
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/status" {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/status":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(snapshot())
+		case r.Method == http.MethodPost && (r.URL.Path == "/drain" || r.URL.Path == "/resume"):
+			if err := drain(r.URL.Path == "/drain"); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(snapshot())
 	})}
 	go func() {
 		<-ctx.Done()
@@ -243,19 +271,42 @@ func Serve(ctx context.Context, socket string, snapshot func() Snapshot) error {
 
 // Fetch asks the running agent for its snapshot.
 func Fetch(ctx context.Context, socket string) (Snapshot, error) {
+	resp, err := call(ctx, socket, http.MethodGet, "/status")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer resp.Body.Close()
+	var s Snapshot
+	return s, json.NewDecoder(resp.Body).Decode(&s)
+}
+
+// Drain asks the running agent to drain, or with on false to resume.
+func Drain(ctx context.Context, socket string, on bool) error {
+	path := map[bool]string{true: "/drain", false: "/resume"}[on]
+	resp, err := call(ctx, socket, http.MethodPost, path)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("the agent refused %s: %s", path, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func call(ctx context.Context, socket, method, path string) (*http.Response, error) {
 	client := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 		},
 	}}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://boxrunner/status", nil)
+	req, _ := http.NewRequestWithContext(ctx, method, "http://boxrunner"+path, nil)
 	resp, err := client.Do(req)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("the agent is not answering on %s (is boxrunner.service running?): %w", socket, err)
+		return nil, fmt.Errorf("the agent is not answering on %s (is boxrunner.service running?): %w", socket, err)
 	}
-	defer resp.Body.Close()
-	var s Snapshot
-	return s, json.NewDecoder(resp.Body).Decode(&s)
+	return resp, nil
 }
 
 // Print writes a snapshot for people.
@@ -271,6 +322,9 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	}
 	if release.Newer(s.Latest, s.Worker) {
 		fmt.Fprintf(w, "The Worker runs %s. Redeploy it from %s: see docs/upgrading.md.\n\n", s.Worker, s.Latest)
+	}
+	if s.Draining {
+		fmt.Fprint(w, "Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n")
 	}
 	if s.FreshStart && now.Sub(s.Started) < strandedHint {
 		fmt.Fprint(w, "If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.\n\n")

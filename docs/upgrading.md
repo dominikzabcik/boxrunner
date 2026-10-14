@@ -26,6 +26,23 @@ An agent from before `upgrade` existed upgrades the same way with the install co
 curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh
 ```
 
+## Rebooting the box
+
+A reboot stops every job container, and so does a restart of Docker, which an upgrade of Docker's packages does on its own. Drain the box first, so that no job is running when it happens:
+
+```sh
+sudo boxrunner drain --wait     # close the sessions and wait for running jobs
+sudo apt-get upgrade            # the updates that need the reboot
+sudo reboot
+sudo boxrunner resume           # once the box is back
+```
+
+`drain` closes the agent's sessions and removes the runners that have not taken a job, warm ones included, and the agent starts no new runners. Running jobs keep running, and `--wait` returns once every session is closed and no job container runs. Jobs queued in the meantime wait at GitHub and start after `resume`. The box keeps reporting, so [fallback](fallback.md) does not send them to GitHub's runners.
+
+The drain outlasts a restart of the agent and the reboot: the agent keeps it in `/var/lib/boxrunner/draining` and opens no sessions until `sudo boxrunner resume`. While it lasts, `sudo boxrunner status` says the box is draining and `sudo boxrunner doctor` fails on it, so a forgotten drain shows.
+
+Docker's `live-restore` setting would keep containers running through a restart of Docker, but `install` leaves it off: under Sysbox, a job that survives such a restart loses DNS ([decisions](decisions.md#dockers-live-restore-stays-off)). `doctor` shows whether it is on.
+
 ## The Worker
 
 `sudo boxrunner doctor` names the Worker's release. A Worker that names none was deployed before Workers reported their release, so it needs an upgrade.

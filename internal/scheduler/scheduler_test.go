@@ -629,3 +629,37 @@ func TestMaxDuration(t *testing.T) {
 		t.Errorf("Decide after 6 hours = %#v, want %#v", got, want)
 	}
 }
+
+// A draining box starts nothing and removes every runner without a job, the
+// warm one included, while the running job keeps its runner.
+func TestDrain(t *testing.T) {
+	s := warm(state(4, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(1, 2, 3)}},
+		Runner{Name: "r1", ScaleSet: siteMain, Phase: Running, TookJob: true, Since: at(1)},
+		Runner{Name: "r2", ScaleSet: siteMain, Phase: Starting, Since: at(9)},
+		Runner{Name: "r3", ScaleSet: siteMain, Phase: Requested, Since: at(9)},
+		Runner{Name: "r4", ScaleSet: siteMain, Phase: Starting, Since: at(9.5)},
+	), "octo/site")
+	if w := Warm(s); !w["r4"] {
+		t.Fatalf("Warm = %v; want r4", w)
+	}
+	s = Apply(s, Drain{On: true}, at(10))
+	want := []Action{
+		Remove{Runner: "r2", Deregister: true, Reason: "draining"},
+		Remove{Runner: "r4", Deregister: true, Reason: "draining"},
+	}
+	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide while draining = %#v, want %#v", got, want)
+	}
+}
+
+func TestResumeStartsAgain(t *testing.T) {
+	s := Apply(state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(1)}}), Drain{On: true}, at(10))
+	if got := Decide(s, at(10)); got != nil {
+		t.Errorf("Decide while draining = %#v", got)
+	}
+	s = Apply(s, Drain{On: false}, at(10))
+	want := []Action{Start{ScaleSet: siteMain}}
+	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide after resuming = %#v, want %#v", got, want)
+	}
+}

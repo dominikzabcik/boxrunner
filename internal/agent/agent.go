@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -54,6 +55,7 @@ type Options struct {
 
 	// Tests replace these; zero means the real paths and timings.
 	JobsLog        string
+	DrainFile      string
 	Socket         string
 	ReleasesURL    string
 	Tick           time.Duration
@@ -95,6 +97,9 @@ type Agent struct {
 	imageDisk atomic.Int64
 	// latest is boxrunner's latest release, once checkRelease found it.
 	latest atomic.Pointer[string]
+	// draining mirrors DrainFile; drainMu orders the changes to both.
+	draining atomic.Bool
+	drainMu  sync.Mutex
 }
 
 // Run serves jobs until ctx ends. It returns an error only for a problem a
@@ -103,6 +108,7 @@ func Run(ctx context.Context, o Options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	o.JobsLog = cmp.Or(o.JobsLog, layout.JobsLogPath)
+	o.DrainFile = cmp.Or(o.DrainFile, layout.DrainPath)
 	o.Socket = cmp.Or(o.Socket, layout.Socket)
 	o.ReleasesURL = cmp.Or(o.ReleasesURL, runnerimage.ReleasesLatest)
 	o.BoxrunnerReleasesURL = cmp.Or(o.BoxrunnerReleasesURL, release.Releases+"/latest")
@@ -132,10 +138,12 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	a.ranBefore = hasEntries(a.JobsLog)
-	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String())
+	_, err = os.Stat(a.DrainFile)
+	a.draining.Store(err == nil)
+	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String(), "draining", a.draining.Load())
 
 	go func() {
-		if err := status.Serve(ctx, a.Socket, a.status); err != nil {
+		if err := status.Serve(ctx, a.Socket, a.status, a.drain); err != nil {
 			a.Log.Error("status socket", "err", err)
 		}
 	}()
@@ -211,9 +219,34 @@ func (a *Agent) post(e scheduler.Event) {
 	}
 }
 
+// drain closes the sessions and removes the runners without a job, or with
+// on false opens the sessions again. The file keeps a drain across restarts.
+func (a *Agent) drain(on bool) error {
+	a.drainMu.Lock()
+	defer a.drainMu.Unlock()
+	var err error
+	if on {
+		err = os.WriteFile(a.DrainFile, nil, 0o644)
+	} else if err = os.Remove(a.DrainFile); errors.Is(err, os.ErrNotExist) {
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+	if a.draining.Swap(on) != on {
+		a.Log.Info(map[bool]string{true: "draining: closing sessions; running jobs keep running", false: "resuming: opening sessions"}[on])
+	}
+	a.post(scheduler.Drain{On: on})
+	select {
+	case a.resync <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
 func (a *Agent) schedule(ctx context.Context) error {
 	defer close(a.stopped)
-	state := scheduler.New(a.Config)
+	state := scheduler.Apply(scheduler.New(a.Config), scheduler.Drain{On: a.draining.Load()}, time.Now())
 	tick := time.NewTicker(a.Tick)
 	defer tick.Stop()
 	logged := map[string]bool{}
@@ -568,6 +601,7 @@ func (a *Agent) publish(s scheduler.State) {
 		Image:    status.ImageStatus{Built: s.Image.Built, Latest: s.Image.Latest, Disk: a.imageDisk.Load()},
 		DiskFree: s.DiskFree, DiskFloor: s.DiskFloor,
 		Started: a.started, FreshStart: (a.adoptedNone && !a.ranBefore) || a.Worker.SessionBlocked(),
+		Draining: s.Draining,
 	}
 	if latest := a.latest.Load(); latest != nil {
 		snap.Latest = *latest
@@ -628,46 +662,17 @@ func (a *Agent) supervise(ctx context.Context) error {
 	exits := make(chan exit)
 	paused := map[string]bool{}
 	sync := func() error {
-		repos, err := a.Worker.Repos(ctx)
-		if err != nil {
-			if worker.Fatal(err) {
-				return err
-			}
-			if ctx.Err() == nil {
-				a.Log.Error("listing repositories", "err", err)
-			}
-			return nil
-		}
 		want := map[scheduler.Key]bool{}
-		for _, c := range a.Config.Classes {
-			now := slices.Contains(repos.Paused, c.Name)
-			switch {
-			case now && !paused[c.Name]:
-				a.Log.Info("class paused on the dashboard; starting no new runners for it", "class", c.Name)
-			case !now && paused[c.Name]:
-				a.Log.Info("class resumed on the dashboard", "class", c.Name)
-			}
-			paused[c.Name] = now
-			if now {
-				continue
-			}
-			if !slices.Contains(repos.Classes, c.Name) {
-				a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
-				continue
-			}
-			if c.Isolation == config.Sysbox && !a.sysbox {
-				a.Log.Error("class needs Sysbox, for docker = true or isolation = \"sysbox\", but Docker has no "+layout.SysboxRuntime+" runtime; run `sudo boxrunner install`; not serving it", "class", c.Name)
-				continue
-			}
-			for _, r := range repos.Repos {
-				if c.Serves(r.Name) {
-					want[scheduler.Key{Repo: r.Name, Class: c.Name}] = true
-				}
+		draining := a.draining.Load()
+		if !draining {
+			var err error
+			if want, err = a.wanted(ctx, paused); want == nil {
+				return err
 			}
 		}
 		for key, cancel := range running {
 			if !want[key] {
-				if !paused[key.Class] {
+				if !paused[key.Class] && !draining {
 					a.Log.Info("repository left the Worker's list; stopping", "repo", key.Repo, "class", key.Class)
 				}
 				cancel()
@@ -717,6 +722,50 @@ func (a *Agent) supervise(ctx context.Context) error {
 		delete(running, e.key)
 	}
 	return err
+}
+
+// wanted lists the repositories and classes to serve, logging the classes
+// whose pause changed. It returns nil when the Worker did not answer, with an
+// error only when retrying cannot help.
+func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[scheduler.Key]bool, error) {
+	repos, err := a.Worker.Repos(ctx)
+	if err != nil {
+		if worker.Fatal(err) {
+			return nil, err
+		}
+		if ctx.Err() == nil {
+			a.Log.Error("listing repositories", "err", err)
+		}
+		return nil, nil
+	}
+	want := map[scheduler.Key]bool{}
+	for _, c := range a.Config.Classes {
+		now := slices.Contains(repos.Paused, c.Name)
+		switch {
+		case now && !paused[c.Name]:
+			a.Log.Info("class paused on the dashboard; starting no new runners for it", "class", c.Name)
+		case !now && paused[c.Name]:
+			a.Log.Info("class resumed on the dashboard", "class", c.Name)
+		}
+		paused[c.Name] = now
+		if now {
+			continue
+		}
+		if !slices.Contains(repos.Classes, c.Name) {
+			a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
+			continue
+		}
+		if c.Isolation == config.Sysbox && !a.sysbox {
+			a.Log.Error("class needs Sysbox, for docker = true or isolation = \"sysbox\", but Docker has no "+layout.SysboxRuntime+" runtime; run `sudo boxrunner install`; not serving it", "class", c.Name)
+			continue
+		}
+		for _, r := range repos.Repos {
+			if c.Serves(r.Name) {
+				want[scheduler.Key{Repo: r.Name, Class: c.Name}] = true
+			}
+		}
+	}
+	return want, nil
 }
 
 func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]context.CancelFunc, key scheduler.Key, err error) error {
