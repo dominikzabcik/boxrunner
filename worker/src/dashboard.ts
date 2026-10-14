@@ -1,6 +1,6 @@
 import type { Box } from './box';
 import { variable } from './fallback';
-import { dayOf, newer, type Priority, type Repo, type RunnerState } from './model';
+import { dayOf, forkProblems, newer, type ForkPullRequests, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
 import { retentionDays } from './store';
 import { version as workerVersion } from './version';
@@ -48,6 +48,8 @@ export type Dashboard = {
 	dollarsPerMinute: number;
 	/** The served repositories as the agent last fetched them; null before it first did. */
 	repos: string[] | null;
+	/** Each served repository's fork pull request settings as last read; null before a read succeeded. */
+	forkPullRequests: Record<string, ForkPullRequests | null>;
 	classes: string[];
 	classesProblem: string | null;
 	/** The Worker's classes paused on the dashboard: who paused each and when. */
@@ -97,6 +99,7 @@ export function dashboardData(box: Box, now: number): Dashboard {
 	const watch = store.fallback();
 	const days = store.daysFrom(today - retentionDays + 1);
 	const repos = store.lastCached('repos');
+	const servedRepos: Repo[] = repos === undefined ? [] : (JSON.parse(repos) as Repo[]);
 	const served = classes.ok ? classes.classes : [];
 	const pauses = store.pauses().filter((pause) => served.includes(pause.className));
 	const paused = new Set<string>(pauses.map((pause) => pause.className));
@@ -151,7 +154,8 @@ export function dashboardData(box: Box, now: number): Dashboard {
 		})),
 		totals: { today: totals(days.filter((day) => day.day === today)), last30Days: totals(days) },
 		dollarsPerMinute,
-		repos: repos === undefined ? null : (JSON.parse(repos) as Repo[]).map((repo) => repo.name),
+		repos: repos === undefined ? null : servedRepos.map((repo) => repo.name),
+		forkPullRequests: Object.fromEntries(servedRepos.map((repo) => [repo.name, box.lastForkPullRequests(repo.id)])),
 		classes: [...served],
 		classesProblem: classes.ok ? null : classes.problem,
 		paused: pauses.map((pause) => ({ class: pause.className, by: pause.by, since: iso(pause.since), seconds: secondsBetween(pause.since, now) })),
@@ -336,18 +340,35 @@ function renderClasses({ classes, classesProblem, paused }: Dashboard, csrf: str
 <p class="hint">A paused class starts no new runners on any box. Its running jobs finish, and its new jobs wait at GitHub until you resume it. Boxes learn of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes.</p>`;
 }
 
+/** "a", "a and b", "a, b and c". */
+const joined = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
+
+/** A served repository, and what its fork pull request settings let through with the settings that stop it. */
+function renderRepo(repo: string, problems: ReturnType<typeof forkProblems>) {
+	if (problems.length === 0) return `<li>${escape(repo)}</li>`;
+	const what = joined(problems.map((p) => p.problem));
+	const fixes = joined(problems.map((p) => p.fix));
+	return `<li>${escape(repo)}: <span class="alert">runs workflows from fork pull requests ${what}.</span> In its settings, under Actions, General, Fork pull request workflows, ${fixes}, or turn off “Run workflows from fork pull requests”.</li>`;
+}
+
+function renderRepos({ repos, forkPullRequests }: Dashboard) {
+	if (repos === null) return '<p>The box has not asked for its repositories yet.</p>';
+	if (repos.length === 0) return '<p>None: install the App on a private repository.</p>';
+	const problems = repos.map((repo) => {
+		const settings = forkPullRequests[repo];
+		return settings ? forkProblems(settings) : [];
+	});
+	const hint = problems.some((list) => list.length > 0)
+		? '\n<p class="hint">A workflow from a fork pull request runs the fork’s code on your box, and a fork can belong to anyone who can read the repository.</p>'
+		: '';
+	return `<ul>\n${repos.map((repo, i) => renderRepo(repo, problems[i]!)).join('\n')}\n</ul>${hint}`;
+}
+
 function renderServed(data: Dashboard, csrf: string) {
-	const { repos } = data;
 	return `<section aria-labelledby="served">
 <h2 id="served">What this Worker serves</h2>
 <h3>Repositories</h3>
-${
-	repos === null
-		? '<p>The box has not asked for its repositories yet.</p>'
-		: repos.length === 0
-			? '<p>None: install the App on a private repository.</p>'
-			: `<ul>\n${repos.map((repo) => `<li>${escape(repo)}</li>`).join('\n')}\n</ul>`
-}
+${renderRepos(data)}
 <h3 id="classes">Classes</h3>
 ${renderClasses(data, csrf)}
 ${renderFallback(data)}

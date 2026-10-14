@@ -1,4 +1,4 @@
-import { parse, type BoxName, type Login, type RepoName, type RunnerId, type RunnerName, type ScaleSetId, type SessionId } from './model';
+import { parse, type BoxName, type ForkPullRequests, type Login, type RepoName, type RunnerId, type RunnerName, type ScaleSetId, type SessionId } from './model';
 
 /** GitHub answered with a status the call does not expect, or a body it cannot read. */
 export class GitHubError extends Error {
@@ -125,6 +125,21 @@ export async function visibility(token: string, repo: RepoName): Promise<Visibil
 	return read(response, `GET /repos/${repo}`, (body) =>
 		body.private === false ? 'public' : body.archived === true ? 'archived' : body.private === true ? 'private' : undefined,
 	);
+}
+
+/** Needs `administration: read`. GitHub answers 422 for a public repository, which has no such settings. */
+export async function forkPullRequests(token: string, repo: RepoName): Promise<ForkPullRequests> {
+	const path = `/repos/${repo}/actions/permissions/fork-pr-workflows-private-repos`;
+	const response = await rest('GET', path, `Bearer ${token}`, [200]);
+	return read(response, `GET ${path}`, (body) => {
+		const settings = {
+			runWorkflows: body.run_workflows_from_fork_pull_requests,
+			requireApproval: body.require_approval_for_fork_pr_workflows,
+			sendWriteTokens: body.send_write_tokens_to_workflows,
+			sendSecrets: body.send_secrets_and_variables,
+		};
+		return Object.values(settings).every((flag) => typeof flag === 'boolean') ? (settings as ForkPullRequests) : undefined;
+	});
 }
 
 /** Creates or updates an Actions variable of the repository. */

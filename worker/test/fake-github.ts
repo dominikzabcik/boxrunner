@@ -10,6 +10,12 @@ export const installationId = 501;
 const actionsBase = 'https://actions.fake.test/tenant';
 
 type Repo = { full_name: string; id: number; private: boolean; archived: boolean; installed: boolean };
+export type ForkSettings = {
+	run_workflows_from_fork_pull_requests: boolean;
+	send_write_tokens_to_workflows: boolean;
+	send_secrets_and_variables: boolean;
+	require_approval_for_fork_pr_workflows: boolean;
+};
 type Token = { repositoryIds: number[] | undefined; permissions: Record<string, string> };
 export type Call = { method: string; path: string; body: unknown };
 
@@ -58,6 +64,8 @@ export class FakeGitHub {
 	runners = new Map<number, { scaleSetId: number; repoId: number; busy: boolean }>();
 	/** What the installation granted the App; GitHub refuses a token that asks for more. */
 	granted: Record<string, 'read' | 'write'> = { administration: 'write', metadata: 'read' };
+	/** Fork pull request settings by repository id, as GitHub's REST API names them; a repository missing here allows none. */
+	forkSettings = new Map<number, ForkSettings>();
 	/** Actions variables by repository id. */
 	variables = new Map<number, Map<string, string>>();
 	/** Answers to force for a path, checked before the fake's own logic. */
@@ -213,6 +221,20 @@ export class FakeGitHub {
 			if (method === 'PATCH') variables.set(name, request.value);
 			if (method === 'DELETE') variables.delete(name);
 			return new Response(null, { status: 204 });
+		}
+		const forkPath = /^\/repos\/([^/]+\/[^/]+)\/actions\/permissions\/fork-pr-workflows-private-repos$/.exec(path);
+		if (method === 'GET' && forkPath) {
+			const repo = this.repo(forkPath[1]!);
+			if (!repo || !this.allows(this.token(auth), repo, 'administration', 'read')) return json({ message: 'Resource not accessible by integration' }, 403);
+			if (!repo.private) return json({ message: 'Fork PR workflow settings is not allowed for public repositories.' }, 422);
+			return json(
+				this.forkSettings.get(repo.id) ?? {
+					run_workflows_from_fork_pull_requests: false,
+					send_write_tokens_to_workflows: false,
+					send_secrets_and_variables: false,
+					require_approval_for_fork_pr_workflows: false,
+				},
+			);
 		}
 		const repoPath = /^\/repos\/([^/]+\/[^/]+)$/.exec(path);
 		if (method === 'GET' && repoPath) {

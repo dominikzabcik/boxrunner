@@ -39,11 +39,19 @@ The private, unarchived repositories the App is installed on, narrowed to the `R
 
 ```json
 {
-  "repos": [{ "name": "octo/site", "id": 123 }],
+  "repos": [
+    {
+      "name": "octo/site",
+      "id": 123,
+      "forkPullRequests": { "runWorkflows": true, "requireApproval": true, "sendWriteTokens": false, "sendSecrets": false }
+    }
+  ],
   "classes": ["boxrunner"],
   "paused": ["boxrunner-light"]
 }
 ```
+
+`forkPullRequests` holds the repository's settings for workflows from fork pull requests, which GitHub keeps under Settings, Actions, General, Fork pull request workflows: whether they run at all, whether each run waits for approval, and whether it gets a write token or the repository's secrets. The Worker reads them with `GET /repos/{owner}/{repo}/actions/permissions/fork-pr-workflows-private-repos` and a token narrowed to that repository and `administration: read`. It reads a repository at most once an hour, and ten minutes after a read that failed. Each listing reads at most five of the repositories that are due, so a Worker that serves many spreads the reads over several listings, at two GitHub calls each. Until a read succeeds the field is `null`, and a failed read keeps the last settings it read; a failed read never fails the listing. A Worker from before this field sends none, and an agent that does not know it ignores it. `boxrunner doctor` and the [dashboard](dashboard.md) warn about a repository whose fork pull requests run workflows without approval, with write tokens or with secrets; the agent serves the repository either way.
 
 `classes` is `CLASSES` without the classes paused on the [dashboard](dashboard.md#pausing-a-class), and `paused` lists those. An agent that does not know `paused` still stops serving a paused class, because the class is missing from `classes`; it logs that the class is not one of the Worker's. The agent stops listening to a paused class's scale sets, so it starts no runner for it, and lists the repositories again as soon as a heartbeat's answer shows the paused classes changed.
 
