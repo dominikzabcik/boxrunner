@@ -37,7 +37,7 @@ func Exec(ctx context.Context, stdin, name string, args ...string) (string, erro
 
 var managedPaths = []string{
 	layout.Binary, layout.IdleSlicePath, layout.UnitPath, layout.ConfigPath, layout.TokenPath,
-	layout.ConfigDir, layout.StateDir,
+	layout.ConfigDir, layout.StateDir, layout.Socket,
 }
 
 // Observe looks at the box. It returns a Docker client when the daemon answers.

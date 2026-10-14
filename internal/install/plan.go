@@ -393,7 +393,8 @@ func PlanUninstall(o Observed) []Step {
 		steps = append(steps, StopSlice{})
 	}
 	reload := false
-	for _, p := range []string{layout.UnitPath, layout.IdleSlicePath, layout.ConfigDir, layout.StateDir, layout.Binary} {
+	// An agent can exit before its status server removes the socket.
+	for _, p := range []string{layout.UnitPath, layout.IdleSlicePath, layout.ConfigDir, layout.StateDir, layout.Socket, layout.Binary} {
 		if _, ok := o.Paths[p]; ok {
 			steps = append(steps, RemovePath{p})
 			reload = reload || p == layout.UnitPath || p == layout.IdleSlicePath
