@@ -1,5 +1,7 @@
-# Weekly grouped updates with a cooldown, so a release has a week to be
-# pulled before it lands here. Security updates are not held back.
+# Weekly grouped minor and patch updates with a cooldown, so a release has
+# a week to be pulled before it lands here. Each major update gets its own
+# pull request, since it can break the build. Security updates are not held
+# back.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -11,6 +13,7 @@ updates:
     groups:
       go:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: bun
     directories: [/worker, /site]
@@ -21,6 +24,7 @@ updates:
     groups:
       bun:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
@@ -31,3 +35,4 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
