@@ -157,6 +157,8 @@ The cache also holds these limits:
 - 4,000 blocks per upload: 125 GiB with `actions/cache`'s 32 MiB blocks.
 - 256 connections at once, and 64 from one container: more wait, and a container's 65th is closed. A request's body or a download that stops for 30 seconds is cut off, whether or not the cache reads the body.
 
+Sizes count the bytes written. The filesystem stores each file in whole blocks, 4 KiB on most, so an upload of many tiny blocks takes more disk than it counts for: at most about 1 GiB more in all, with 64 uploads of 4,000 blocks. `disk_floor` is checked against the filesystem's free space, so it holds regardless.
+
 When the cache does not answer within two seconds as an action starts, such as while the agent is stopped, that action talks to GitHub as it would without the cache. A failed cache call is only a warning in `actions/cache`. An artifact upload or download that is in progress when the agent stops can fail its step, since the cache passes those calls on: on stop, the agent keeps the cache serving until its other work is done and gives calls in flight ten seconds. To restart or upgrade the agent with no such risk, drain the box first ([upgrading](upgrading.md#rebooting-the-box)).
 
 What it does not cover:
