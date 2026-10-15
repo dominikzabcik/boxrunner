@@ -164,7 +164,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrDenied):
 		twirpError(w, http.StatusForbidden, "permission_denied", err.Error())
 	case err != nil:
-		reply(w, map[string]any{"ok": false, "message": s.public(err)})
+		reply(w, map[string]any{"ok": false, "message": public(err)})
 	default:
 		reply(w, map[string]any{"ok": true, "signed_upload_url": s.Base + uploadPath + capability})
 	}
@@ -187,7 +187,7 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := s.Store.Finalize(c, req.Key, req.Version, size, s.Now())
 	if err != nil {
-		reply(w, map[string]any{"ok": false, "message": s.public(err)})
+		reply(w, map[string]any{"ok": false, "message": public(err)})
 		return
 	}
 	s.Log.Info("cache: saved", "repo", e.Repo, "scope", e.Scope, "key", e.Key, "bytes", e.Size)
@@ -258,7 +258,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrUnknown):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case err != nil:
-		http.Error(w, s.public(err), http.StatusBadRequest)
+		http.Error(w, public(err), http.StatusBadRequest)
 	default:
 		w.WriteHeader(http.StatusCreated)
 	}
@@ -294,17 +294,14 @@ func (d deadline) Read(p []byte) (int, error) {
 	return d.r.Read(p)
 }
 
-// public is err as a job may read it: without the box's paths, which the
-// log gets instead.
-func (s *Server) public(err error) string {
+// public is err as a job may read it: without the box's paths.
+func public(err error) string {
 	var path *fs.PathError
 	var link *os.LinkError
 	switch {
 	case errors.As(err, &path):
-		s.Log.Warn("cache: disk error", "err", err)
 		return path.Op + ": " + path.Err.Error()
 	case errors.As(err, &link):
-		s.Log.Warn("cache: disk error", "err", err)
 		return link.Op + ": " + link.Err.Error()
 	}
 	return err.Error()
