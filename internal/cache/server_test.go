@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bufio"
 	"bytes"
 	"crypto"
 	"crypto/rand"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -88,12 +90,13 @@ func jwks(t *testing.T, keys map[string]*rsa.PublicKey) (*httptest.Server, *int)
 }
 
 type box struct {
-	t     *testing.T
-	srv   *httptest.Server
-	store *Store
-	free  int64
-	mu    sync.Mutex
-	now   time.Time
+	t      *testing.T
+	srv    *httptest.Server
+	server *Server
+	store  *Store
+	free   int64
+	mu     sync.Mutex
+	now    time.Time
 	// upstream records what reached GitHub's side.
 	upstream []string
 }
@@ -120,7 +123,7 @@ func newBox(t *testing.T, max int64) *box {
 	up, _ := url.Parse(github.URL)
 	s := &Server{Store: b.store, Keys: &Keys{URL: keys.URL, Issuer: Issuer, HTTP: http.DefaultClient}, Upstream: up,
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: b.clock}
-	b.srv = httptest.NewServer(s.Handler())
+	b.srv, b.server = httptest.NewServer(s.Handler()), s
 	s.Base = b.srv.URL
 	t.Cleanup(b.srv.Close)
 	return b
@@ -498,5 +501,125 @@ func TestPassesOtherCallsToGitHub(t *testing.T) {
 	}
 	if want := []string{"POST " + strings.TrimPrefix(github, "http://") + "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact Bearer job-token"}; !slices.Equal(b.upstream, want) {
 		t.Errorf("GitHub saw %v; want %v", b.upstream, want)
+	}
+}
+
+func TestErrorsLeaveOutTheBoxsPaths(t *testing.T) {
+	b := newBox(t, 1<<20)
+	u := b.reserve(mainToken, "k")
+	dir := filepath.Join(b.store.Dir, "uploads", strings.TrimPrefix(u, b.srv.URL+"/cache/upload/"))
+	os.RemoveAll(dir)
+	os.WriteFile(dir, nil, 0o600)
+	req, _ := http.NewRequest(http.MethodPut, u, strings.NewReader("x"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || string(body) != "open: not a directory\n" {
+		t.Errorf("a write the disk refuses = %d %q; want 400 and no path", resp.StatusCode, body)
+	}
+}
+
+// TestConnections: the cache serves 256 connections at once; the next waits
+// for one of them to close.
+func TestConnections(t *testing.T) {
+	b := newBox(t, 1<<20)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{Store: b.store, Keys: b.server.Keys, Upstream: b.server.Upstream, Log: b.server.Log, Now: b.clock}
+	go srv.Serve(t.Context(), l)
+	var held []net.Conn
+	for range 256 {
+		c, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: cache\r\n\r\n", UpstreamPath)
+		if _, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, c)
+	}
+	next, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	fmt.Fprintf(next, "GET %s HTTP/1.1\r\nHost: cache\r\n\r\n", UpstreamPath)
+	answered := make(chan error)
+	go func() {
+		_, err := http.ReadResponse(bufio.NewReader(next), nil)
+		answered <- err
+	}()
+	select {
+	case <-answered:
+		t.Fatalf("connection 257 was answered while 256 were open")
+	case <-time.After(300 * time.Millisecond):
+	}
+	held[0].Close()
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Errorf("connection 257 after one closed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Errorf("connection 257 was not answered after one closed")
+	}
+	for _, c := range held[1:] {
+		c.Close()
+	}
+}
+
+func shortStall(t *testing.T) {
+	was := stall
+	stall = 200 * time.Millisecond
+	t.Cleanup(func() { stall = was })
+}
+
+func TestStalledUploadsAreCut(t *testing.T) {
+	shortStall(t)
+	b := newBox(t, 1<<20)
+	u := b.reserve(mainToken, "k")
+	c, err := net.Dial("tcp", strings.TrimPrefix(b.srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "PUT %s HTTP/1.1\r\nHost: cache\r\nContent-Length: 10\r\n\r\n12345", strings.TrimPrefix(u, b.srv.URL))
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("an upload that stopped halfway got no answer: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || b.onDisk() != 0 {
+		t.Errorf("an upload that stopped halfway = %d with %d bytes on disk; want 400 and none", resp.StatusCode, b.onDisk())
+	}
+}
+
+func TestStalledDownloadsAreCut(t *testing.T) {
+	shortStall(t)
+	b := newBox(t, 1<<30)
+	archive := strings.Repeat("x", 32<<20)
+	b.save(mainToken, "k", "v1", archive)
+	_, out := b.call(mainToken, "GetCacheEntryDownloadURL", map[string]any{"key": "k", "version": "v1"})
+	c, err := net.Dial("tcp", strings.TrimPrefix(b.srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: cache\r\n\r\n", strings.TrimPrefix(out["signed_download_url"].(string), b.srv.URL))
+	time.Sleep(time.Second)
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := io.Copy(io.Discard, resp.Body)
+	if err == nil || n == int64(len(archive)) {
+		t.Errorf("a download that was not read for a second sent %d bytes, err %v; want it cut off", n, err)
 	}
 }

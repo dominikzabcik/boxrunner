@@ -17,14 +17,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/layout"
@@ -49,8 +52,9 @@ const (
 	downloadPath = "/cache/download/"
 )
 
-// Addr is where the cache listens: the job network's gateway, which only the
-// host and the containers on that network can reach.
+// Addr is where the cache listens: the job network's gateway. The firewall
+// drops what reaches its port from any other interface, so only containers on
+// that network can reach it, not even the host.
 func Addr(gateway netip.Addr) netip.AddrPort {
 	return netip.AddrPortFrom(gateway, layout.CachePort)
 }
@@ -69,13 +73,21 @@ type Server struct {
 	Now      func() time.Time
 }
 
+// maxConns is the most connections the cache serves at once. A job's
+// actions/cache opens at most 32 for one upload; more connections wait.
+const maxConns = 256
+
+// stall is how long an upload's body or a download may stop before the
+// cache cuts it off.
+var stall = 30 * time.Second
+
 // Serve answers on l until ctx ends, sweeping the store every minute. Then
 // it gives the calls in flight ten seconds; a longer upload is cut off, and
 // its job saves no cache.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(l) }()
+	go func() { served <- srv.Serve(limit(l, maxConns)) }()
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for {
@@ -130,6 +142,7 @@ func (s *Server) claims(w http.ResponseWriter, r *http.Request, body any) (Claim
 		}
 		return Claims{}, false
 	}
+	http.NewResponseController(w).SetReadDeadline(time.Now().Add(stall))
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(body); err != nil {
 		twirpError(w, http.StatusBadRequest, "malformed", err.Error())
 		return Claims{}, false
@@ -151,7 +164,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrDenied):
 		twirpError(w, http.StatusForbidden, "permission_denied", err.Error())
 	case err != nil:
-		reply(w, map[string]any{"ok": false, "message": err.Error()})
+		reply(w, map[string]any{"ok": false, "message": s.public(err)})
 	default:
 		reply(w, map[string]any{"ok": true, "signed_upload_url": s.Base + uploadPath + capability})
 	}
@@ -174,7 +187,7 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := s.Store.Finalize(c, req.Key, req.Version, size, s.Now())
 	if err != nil {
-		reply(w, map[string]any{"ok": false, "message": err.Error()})
+		reply(w, map[string]any{"ok": false, "message": s.public(err)})
 		return
 	}
 	s.Log.Info("cache: saved", "repo", e.Repo, "scope", e.Scope, "key", e.Key, "bytes", e.Size)
@@ -216,21 +229,24 @@ func slicesContainsEmpty(keys []string) bool {
 // upload takes Azure Blob Storage's Put Blob, Put Block and Put Block List.
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	capability, q, now := r.PathValue("capability"), r.URL.Query(), s.Now()
+	// The deadline stays after the handler, so the server's read of what is
+	// left of a stalled body also stops; it sets its own for the next request.
+	body := deadline{r.Body, http.NewResponseController(w).SetReadDeadline}
 	var err error
 	switch q.Get("comp") {
 	case "":
-		err = s.Store.Put(capability, "", r.Body, now)
+		err = s.Store.Put(capability, "", body, now)
 	case "block":
 		if q.Get("blockid") == "" {
 			err = errors.New("no blockid")
 		} else {
-			err = s.Store.Put(capability, q.Get("blockid"), r.Body, now)
+			err = s.Store.Put(capability, q.Get("blockid"), body, now)
 		}
 	case "blocklist":
 		var list struct {
 			Blocks []string `xml:",any"`
 		}
-		if err = xml.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&list); err == nil {
+		if err = xml.NewDecoder(deadline{http.MaxBytesReader(w, r.Body, 4<<20), body.set}).Decode(&list); err == nil {
 			err = s.Store.Commit(capability, list.Blocks, now)
 		}
 	default:
@@ -242,7 +258,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrUnknown):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case err != nil:
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, s.public(err), http.StatusBadRequest)
 	default:
 		w.WriteHeader(http.StatusCreated)
 	}
@@ -257,7 +273,83 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("x-ms-blob-type", "BlockBlob")
-	http.ServeContent(w, r, "", e.Created, f)
+	// The server keeps a write deadline for the connection's next request,
+	// so a download is its connection's last.
+	w.Header().Set("Connection", "close")
+	http.ServeContent(w, r, "", e.Created, struct {
+		deadline
+		io.Seeker
+	}{deadline{f, http.NewResponseController(w).SetWriteDeadline}, f})
+}
+
+// deadline gives each read from r, and on a download the write of what it
+// read, stall to finish.
+type deadline struct {
+	r   io.Reader
+	set func(time.Time) error
+}
+
+func (d deadline) Read(p []byte) (int, error) {
+	d.set(time.Now().Add(stall))
+	return d.r.Read(p)
+}
+
+// public is err as a job may read it: without the box's paths, which the
+// log gets instead.
+func (s *Server) public(err error) string {
+	var path *fs.PathError
+	var link *os.LinkError
+	switch {
+	case errors.As(err, &path):
+		s.Log.Warn("cache: disk error", "err", err)
+		return path.Op + ": " + path.Err.Error()
+	case errors.As(err, &link):
+		s.Log.Warn("cache: disk error", "err", err)
+		return link.Op + ": " + link.Err.Error()
+	}
+	return err.Error()
+}
+
+// limit makes l accept at most n connections at once.
+func limit(l net.Listener, n int) net.Listener {
+	return &limited{Listener: l, slots: make(chan struct{}, n), closed: make(chan struct{})}
+}
+
+type limited struct {
+	net.Listener
+	slots  chan struct{}
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (l *limited) Accept() (net.Conn, error) {
+	select {
+	case l.slots <- struct{}{}:
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+	c, err := l.Listener.Accept()
+	if err != nil {
+		<-l.slots
+		return nil, err
+	}
+	return &slot{Conn: c, free: func() { <-l.slots }}, nil
+}
+
+func (l *limited) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return l.Listener.Close()
+}
+
+type slot struct {
+	net.Conn
+	once sync.Once
+	free func()
+}
+
+func (c *slot) Close() error {
+	c.once.Do(c.free)
+	return c.Conn.Close()
 }
 
 func reply(w http.ResponseWriter, v any) {
