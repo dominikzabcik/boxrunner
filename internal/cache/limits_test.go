@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -154,7 +156,7 @@ func TestFinishedEntriesDoNotChange(t *testing.T) {
 	capability := strings.TrimPrefix(u, b.srv.URL+"/cache/upload/")
 	r, w := io.Pipe()
 	done := make(chan error)
-	go func() { done <- b.store.Put(capability, "", r, b.clock()) }()
+	go func() { done <- b.store.Put(capability, "", r, -1, b.clock()) }()
 	w.Write([]byte("good"))
 	_, out := b.call(mainToken, "FinalizeCacheEntryUpload", map[string]string{"key": "k", "version": "v1", "size_bytes": "4"})
 	if want := map[string]any{"ok": false, "message": "the upload is still being written"}; !reflect.DeepEqual(out, want) {
@@ -215,7 +217,7 @@ func TestEntriesPerRepository(t *testing.T) {
 	for i := range 10001 {
 		capability, err := b.store.Reserve(c, fmt.Sprint("k", i), "v1", testTime.Add(time.Duration(i)*time.Second))
 		if err == nil {
-			err = b.store.Put(capability, "", strings.NewReader("x"), testTime)
+			err = b.store.Put(capability, "", strings.NewReader("x"), 1, testTime)
 		}
 		if err == nil {
 			_, err = b.store.Finalize(c, fmt.Sprint("k", i), "v1", 1, testTime.Add(time.Duration(i)*time.Second))
@@ -250,6 +252,77 @@ func TestJoiningCountsTowardTheCache(t *testing.T) {
 	}
 	if b.onDisk() != 400 {
 		t.Errorf("uploads take %d bytes; want 400, the joined archive", b.onDisk())
+	}
+}
+
+// kept is what the cache holds, and how many entries.
+func (b *box) kept() []int64 {
+	size, n := b.store.Size()
+	return []int64{size, int64(n)}
+}
+
+// TestWritesThatCannotFitRemoveNothing: a write larger than the cache, or
+// than the disk above its floor, fails without removing another
+// repository's entries, even when its body comes a byte at a time.
+func TestWritesThatCannotFitRemoveNothing(t *testing.T) {
+	b := newBox(t, 1000)
+	for i := range 3 {
+		b.save(otherToken, fmt.Sprint("o", i), "v1", strings.Repeat("o", 300))
+	}
+	u := b.reserve(mainToken, "big")
+	if got := b.put(u, strings.Repeat("x", 1001)); got != http.StatusBadRequest || !reflect.DeepEqual(b.kept(), []int64{900, 3}) {
+		t.Errorf("1001 bytes in a cache of 1000 = %d, leaving %v; want 400 and [900 3]", got, b.kept())
+	}
+	capability := strings.TrimPrefix(u, b.srv.URL+uploadPath)
+	bytewise := iotest.OneByteReader(strings.NewReader(strings.Repeat("x", 1001)))
+	if err := b.store.Put(capability, "", bytewise, 1001, b.clock()); !errors.Is(err, ErrNoRoom) || !reflect.DeepEqual(b.kept(), []int64{900, 3}) {
+		t.Errorf("1001 bytes one at a time = %v, leaving %v; want ErrNoRoom and [900 3]", err, b.kept())
+	}
+
+	uploading := newBox(t, 1000)
+	uploading.save(otherToken, "o", "v1", strings.Repeat("o", 300))
+	uploading.put(uploading.reserve(otherToken, "open"), strings.Repeat("o", 600))
+	capability = strings.TrimPrefix(uploading.reserve(mainToken, "k"), uploading.srv.URL+uploadPath)
+	if err := uploading.store.Put(capability, "", strings.NewReader(strings.Repeat("x", 500)), -1, uploading.clock()); !errors.Is(err, ErrNoRoom) || !reflect.DeepEqual(uploading.kept(), []int64{300, 1}) {
+		t.Errorf("500 bytes of unknown length beside another repository's 600 uploading = %v, leaving %v; want ErrNoRoom and [300 1]", err, uploading.kept())
+	}
+
+	floor := newBox(t, 1<<30)
+	for i := range 3 {
+		floor.save(otherToken, fmt.Sprint("o", i), "v1", strings.Repeat("o", 300))
+	}
+	floor.setFree(10<<30 + 500)
+	if got := floor.put(floor.reserve(mainToken, "big"), strings.Repeat("x", 5000)); got != http.StatusBadRequest || !reflect.DeepEqual(floor.kept(), []int64{900, 3}) {
+		t.Errorf("5000 bytes with 1400 above the floor = %d, leaving %v; want 400 and [900 3]", got, floor.kept())
+	}
+}
+
+// TestRepositoriesKeepTheirShare: a repository that holds the most, uploads
+// included, makes room from its own entries, and when it has none, its
+// write fails rather than remove those of a repository that holds less.
+func TestRepositoriesKeepTheirShare(t *testing.T) {
+	b := newBox(t, 1000)
+	b.save(otherToken, "o1", "v1", strings.Repeat("o", 200))
+	b.save(otherToken, "o2", "v1", strings.Repeat("o", 200))
+	if got := b.put(b.reserve(mainToken, "big"), strings.Repeat("x", 700)); got != http.StatusBadRequest || !reflect.DeepEqual(b.kept(), []int64{400, 2}) {
+		t.Errorf("700 bytes beside another repository's 400 = %d, leaving %v; want 400 and [400 2]", got, b.kept())
+	}
+
+	fair := newBox(t, 1000)
+	for _, key := range []string{"a", "b", "c"} {
+		fair.save(mainToken, key, "v1", strings.Repeat(key, 300))
+		fair.advance(time.Minute)
+	}
+	fair.save(otherToken, "d", "v1", strings.Repeat("d", 100))
+	fair.save(mainToken, "e", "v1", strings.Repeat("e", 300))
+	var kept []string
+	for _, c := range []struct{ token, key string }{{mainToken, "a"}, {mainToken, "b"}, {mainToken, "c"}, {mainToken, "e"}, {otherToken, "d"}} {
+		if got, _ := fair.restore(c.token, c.key, "v1"); got != "" {
+			kept = append(kept, got)
+		}
+	}
+	if want := []string{"b", "c", "e", "d"}; !reflect.DeepEqual(kept, want) {
+		t.Errorf("kept %v; want %v: the repository over its share gives up its own oldest", kept, want)
 	}
 }
 

@@ -196,8 +196,10 @@ func (s *Store) Reserve(c Claims, key, version string, now time.Time) (string, e
 
 // Put writes an upload's archive at once, or with block set, one block of
 // it. It writes into a new file and puts it in place when the body ends, so
-// a write that fails leaves the upload as it was.
-func (s *Store) Put(capability, block string, body io.Reader, now time.Time) error {
+// a write that fails leaves the upload as it was. size is the body's
+// length, or -1 when unknown; a body that could not fit even with every
+// entry gone is refused before it is read.
+func (s *Store) Put(capability, block string, body io.Reader, size int64, now time.Time) error {
 	name := "archive"
 	if block != "" {
 		if len(block) > 128 {
@@ -205,7 +207,7 @@ func (s *Store) Put(capability, block string, body io.Reader, now time.Time) err
 		}
 		name = blockFile(block)
 	}
-	u, err := s.begin(capability, name, now)
+	u, err := s.begin(capability, name, size, now)
 	if err != nil {
 		return err
 	}
@@ -234,8 +236,8 @@ func (s *Store) Put(capability, block string, body io.Reader, now time.Time) err
 	return nil
 }
 
-// begin counts a write of the file name into an upload.
-func (s *Store) begin(capability, name string, now time.Time) (*upload, error) {
+// begin counts a write of the file name, of size bytes, into an upload.
+func (s *Store) begin(capability, name string, size int64, now time.Time) (*upload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.uploads[capability]
@@ -247,6 +249,9 @@ func (s *Store) begin(capability, name string, now time.Time) (*upload, error) {
 	}
 	if _, ok := u.files[name]; !ok && len(u.files)+u.writes >= maxBlocks {
 		return nil, fmt.Errorf("an upload holds at most %d blocks", maxBlocks)
+	}
+	if size > 0 && !s.fits(size) {
+		return nil, ErrNoRoom
 	}
 	u.writes++
 	u.last = now
@@ -515,10 +520,15 @@ func (s *Store) Size() (int64, int) {
 
 // room gives up entries until need more bytes for repo fit within Max and
 // above Floor, and says whether they do. Each entry it gives up is the least
-// recently used of the repository that holds the most, counting its uploads
-// and need, so a repository makes room from its own entries before those of
-// a repository that holds less. The caller holds mu.
+// recently used of the repository that holds the most, counting uploads and
+// need, with repo first among equals, so a repository makes room from its own
+// entries before those of a repository that holds less. When that is repo
+// with no entries left, or need could not fit with every entry gone, it gives
+// up nothing more. The caller holds mu.
 func (s *Store) room(repo string, need int64) bool {
+	if need > 0 && !s.fits(need) {
+		return false
+	}
 	for {
 		free, err := s.Free()
 		if err != nil {
@@ -527,9 +537,6 @@ func (s *Store) room(repo string, need int64) bool {
 		if s.size+s.open+need <= s.Max && free-need >= s.Floor {
 			return true
 		}
-		if len(s.entries) == 0 {
-			return false
-		}
 		held := map[string]int64{repo: need}
 		for _, e := range s.entries {
 			held[e.Repo] += e.Size
@@ -537,14 +544,25 @@ func (s *Store) room(repo string, need int64) bool {
 		for _, u := range s.uploads {
 			held[u.Repo] += u.bytes
 		}
-		top := ""
+		top := repo
 		for _, e := range s.entries {
-			if top == "" || held[e.Repo] > held[top] {
+			if held[e.Repo] > held[top] {
 				top = e.Repo
 			}
 		}
-		s.remove(s.oldest(func(e *Entry) bool { return e.Repo == top }))
+		oldest := s.oldest(func(e *Entry) bool { return e.Repo == top })
+		if oldest == nil {
+			return false
+		}
+		s.remove(oldest)
 	}
+}
+
+// fits says whether need more bytes would fit with every entry given up. The
+// caller holds mu.
+func (s *Store) fits(need int64) bool {
+	free, err := s.Free()
+	return err == nil && s.open+need <= s.Max && free+s.size-need >= s.Floor
 }
 
 // oldest is the least recently used entry that keep is true for. The caller

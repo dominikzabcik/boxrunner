@@ -235,12 +235,12 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch q.Get("comp") {
 	case "":
-		err = s.Store.Put(capability, "", body, now)
+		err = s.Store.Put(capability, "", body, r.ContentLength, now)
 	case "block":
 		if q.Get("blockid") == "" {
 			err = errors.New("no blockid")
 		} else {
-			err = s.Store.Put(capability, q.Get("blockid"), body, now)
+			err = s.Store.Put(capability, q.Get("blockid"), body, r.ContentLength, now)
 		}
 	case "blocklist":
 		var list struct {
