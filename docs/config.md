@@ -155,7 +155,7 @@ The cache also holds these limits:
 - 10,000 entries per repository; a new one removes the repository's least recently restored.
 - 16 uploads in progress per repository and 64 in all. An upload is dropped after ten minutes without a write.
 - 4,000 blocks per upload: 125 GiB with `actions/cache`'s 32 MiB blocks.
-- 256 connections at once; more wait. An upload's body or a download that stops for 30 seconds is cut off.
+- 256 connections at once, and 64 from one container: more wait, and a container's 65th is closed. A request's body or a download that stops for 30 seconds is cut off, whether or not the cache reads the body.
 
 When the cache does not answer within two seconds as an action starts, such as while the agent is stopped, that action talks to GitHub as it would without the cache. A failed cache call is only a warning in `actions/cache`. An artifact upload or download that is in progress when the agent stops can fail its step, since the cache passes those calls on: on stop, the agent keeps the cache serving until its other work is done and gives calls in flight ten seconds. To restart or upgrade the agent with no such risk, drain the box first ([upgrading](upgrading.md#rebooting-the-box)).
 

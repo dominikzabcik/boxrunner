@@ -527,29 +527,74 @@ func TestErrorsLeaveOutTheBoxsPaths(t *testing.T) {
 	}
 }
 
+// serve runs the cache's Serve on a listener whose nth connection, from 1,
+// comes from the address addr gives, and returns the listener's address.
+func (b *box) serve(addr func(n int) string) string {
+	b.t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	srv := &Server{Store: b.store, Keys: b.server.Keys, Upstream: b.server.Upstream, Log: b.server.Log, Now: b.clock}
+	go srv.Serve(b.t.Context(), &from{Listener: l, addr: addr})
+	return l.Addr().String()
+}
+
+type from struct {
+	net.Listener
+	addr func(n int) string
+	n    int
+}
+
+func (l *from) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.n++
+	return remote{c, &net.TCPAddr{IP: net.ParseIP(l.addr(l.n)), Port: 40000}}, nil
+}
+
+type remote struct {
+	net.Conn
+	addr net.Addr
+}
+
+func (c remote) RemoteAddr() net.Addr { return c.addr }
+
+// ask sends a request for the upstream's address on a new connection to
+// addr and returns the connection and the answer's status, or the error.
+func ask(t *testing.T, addr string) (net.Conn, int, error) {
+	t.Helper()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: cache\r\n\r\n", UpstreamPath)
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	c.SetReadDeadline(time.Time{})
+	if err != nil {
+		return c, 0, err
+	}
+	return c, resp.StatusCode, nil
+}
+
 // TestConnections: the cache serves 256 connections at once; the next waits
 // for one of them to close.
 func TestConnections(t *testing.T) {
 	b := newBox(t, 1<<20)
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &Server{Store: b.store, Keys: b.server.Keys, Upstream: b.server.Upstream, Log: b.server.Log, Now: b.clock}
-	go srv.Serve(t.Context(), l)
+	addr := b.serve(func(n int) string { return fmt.Sprint("10.0.0.", n%8) })
 	var held []net.Conn
 	for range 256 {
-		c, err := net.Dial("tcp", l.Addr().String())
+		c, _, err := ask(t, addr)
 		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: cache\r\n\r\n", UpstreamPath)
-		if _, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil {
 			t.Fatal(err)
 		}
 		held = append(held, c)
 	}
-	next, err := net.Dial("tcp", l.Addr().String())
+	next, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,5 +671,123 @@ func TestStalledDownloadsAreCut(t *testing.T) {
 	n, err := io.Copy(io.Discard, resp.Body)
 	if err == nil || n == int64(len(archive)) {
 		t.Errorf("a download that was not read for a second sent %d bytes, err %v; want it cut off", n, err)
+	}
+}
+
+// TestConnectionsPerAddress: one address, a job's container, gets 64 of the
+// cache's connections; its next is closed while other addresses are served.
+func TestConnectionsPerAddress(t *testing.T) {
+	b := newBox(t, 1<<20)
+	addr := b.serve(func(n int) string {
+		if n <= 65 {
+			return "10.0.0.1"
+		}
+		return "10.0.0.2"
+	})
+	for i := range 64 {
+		if _, status, err := ask(t, addr); status != http.StatusOK {
+			t.Fatalf("connection %d = %d %v", i+1, status, err)
+		}
+	}
+	if _, status, err := ask(t, addr); err == nil {
+		t.Errorf("a 65th connection from one address = %d; want it closed", status)
+	}
+	if _, status, err := ask(t, addr); status != http.StatusOK {
+		t.Errorf("a connection from another address = %d %v; want 200", status, err)
+	}
+}
+
+// TestUnreadBodiesAreCut: a request whose body the cache does not read is
+// answered once the rest of its body stalls, so it cannot hold its
+// connection.
+func TestUnreadBodiesAreCut(t *testing.T) {
+	shortStall(t)
+	b := newBox(t, 1<<20)
+	for _, c := range []struct {
+		request string
+		want    int
+	}{
+		{"GET /cache/download/unknown HTTP/1.1\r\nHost: cache\r\nTransfer-Encoding: chunked\r\n\r\n", http.StatusNotFound},
+		{"POST " + twirp + "CreateCacheEntry HTTP/1.1\r\nHost: cache\r\nContent-Length: 1000\r\n\r\n{", http.StatusUnauthorized},
+		{"PUT /cache/upload/unknown HTTP/1.1\r\nHost: cache\r\nContent-Length: 1000\r\n\r\nab", http.StatusNotFound},
+		{"GET " + UpstreamPath + " HTTP/1.1\r\nHost: cache\r\nContent-Length: 1000\r\n\r\nab", http.StatusOK},
+	} {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(b.srv.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(conn, c.request)
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		conn.Close()
+		line, _, _ := strings.Cut(c.request, "\r\n")
+		if err != nil {
+			t.Errorf("%s with its body unread: no answer in 3 s: %v", line, err)
+		} else if resp.StatusCode != c.want {
+			t.Errorf("%s with its body unread = %d; want %d", line, resp.StatusCode, c.want)
+		}
+	}
+}
+
+// TestUnreadBodiesFreeTheirConnections: once the cache's connections all
+// hold a request with an unread body, a new request is answered after the
+// stall.
+func TestUnreadBodiesFreeTheirConnections(t *testing.T) {
+	shortStall(t)
+	b := newBox(t, 1<<20)
+	addr := b.serve(func(n int) string { return fmt.Sprint("10.0.0.", n%8) })
+	for range maxConns {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		fmt.Fprint(c, "PUT /cache/upload/unknown HTTP/1.1\r\nHost: cache\r\nContent-Length: 1000\r\n\r\nab")
+	}
+	time.Sleep(time.Second)
+	if _, status, err := ask(t, addr); status != http.StatusOK {
+		t.Errorf("a request after 256 with unread bodies = %d %v; want 200", status, err)
+	}
+}
+
+// TestPassedOnCallsOutlastTheStall: a call the cache passes on to GitHub
+// may send its body in pieces, or have none, and wait for GitHub longer than
+// the stall.
+func TestPassedOnCallsOutlastTheStall(t *testing.T) {
+	shortStall(t)
+	b := newBox(t, 1<<20)
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		time.Sleep(time.Second)
+		fmt.Fprintf(w, "%s %s", r.Method, body)
+	}))
+	defer github.Close()
+	b.server.Upstream, _ = url.Parse(github.URL)
+	pieces, w := io.Pipe()
+	go func() {
+		for _, piece := range []string{"one ", "two ", "three ", "four"} {
+			w.Write([]byte(piece))
+			time.Sleep(150 * time.Millisecond)
+		}
+		w.Close()
+	}()
+	for _, c := range []struct {
+		method string
+		body   io.Reader
+		want   string
+	}{
+		{http.MethodPost, pieces, "POST one two three four"},
+		{http.MethodGet, nil, "GET "},
+	} {
+		req, _ := http.NewRequest(c.method, b.srv.URL+"/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact", c.body)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != c.want {
+			t.Errorf("a slow call passed on = %d %q; want 200 and %q", resp.StatusCode, body, c.want)
+		}
 	}
 }
