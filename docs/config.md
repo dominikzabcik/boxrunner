@@ -148,7 +148,14 @@ Entries follow GitHub's rules ([GitHub's docs](https://docs.github.com/en/action
 - **Write once.** An entry with the same key and version stays as the first job saved it.
 - **Matching.** The key itself, then the newest entry whose key starts with it, then the newest entry for each restore key in turn.
 
-The cache keeps its entries within `cache`, removing the least recently restored ones first. While the filesystem that holds `/var/lib/boxrunner/cache` has less free space than `disk_floor`, it removes entries until the space is back, or until none are left, and saves nothing new, so it never holds jobs off the disk. A single archive larger than `cache` is not saved.
+Entries and the uploads in progress together stay within `cache`, and the cache stops writing before the filesystem that holds `/var/lib/boxrunner/cache` has less than `disk_floor` free. An upload counts as it is written, and joining its blocks counts the block being copied. When a write does not fit, the cache removes the least recently restored entry of the repository that holds the most, uploads included, so a repository's saves remove its own entries before those of a repository that holds less. A write that still does not fit fails, and so does the save. While free space is below `disk_floor`, because jobs took it, the cache removes entries until the space is back, or until none are left, and drops the uploads in progress, so it gives the disk back to jobs.
+
+The cache also holds these limits:
+
+- 10,000 entries per repository; a new one removes the repository's least recently restored.
+- 16 uploads in progress per repository and 64 in all. An upload is dropped after ten minutes without a write.
+- 4,000 blocks per upload: 125 GiB with `actions/cache`'s 32 MiB blocks.
+- 256 connections at once; more wait. An upload's body or a download that stops for 30 seconds is cut off.
 
 When the cache does not answer within two seconds as an action starts, such as while the agent is stopped, that action talks to GitHub as it would without the cache. A failed cache call is only a warning in `actions/cache`. An artifact upload or download that is in progress when the agent stops can fail its step, since the cache passes those calls on: on stop, the agent keeps the cache serving until its other work is done and gives calls in flight ten seconds. To restart or upgrade the agent with no such risk, drain the box first ([upgrading](upgrading.md#rebooting-the-box)).
 
