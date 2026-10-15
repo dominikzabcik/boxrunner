@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +48,9 @@ type Claims struct {
 
 // Keys checks runtime tokens against the issuer's published keys. It reads
 // them when it sees an unknown key id or its copy is an hour old, at most
-// once a minute.
+// once a minute, and after a failed read waits twice as long as before, up
+// to ten minutes. One call reads at a time; meanwhile the others use the
+// keys at hand, or wait when they have none for the token.
 type Keys struct {
 	URL    string
 	Issuer string
@@ -55,9 +58,14 @@ type Keys struct {
 	// Log, when set, hears when the keys cannot be read.
 	Log *slog.Logger
 
-	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey
-	fetched time.Time
+	mu   sync.Mutex
+	keys map[string]*rsa.PublicKey
+	// read is when the keys were read, and next the earliest the next read
+	// may start.
+	read, next time.Time
+	failures   int
+	// reading is closed when the read in progress ends.
+	reading chan struct{}
 }
 
 // ErrToken means the token is missing, malformed, expired or not signed by
@@ -99,6 +107,7 @@ func (k *Keys) Verify(ctx context.Context, token string, now time.Time) (Claims,
 		Nbf  int64           `json:"nbf"`
 		Repo json.RawMessage `json:"repository_id"`
 		AC   string          `json:"ac"`
+		Scp  string          `json:"scp"`
 	}
 	if err := decodePart(parts[1], &claims); err != nil {
 		return Claims{}, err
@@ -111,6 +120,10 @@ func (k *Keys) Verify(ctx context.Context, token string, now time.Time) (Claims,
 		return Claims{}, fmt.Errorf("%w: expired", ErrToken)
 	case now.Add(leeway).Before(time.Unix(claims.Nbf, 0)):
 		return Claims{}, fmt.Errorf("%w: not valid yet", ErrToken)
+	// The issuer also signs OIDC ID tokens, which are not for the results
+	// service.
+	case !slices.ContainsFunc(strings.Fields(claims.Scp), func(s string) bool { return strings.Split(s, ":")[0] == "Actions.Results" }):
+		return Claims{}, fmt.Errorf("%w: no Actions.Results scope", ErrToken)
 	}
 	var c Claims
 	// GitHub writes the id as a string; a number would mean the same.
@@ -137,26 +150,49 @@ func decodePart(part string, v any) error {
 
 func (k *Keys) key(ctx context.Context, kid string, now time.Time) (*rsa.PublicKey, error) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
-	key, ok := k.keys[kid]
-	if (!ok || now.Sub(k.fetched) > time.Hour) && now.Sub(k.fetched) > time.Minute {
-		keys, err := k.fetch(ctx)
-		if err != nil {
-			if k.Log != nil {
-				k.Log.Warn("cache: reading the token issuer's keys", "url", k.URL, "err", err)
+	for {
+		key, ok := k.keys[kid]
+		due := (!ok || now.Sub(k.read) > time.Hour) && !now.Before(k.next)
+		if due && k.reading == nil {
+			k.reading = make(chan struct{})
+			k.mu.Unlock()
+			keys, err := k.fetch(context.WithoutCancel(ctx))
+			k.mu.Lock()
+			close(k.reading)
+			k.reading = nil
+			if err != nil {
+				k.failures++
+				k.next = now.Add(min(time.Minute<<min(k.failures-1, 4), 10*time.Minute))
+				if k.Log != nil {
+					k.Log.Warn("cache: reading the token issuer's keys", "url", k.URL, "err", err)
+				}
+			} else {
+				k.keys, k.read, k.next, k.failures = keys, now, now.Add(time.Minute), 0
 			}
-			if ok {
-				return key, nil
-			}
-			return nil, errors.New("the token issuer's keys cannot be read")
+			continue
 		}
-		k.keys, k.fetched = keys, now
-		key, ok = keys[kid]
+		if due && !ok {
+			reading := k.reading
+			k.mu.Unlock()
+			select {
+			case <-reading:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			k.mu.Lock()
+			continue
+		}
+		var err error
+		switch {
+		case ok:
+		case k.keys == nil || k.failures > 0:
+			err = errors.New("the token issuer's keys cannot be read")
+		default:
+			err = fmt.Errorf("%w: unknown key %q", ErrToken, kid)
+		}
+		k.mu.Unlock()
+		return key, err
 	}
-	if !ok {
-		return nil, fmt.Errorf("%w: unknown key %q", ErrToken, kid)
-	}
-	return key, nil
 }
 
 func (k *Keys) fetch(ctx context.Context) (map[string]*rsa.PublicKey, error) {

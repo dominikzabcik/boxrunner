@@ -61,9 +61,12 @@ func runtimeToken(repo string, scopes ...string) string {
 	b, _ := json.Marshal(ac)
 	return sign(testKey, "k1", map[string]any{
 		"iss": Issuer, "nbf": testTime.Add(-time.Minute).Unix(), "exp": testTime.Add(6 * time.Hour).Unix(),
-		"repository_id": repo, "ac": string(b),
+		"repository_id": repo, "ac": string(b), "scp": resultsScope,
 	})
 }
+
+// resultsScope is the scp claim of a job's runtime token.
+const resultsScope = "Actions.GenericRead:00000000-0000-0000-0000-000000000000 Actions.Results:4b1c9a4e-1d2f-4c3b-9f0e-5a6b7c8d9e0f:0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 
 var (
 	mainToken  = runtimeToken("100", "refs/heads/main:3")
@@ -335,7 +338,7 @@ func TestTokens(t *testing.T) {
 	other := mustKey()
 	claims := func(change func(map[string]any)) map[string]any {
 		c := map[string]any{"iss": Issuer, "nbf": testTime.Add(-time.Minute).Unix(), "exp": testTime.Add(time.Hour).Unix(),
-			"repository_id": "100", "ac": `[{"Scope":"refs/heads/main","Permission":3}]`}
+			"repository_id": "100", "ac": `[{"Scope":"refs/heads/main","Permission":3}]`, "scp": resultsScope}
 		change(c)
 		return c
 	}
@@ -351,6 +354,8 @@ func TestTokens(t *testing.T) {
 		"unsigned":          {none, `invalid runtime token: algorithm "none"`},
 		"not a token":       {"abc", "invalid runtime token: not a JWT"},
 		"an unknown key id": {sign(testKey, "k9", claims(func(map[string]any) {})), `invalid runtime token: unknown key "k9"`},
+		// An OIDC ID token comes from the same issuer and keys.
+		"not for the results service": {sign(testKey, "k1", claims(func(c map[string]any) { c["scp"] = "Actions.GenericRead:x" })), "invalid runtime token: no Actions.Results scope"},
 	} {
 		status, out := b.call(c.token, "GetCacheEntryDownloadURL", map[string]any{"key": "k", "version": "v1"})
 		if status != http.StatusUnauthorized || out["msg"] != c.msg {
@@ -368,7 +373,7 @@ func TestKeysRefreshForANewKeyID(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys["k2"] = &newKey.PublicKey
-	token := sign(newKey, "k2", map[string]any{"iss": Issuer, "exp": testTime.Add(time.Hour).Unix(), "repository_id": "100", "ac": `[{"Scope":"refs/heads/main","Permission":1}]`})
+	token := sign(newKey, "k2", map[string]any{"iss": Issuer, "exp": testTime.Add(time.Hour).Unix(), "repository_id": "100", "ac": `[{"Scope":"refs/heads/main","Permission":1}]`, "scp": resultsScope})
 	if _, err := k.Verify(t.Context(), token, testTime.Add(30*time.Second)); err == nil {
 		t.Errorf("a new key id within a minute of the last read verified")
 	}
