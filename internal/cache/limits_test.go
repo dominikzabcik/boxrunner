@@ -252,3 +252,21 @@ func TestJoiningCountsTowardTheCache(t *testing.T) {
 		t.Errorf("uploads take %d bytes; want 400, the joined archive", b.onDisk())
 	}
 }
+
+// TestBlockListAfterAWholeUpload: blocks committed over an archive sent at
+// once replace it.
+func TestBlockListAfterAWholeUpload(t *testing.T) {
+	b := newBox(t, 1<<20)
+	u := b.reserve(mainToken, "k")
+	b.put(u, "old")
+	b.put(u+"?comp=block&blockid=a", "newdata")
+	if got := b.put(u+"?comp=blocklist", "<BlockList><Latest>a</Latest></BlockList>"); got != http.StatusCreated {
+		t.Fatalf("block list = %d", got)
+	}
+	if _, out := b.call(mainToken, "FinalizeCacheEntryUpload", map[string]string{"key": "k", "version": "v1", "size_bytes": "7"}); out["ok"] != true {
+		t.Fatalf("finalize = %v", out)
+	}
+	if _, archive := b.restore(mainToken, "k", "v1"); archive != "newdata" {
+		t.Errorf("restored %q; want newdata", archive)
+	}
+}

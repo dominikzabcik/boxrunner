@@ -324,7 +324,7 @@ func (s *Store) Commit(capability string, blocks []string, now time.Time) error 
 		return err
 	}
 	for name := range u.files {
-		if !slices.Contains(names, name) {
+		if name != "archive" && !slices.Contains(names, name) {
 			os.Remove(filepath.Join(u.dir, name))
 		}
 	}
