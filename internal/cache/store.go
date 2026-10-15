@@ -3,6 +3,7 @@ package cache
 import (
 	"cmp"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -19,10 +20,20 @@ import (
 
 const (
 	// uploadIdle is how long an upload may wait between blocks.
-	uploadIdle = time.Hour
+	uploadIdle = 10 * time.Minute
 	// downloadFor is how long a download URL works.
 	downloadFor = time.Hour
 	maxKey      = 512
+	// maxBlocks is the most blocks an upload holds. actions/cache sends
+	// blocks of 32 MiB, so 4,000 make 125 GiB; each block is a file.
+	maxBlocks = 4000
+	// maxUploads and maxRepoUploads are the most uploads in progress, in all
+	// and for one repository. actions/cache keeps one open per save step.
+	maxUploads     = 64
+	maxRepoUploads = 16
+	// maxEntries is the most entries a repository keeps, so a lookup stays
+	// quick.
+	maxEntries = 10000
 )
 
 var (
@@ -35,6 +46,12 @@ var (
 	ErrFull = errors.New("the box is short of disk; nothing is cached")
 	// ErrUnknown means a capability expired or never existed.
 	ErrUnknown = errors.New("unknown or expired URL")
+	// ErrNoRoom means a write would take the cache past Max, or the disk
+	// below Floor, even with every entry it may give up gone.
+	ErrNoRoom = errors.New("the cache has no room for this archive")
+
+	errWriting = errors.New("the upload is still being written")
+	errJoining = errors.New("the upload's blocks are being joined")
 )
 
 // Entry is one cached archive. Its scope is the ref that wrote it.
@@ -56,6 +73,15 @@ type upload struct {
 	Entry
 	dir  string
 	last time.Time
+	// files are the sizes of the upload's finished files: its archive and
+	// its blocks.
+	files map[string]int64
+	// bytes is what the upload takes on disk, its writes in progress
+	// included.
+	bytes int64
+	// writes counts the writes in progress, or is -1 while the blocks are
+	// joined into the archive.
+	writes int
 }
 
 type download struct {
@@ -65,18 +91,22 @@ type download struct {
 
 // Store keeps entries in Dir, each an archive named by a random id with its
 // Entry beside it as JSON, and holds the uploads in progress and the download
-// URLs it handed out. It keeps the archives within Max bytes and gives up the
-// least recently used ones while Free reports less than Floor.
+// URLs it handed out. Entries and uploads together stay within Max bytes and
+// above Floor free bytes: to make room, the store gives up the least recently
+// used entry of the repository that holds the most, and a write that still
+// does not fit is refused.
 type Store struct {
 	Dir   string
 	Max   int64
 	Floor int64
 	Free  func() (int64, error)
 
-	mu        sync.Mutex
-	entries   map[string]*Entry
-	size      int64
-	uploads   map[string]*upload
+	mu      sync.Mutex
+	entries map[string]*Entry
+	size    int64
+	uploads map[string]*upload
+	// open is what the uploads take.
+	open      int64
 	downloads map[string]download
 }
 
@@ -138,13 +168,21 @@ func (s *Store) Reserve(c Claims, key, version string, now time.Time) (string, e
 			return "", ErrExists
 		}
 	}
+	repoUploads := 0
 	for _, u := range s.uploads {
 		if same(u.Entry, want) {
 			return "", ErrExists
 		}
+		if u.Repo == c.Repo {
+			repoUploads++
+		}
 	}
-	s.evict()
-	if free, err := s.Free(); err != nil || free < s.Floor {
+	switch {
+	case len(s.uploads) >= maxUploads:
+		return "", fmt.Errorf("the cache has %d uploads in progress, the most it takes", maxUploads)
+	case repoUploads >= maxRepoUploads:
+		return "", fmt.Errorf("this repository has %d uploads in progress, the most the cache takes", maxRepoUploads)
+	case !s.room("", 0):
 		return "", ErrFull
 	}
 	capability := token()
@@ -152,75 +190,196 @@ func (s *Store) Reserve(c Claims, key, version string, now time.Time) (string, e
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
 	}
-	s.uploads[capability] = &upload{Entry: want, dir: dir, last: now}
+	s.uploads[capability] = &upload{Entry: want, dir: dir, last: now, files: map[string]int64{}}
 	return capability, nil
 }
 
 // Put writes an upload's archive at once, or with block set, one block of
-// it. Each write may hold at most Max bytes.
+// it. It writes into a new file and puts it in place when the body ends, so
+// a write that fails leaves the upload as it was.
 func (s *Store) Put(capability, block string, body io.Reader, now time.Time) error {
 	name := "archive"
 	if block != "" {
 		if len(block) > 128 {
 			return fmt.Errorf("block id longer than 128 characters")
 		}
-		name = "block-" + hex.EncodeToString([]byte(block))
+		name = blockFile(block)
 	}
-	u, err := s.touch(capability, now)
+	u, err := s.begin(capability, name, now)
 	if err != nil {
 		return err
 	}
-	f, err := os.Create(filepath.Join(u.dir, name))
+	w := &budget{s: s, u: u}
+	tmp, err := os.CreateTemp(u.dir, "write-")
+	if err == nil {
+		w.f = tmp
+		_, err = io.Copy(w, body)
+		err = errors.Join(err, tmp.Close())
+		if err == nil {
+			err = os.Rename(tmp.Name(), filepath.Join(u.dir, name))
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u.writes--
 	if err != nil {
+		if tmp != nil {
+			os.Remove(tmp.Name())
+		}
+		s.release(u, w.n)
 		return err
 	}
-	n, err := io.Copy(f, io.LimitReader(body, s.Max+1))
-	if err == nil && n > s.Max {
-		err = fmt.Errorf("the archive is larger than the cache's %d bytes", s.Max)
-	}
-	return errors.Join(err, f.Close())
+	s.release(u, u.files[name])
+	u.files[name] = w.n
+	return nil
 }
 
-// Commit joins an upload's blocks in the order given into its archive.
-func (s *Store) Commit(capability string, blocks []string, now time.Time) error {
-	u, err := s.touch(capability, now)
-	if err != nil {
-		return err
-	}
-	archive, err := os.Create(filepath.Join(u.dir, "archive"))
-	if err != nil {
-		return err
-	}
-	var total int64
-	for _, b := range blocks {
-		path := filepath.Join(u.dir, "block-"+hex.EncodeToString([]byte(b)))
-		f, err := os.Open(path)
-		if err != nil {
-			archive.Close()
-			return fmt.Errorf("block %q was not uploaded", b)
-		}
-		n, err := io.Copy(archive, f)
-		f.Close()
-		if total += n; err == nil && total > s.Max {
-			err = fmt.Errorf("the archive is larger than the cache's %d bytes", s.Max)
-		}
-		if err != nil {
-			archive.Close()
-			return err
-		}
-	}
-	return archive.Close()
-}
-
-func (s *Store) touch(capability string, now time.Time) (*upload, error) {
+// begin counts a write of the file name into an upload.
+func (s *Store) begin(capability, name string, now time.Time) (*upload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.uploads[capability]
 	if !ok {
 		return nil, ErrUnknown
 	}
+	if u.writes < 0 {
+		return nil, errJoining
+	}
+	if _, ok := u.files[name]; !ok && len(u.files)+u.writes >= maxBlocks {
+		return nil, fmt.Errorf("an upload holds at most %d blocks", maxBlocks)
+	}
+	u.writes++
 	u.last = now
 	return u, nil
+}
+
+// budget writes to f only what the store has room for, and counts it.
+type budget struct {
+	s *Store
+	u *upload
+	f *os.File
+	n int64
+}
+
+func (w *budget) Write(p []byte) (int, error) {
+	if err := w.s.grow(w.u, int64(len(p))); err != nil {
+		return 0, err
+	}
+	w.n += int64(len(p))
+	return w.f.Write(p)
+}
+
+func (s *Store) grow(u *upload, n int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.room(u.Repo, n) {
+		return ErrNoRoom
+	}
+	u.bytes += n
+	s.open += n
+	return nil
+}
+
+// release gives up n bytes of an upload. The caller holds mu.
+func (s *Store) release(u *upload, n int64) {
+	u.bytes -= n
+	s.open -= n
+}
+
+// Commit joins an upload's blocks in the order given into its archive and
+// deletes each block once it is in, so the upload takes at most one block
+// more than its size, and that block counts toward Max. Blocks the list
+// leaves out are deleted. A list that fails while the blocks are joined ends
+// the upload.
+func (s *Store) Commit(capability string, blocks []string, now time.Time) error {
+	s.mu.Lock()
+	u, ok := s.uploads[capability]
+	if !ok {
+		s.mu.Unlock()
+		return ErrUnknown
+	}
+	names := make([]string, len(blocks))
+	sizes := make([]int64, len(blocks))
+	for i, b := range blocks {
+		names[i] = blockFile(b)
+		var ok bool
+		if sizes[i], ok = u.files[names[i]]; !ok || slices.Contains(names[:i], names[i]) {
+			s.mu.Unlock()
+			return fmt.Errorf("block %q was not uploaded or is listed twice", b)
+		}
+	}
+	if u.writes != 0 {
+		s.mu.Unlock()
+		return errWriting
+	}
+	u.writes, u.last = -1, now
+	s.mu.Unlock()
+
+	size, err := s.join(u, names, sizes)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u.writes = 0
+	if err != nil {
+		s.drop(capability)
+		return err
+	}
+	for name := range u.files {
+		if !slices.Contains(names, name) {
+			os.Remove(filepath.Join(u.dir, name))
+		}
+	}
+	s.release(u, u.bytes-size)
+	u.files = map[string]int64{"archive": size}
+	return nil
+}
+
+// join appends the blocks names, of sizes bytes, into u's archive, deleting
+// each once it is in, and returns the archive's size.
+func (s *Store) join(u *upload, names []string, sizes []int64) (int64, error) {
+	archive, err := os.CreateTemp(u.dir, "write-")
+	if err != nil {
+		return 0, err
+	}
+	defer archive.Close()
+	var size int64
+	for i, name := range names {
+		if err := s.grow(u, sizes[i]); err != nil {
+			return 0, err
+		}
+		f, err := os.Open(filepath.Join(u.dir, name))
+		if err != nil {
+			return 0, err
+		}
+		_, err = io.Copy(archive, io.LimitReader(f, sizes[i]))
+		f.Close()
+		if err == nil {
+			err = os.Remove(f.Name())
+		}
+		if err != nil {
+			return 0, err
+		}
+		s.mu.Lock()
+		s.release(u, sizes[i])
+		s.mu.Unlock()
+		size += sizes[i]
+	}
+	if err := archive.Close(); err != nil {
+		return 0, err
+	}
+	return size, os.Rename(archive.Name(), filepath.Join(u.dir, "archive"))
+}
+
+// drop ends an upload and deletes its files. The caller holds mu.
+func (s *Store) drop(capability string) {
+	u := s.uploads[capability]
+	delete(s.uploads, capability)
+	os.RemoveAll(u.dir)
+	s.release(u, u.bytes)
+}
+
+func blockFile(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return "block-" + hex.EncodeToString(sum[:])
 }
 
 // Finalize turns c's upload for key and version into an entry once its
@@ -243,11 +402,12 @@ func (s *Store) Finalize(c Claims, key, version string, size int64, now time.Tim
 	if !ok {
 		return Entry{}, ErrUnknown
 	}
-	delete(s.uploads, capability)
-	defer os.RemoveAll(u.dir)
-	info, err := os.Stat(filepath.Join(u.dir, "archive"))
-	if err != nil || info.Size() != size || size > s.Max {
-		return Entry{}, fmt.Errorf("the upload holds %d bytes, not %d", sizeOf(info), size)
+	if u.writes != 0 {
+		return Entry{}, errWriting
+	}
+	defer s.drop(capability)
+	if held, ok := u.files["archive"]; !ok || held != size {
+		return Entry{}, fmt.Errorf("the upload holds %d bytes, not %d", held, size)
 	}
 	e := u.Entry
 	e.Size, e.Created, e.used, e.id = size, now.UTC(), now, token()
@@ -259,22 +419,20 @@ func (s *Store) Finalize(c Claims, key, version string, size int64, now time.Tim
 	if err := os.Rename(filepath.Join(u.dir, "archive"), archive); err != nil {
 		return Entry{}, err
 	}
+	s.release(u, size)
+	s.size += size
 	if err := writeFile(archive+".json", meta); err != nil {
 		os.Remove(archive)
+		s.size -= size
 		return Entry{}, err
 	}
 	os.Chtimes(archive, now, now)
 	s.entries[e.id] = &e
-	s.size += e.Size
-	s.evict()
-	return e, nil
-}
-
-func sizeOf(info os.FileInfo) int64 {
-	if info == nil {
-		return 0
+	if s.count(e.Repo) > maxEntries {
+		s.remove(s.oldest(func(o *Entry) bool { return o.Repo == e.Repo }))
 	}
-	return info.Size()
+	s.room("", 0)
+	return e, nil
 }
 
 // Match finds the entry a restore gets, as GitHub's cache does: in each
@@ -329,22 +487,23 @@ func (s *Store) Download(capability string, now time.Time) (*os.File, Entry, err
 	return f, *e, err
 }
 
-// Sweep drops idle uploads and expired download URLs, then evicts.
+// Sweep drops idle uploads and expired download URLs, then makes room.
+// While the disk stays below Floor, it also drops every upload between
+// writes.
 func (s *Store) Sweep(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k, u := range s.uploads {
-		if now.Sub(u.last) > uploadIdle {
-			delete(s.uploads, k)
-			os.RemoveAll(u.dir)
-		}
-	}
 	for k, d := range s.downloads {
 		if now.After(d.expires) {
 			delete(s.downloads, k)
 		}
 	}
-	s.evict()
+	short := !s.room("", 0)
+	for k, u := range s.uploads {
+		if u.writes == 0 && (short || now.Sub(u.last) > uploadIdle) {
+			s.drop(k)
+		}
+	}
 }
 
 // Size is what the entries take, and how many there are.
@@ -354,29 +513,71 @@ func (s *Store) Size() (int64, int) {
 	return s.size, len(s.entries)
 }
 
-// evict removes the least recently used entries while they exceed Max or
-// the disk has less than Floor free. The caller holds mu.
-func (s *Store) evict() {
-	for len(s.entries) > 0 {
-		if s.size <= s.Max {
-			if free, err := s.Free(); err != nil || free >= s.Floor {
-				return
-			}
+// room gives up entries until need more bytes for repo fit within Max and
+// above Floor, and says whether they do. Each entry it gives up is the least
+// recently used of the repository that holds the most, counting its uploads
+// and need, so a repository makes room from its own entries before those of
+// a repository that holds less. The caller holds mu.
+func (s *Store) room(repo string, need int64) bool {
+	for {
+		free, err := s.Free()
+		if err != nil {
+			return false
 		}
-		var oldest *Entry
+		if s.size+s.open+need <= s.Max && free-need >= s.Floor {
+			return true
+		}
+		if len(s.entries) == 0 {
+			return false
+		}
+		held := map[string]int64{repo: need}
 		for _, e := range s.entries {
-			if oldest == nil || e.used.Before(oldest.used) {
-				oldest = e
+			held[e.Repo] += e.Size
+		}
+		for _, u := range s.uploads {
+			held[u.Repo] += u.bytes
+		}
+		top := ""
+		for _, e := range s.entries {
+			if top == "" || held[e.Repo] > held[top] {
+				top = e.Repo
 			}
 		}
-		archive := filepath.Join(s.entriesDir(), oldest.id)
-		os.Remove(archive + ".json")
-		os.Remove(archive)
-		delete(s.entries, oldest.id)
-		s.size -= oldest.Size
+		s.remove(s.oldest(func(e *Entry) bool { return e.Repo == top }))
 	}
 }
 
+// oldest is the least recently used entry that keep is true for. The caller
+// holds mu.
+func (s *Store) oldest(keep func(*Entry) bool) *Entry {
+	var oldest *Entry
+	for _, e := range s.entries {
+		if keep(e) && (oldest == nil || e.used.Before(oldest.used)) {
+			oldest = e
+		}
+	}
+	return oldest
+}
+
+// count is how many entries repo has. The caller holds mu.
+func (s *Store) count(repo string) int {
+	n := 0
+	for _, e := range s.entries {
+		if e.Repo == repo {
+			n++
+		}
+	}
+	return n
+}
+
+// remove deletes an entry. The caller holds mu.
+func (s *Store) remove(e *Entry) {
+	archive := filepath.Join(s.entriesDir(), e.id)
+	os.Remove(archive + ".json")
+	os.Remove(archive)
+	delete(s.entries, e.id)
+	s.size -= e.Size
+}
 func same(a, b Entry) bool {
 	return a.Repo == b.Repo && a.Scope == b.Scope && a.Key == b.Key && a.Version == b.Version
 }
