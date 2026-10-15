@@ -280,7 +280,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	f, e, err := s.Store.Download(r.PathValue("capability"), s.Now())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, public(err), http.StatusNotFound)
 		return
 	}
 	defer f.Close()

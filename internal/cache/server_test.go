@@ -525,6 +525,16 @@ func TestErrorsLeaveOutTheBoxsPaths(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest || string(body) != "open: not a directory\n" {
 		t.Errorf("a write the disk refuses = %d %q; want 400 and no path", resp.StatusCode, body)
 	}
+
+	b.save(mainToken, "gone", "v1", "archive")
+	_, out := b.call(mainToken, "GetCacheEntryDownloadURL", map[string]any{"key": "gone", "version": "v1"})
+	archives, _ := filepath.Glob(filepath.Join(b.store.Dir, "entries", "*"))
+	for _, archive := range archives {
+		os.Remove(archive)
+	}
+	if code, body := b.get(out["signed_download_url"].(string)); code != http.StatusNotFound || body != "open: no such file or directory\n" {
+		t.Errorf("a download of a missing archive = %d %q; want 404 and no path", code, body)
+	}
 }
 
 // serve runs the cache's Serve on a listener whose nth connection, from 1,
