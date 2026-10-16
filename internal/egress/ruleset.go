@@ -87,7 +87,8 @@ type Ruleset struct {
 }
 
 const (
-	// MaxLive is how many addresses a class may have open at once.
+	// MaxLive is how many elements a class may have open at once: an address
+	// counts once for each port it is open on, or once when open on every port.
 	MaxLive = 8192
 	// setSize is the nftables size of each set, which stays above MaxLive.
 	setSize = 65536

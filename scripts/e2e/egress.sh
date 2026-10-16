@@ -7,7 +7,9 @@
 # another DNS server, not the host, not the metadata service, not a private
 # service it does not list, and not an address that a job forges as its own
 # source. It then stops the agent and deletes the table, and the class stays
-# closed. It uses $mode, $work, $isolation, $version, expect, fail and step.
+# closed, and flushes the whole ruleset with the agent running, stopped and
+# killed: no job of the class outlives the rules. It uses $mode, $work,
+# $isolation, $version, expect, fail and step.
 
 class=boxrunner-light
 case "$mode" in
@@ -99,6 +101,7 @@ probe "$GATEWAY" 22 host-by-gateway
 probe "$VM_IP" 22 host-by-address
 probe 169.254.169.254 80 metadata
 probe "$OPEN_GATEWAY" 5000 mirror
+probe "$OPEN_GATEWAY" 5001 cache
 probe 10.20.0.2 5432 private-listed
 probe 10.20.0.2 5433 private-other-port
 if [ -n "$RESOLVER" ]; then
@@ -113,7 +116,9 @@ expect "$work/egress-job.txt" '^allowed-name 200$' '^wildcard-name 200$' '^apex-
 grep -q '^by-number-before-resolving open$' "$work/egress-job.txt" && fail "a job reached an address by number before it resolved the name"
 grep -q '^by-number-after-resolving closed$' "$work/egress-job.txt" && fail "an address of a name the job resolved is closed"
 grep -qE '^resolver-(tcp|udp) open$' "$work/egress-job.txt" && fail "a job reached the box's resolver"
-# The registry mirror is open to a class with docker = true, and nothing else of the host is.
+# The registry mirror is open to a class with docker = true, the Actions cache
+# to one with cache = true, which run.sh gives every class, and nothing else of the host is.
+expect "$work/egress-job.txt" '^cache open$'
 if [ "$mode" = docker ]; then
 	expect "$work/egress-job.txt" '^mirror open$'
 else
@@ -191,6 +196,28 @@ closed() {
 		timeout 4 bash -c "exec 3<>/dev/tcp/$DENIED_IP/443" 2>/dev/null && echo "reaches another" || echo "does not reach another"'
 }
 
+# held starts a container of the class that keeps running, as a job does.
+held() {
+	sudo docker rm -f e2e-held >/dev/null 2>&1 || true
+	sudo docker run -d --name e2e-held --network "$net" --dns "$gateway" "${runtime[@]}" boxrunner/runner:local sleep 900 >/dev/null
+}
+# gone waits up to $1 seconds for that container to be removed.
+gone() {
+	for _ in $(seq "$1"); do
+		sudo docker inspect e2e-held >/dev/null 2>&1 || return 0
+		sleep 1
+	done
+	return 1
+}
+# journal writes what the agent logged since $since to a file.
+journal() { sudo journalctl -u boxrunner.service --no-pager --since "$since" | tee "$work/$1" >/dev/null; }
+backstop() {
+	sudo nft list table inet boxrunner >/dev/null || fail "the table is not there"
+	sudo iptables-save | tee "$work/iptables-back.txt" >/dev/null
+	expect "$work/iptables-back.txt" '^-A BOXRUNNER-EGRESS-FWD -m mark ! --mark 0x10000000/0x10000000 -j DROP$' \
+		'^-A (DOCKER-USER|FORWARD) -i boxrunner-\+ -m comment --comment boxrunner -j BOXRUNNER-EGRESS-FWD$' '^-A BOXRUNNER-EGRESS -i boxrunner-[0-9a-f]+ -j DROP$'
+}
+
 step "with the agent stopped the class has no DNS and opens nothing; its rules stay"
 sudo systemctl stop boxrunner.service
 sudo nft list table inet boxrunner >/dev/null || fail "stopping the agent removed the table"
@@ -200,16 +227,73 @@ grep -q '^reaches another$' "$work/egress-down.txt" && fail "a job reached an ad
 sudo systemctl start boxrunner.service
 metrics_wait
 
-step "with the table deleted the class stays closed, and the agent puts the table back"
+step "with the table deleted the class stays closed, and the agent puts the table back and removes the job that ran without it"
+held
+since=$(date '+%F %T')
 sudo nft delete table inet boxrunner
-closed | tee "$work/egress-flushed.txt"
+# The agent removes the job within ten seconds, which may cut the probe short. It must never connect.
+# shellcheck disable=SC2016 # the container's shell expands $EXAMPLE_IPS and $DENIED_IP
+sudo docker exec -e "EXAMPLE_IPS=$example_ips" -e "DENIED_IP=$denied_ip" e2e-held bash -c '
+	for ip in $EXAMPLE_IPS; do timeout 2 bash -c "exec 3<>/dev/tcp/$ip/443" 2>/dev/null && echo "connects" || echo "does not connect"; done
+	timeout 2 bash -c "exec 3<>/dev/tcp/$DENIED_IP/443" 2>/dev/null && echo "reaches another" || echo "does not reach another"' | tee "$work/egress-flushed.txt" || true
 grep -qE '^(connects|reaches another)$' "$work/egress-flushed.txt" && fail "a job connected with the table deleted"
-for _ in $(seq 40); do
-	sudo nft list table inet boxrunner >/dev/null 2>&1 && break
-	sleep 1
-done
-sudo nft list table inet boxrunner >/dev/null 2>&1 || fail "the agent did not put the table back"
-sudo journalctl -u boxrunner.service --no-pager | tee "$work/agent-flushed.txt" >/dev/null
-expect "$work/agent-flushed.txt" 'msg="the egress rules were gone; put them back"'
+gone 30 || fail "the job that ran without the table still runs"
+backstop
+journal agent-flushed.txt
+expect "$work/agent-flushed.txt" 'msg="the egress rules were gone; put them back"' \
+	'msg="removed a job of an egress class" runner=e2e-held .*why="the egress rules were gone while it ran"'
 closed | tee "$work/egress-back.txt"
 expect "$work/egress-back.txt" '^resolves$' '^connects$' '^does not reach another$'
+
+step "a stopping agent removes the jobs of the class, so none runs without it"
+held
+since=$(date '+%F %T')
+sudo systemctl stop boxrunner.service
+gone 5 || fail "a job of the class outlived the agent"
+journal agent-stop.txt
+expect "$work/agent-stop.txt" 'msg="removed a job of an egress class" runner=e2e-held .*why="the agent is stopping"'
+
+step "with the agent stopped, nft flush ruleset removes every rule; the agent builds them again before it serves the class"
+sudo nft flush ruleset
+sudo nft list table inet boxrunner >/dev/null 2>&1 && fail "the flush left the table"
+sudo systemctl start boxrunner.service
+metrics_wait
+backstop
+
+step "a job that outlives a crash of the agent is removed when the agent starts again"
+held
+since=$(date '+%F %T')
+pid=$(systemctl show -p MainPID --value boxrunner.service)
+sudo systemctl kill -s KILL boxrunner.service
+for _ in $(seq 30); do
+	now=$(systemctl show -p MainPID --value boxrunner.service)
+	[ "$now" != 0 ] && [ "$now" != "$pid" ] && break
+	sleep 1
+done
+metrics_wait
+gone 5 || fail "a job of the class still runs after the agent started again"
+journal agent-crash.txt
+expect "$work/agent-crash.txt" 'msg="removed a job of an egress class" runner=e2e-held .*why="it ran while the agent was not running"'
+
+step "nft flush ruleset with the agent running: the agent puts the rules back and removes the job that ran without them"
+held
+since=$(date '+%F %T')
+sudo nft flush ruleset
+flushed=$(date +%s)
+# What the job reaches until then is measured, not judged, since it races the
+# agent: the flush took the host's rules too, so the agent's metrics port on
+# the class's gateway, which the rules drop, may answer.
+sudo docker exec -e "GATEWAY=$gateway" e2e-held bash -c 'timeout 3 bash -c "exec 3<>/dev/tcp/$GATEWAY/9464" 2>/dev/null && echo "host metrics after the flush: open" || echo "host metrics after the flush: closed"' || true
+gone 30 || fail "the job that ran while the rules were flushed still runs"
+echo "the job was removed $(($(date +%s) - flushed)) s after the flush"
+backstop
+journal agent-flush.txt
+expect "$work/agent-flush.txt" 'msg="the egress rules were gone; put them back"' \
+	'msg="removed a job of an egress class" runner=e2e-held .*why="the egress rules were gone while it ran"'
+
+step "Docker and the agent put back their own rules, which the flush took, and the class works again"
+sudo systemctl restart docker
+sudo systemctl restart boxrunner.service
+metrics_wait
+closed | tee "$work/egress-restored.txt"
+expect "$work/egress-restored.txt" '^resolves$' '^connects$' '^does not reach another$'

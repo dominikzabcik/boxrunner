@@ -13,8 +13,8 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 )
 
-// ErrFull means a class has MaxLive addresses open already.
-var ErrFull = errors.New("egress: the class has as many addresses open as it may")
+// ErrFull means a class has MaxLive elements open already.
+var ErrFull = errors.New("egress: the class has as many addresses and ports open as it may")
 
 // Enforcer keeps the nftables table and opens addresses in it.
 type Enforcer struct {

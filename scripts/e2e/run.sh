@@ -43,7 +43,7 @@ go build -o "$work/stub-worker" ./scripts/e2e/stub-worker
 stub=$!
 cleanup() {
 	kill $stub
-	sudo docker rm -f e2e-inner >/dev/null 2>&1
+	sudo docker rm -f e2e-inner e2e-held >/dev/null 2>&1
 	sudo ip netns pids e2e-svc 2>/dev/null | xargs -r sudo kill
 	sudo ip netns del e2e-svc 2>/dev/null
 	printf "\n### the stub Worker saw\n"
