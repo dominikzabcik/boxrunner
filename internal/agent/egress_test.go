@@ -690,6 +690,48 @@ func TestEgressFirstStart(t *testing.T) {
 	}
 }
 
+// TestEgressNewNet: a network that another tool makes after the agent
+// started is denied to the class within the guard's interval, and one that
+// goes is no longer. The chains are built again in one transaction that keeps
+// the sets, so the job and what it has open stay.
+func TestEgressNewNet(t *testing.T) {
+	host := &fakeHost{}
+	e := startEgress(t, host, map[string]*container{})
+	defer e.stop(t)
+	name := e.startJob(t)
+	deny := func(script string) string {
+		return regexp.MustCompile(`ip daddr \{ ([^}]*) \} goto blocked_`).FindStringSubmatch(script)[1]
+	}
+	first := host.applied()[0]
+	e.docker.mu.Lock()
+	e.docker.nets["octo-db"] = &fakeNet{Bridge: "br-octo", Subnet: "10.99.0.0/24", Gateway: "10.99.0.1"}
+	e.docker.mu.Unlock()
+	e.waitLog(t, `msg="the box's Docker networks changed; denied them to the egress classes" added=[10.99.0.0/24] removed=[]`)
+	scripts := host.applied()
+	if len(scripts) != 2 {
+		t.Fatalf("%d scripts applied, want the first and one for the new network", len(scripts))
+	}
+	if got, want := deny(scripts[1]), "0.0.0.0/8, 10.99.0.0/24, 100.100.100.200/32, 127.0.0.0/8, 168.63.129.16/32, 169.254.0.0/16, 172.18.0.0/16, 192.0.0.192/32, 224.0.0.0/4, 240.0.0.0/4"; got != want {
+		t.Errorf("denied %s, want %s", got, want)
+	}
+	if strings.Contains(scripts[1], "delete") || strings.Count(scripts[1], "add set") != strings.Count(first, "add set") {
+		t.Errorf("the script for the new network replaces the sets:\n%s", scripts[1])
+	}
+	e.docker.mu.Lock()
+	delete(e.docker.nets, "octo-db")
+	e.docker.mu.Unlock()
+	e.waitLog(t, `msg="the box's Docker networks changed; denied them to the egress classes" added=[] removed=[10.99.0.0/24]`)
+	if got := deny(host.applied()[2]); got != deny(first) {
+		t.Errorf("denied %s after the network went, want %s as at the start", got, deny(first))
+	}
+	if c, ok := e.docker.snapshot()[name]; !ok || c.State != "running" {
+		t.Errorf("the job %s was stopped though the table stayed", name)
+	}
+	if got := e.snapshot(t).Egress[0].Problem; got != "" {
+		t.Errorf("the class is not served: %q", got)
+	}
+}
+
 // TestEgressLeft: the network of a class that left stays closed while a job
 // the agent could not remove runs on it.
 func TestEgressLeft(t *testing.T) {

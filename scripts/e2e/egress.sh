@@ -5,8 +5,8 @@
 # and with the options the agent gives its jobs, that the class reaches what
 # it lists and nothing else: not another name, not an address by number, not
 # another DNS server, not the host, not the metadata service, not a private
-# service it does not list, and not an address that a job forges as its own
-# source. It then stops the agent and deletes the table, and the class stays
+# service it does not list, not a Docker network made after the agent
+# started, and not an address that a job forges as its own source. It then stops the agent and deletes the table, and the class stays
 # closed, and flushes the whole ruleset with the agent running, stopped and
 # killed: no job of the class outlives the rules. It uses $mode, $work,
 # $isolation, $version, expect, fail and step.
@@ -43,7 +43,7 @@ metrics_wait() {
 }
 
 step "the class $class gets an egress allowlist; the agent builds its network and rules"
-sudo sed -i "/^name = \"$class\"\$/a egress = [\"github\", \"example.com\", \"*.example.org\", \"10.20.0.0/24:5432\"]" /etc/boxrunner/config.toml
+sudo sed -i "/^name = \"$class\"\$/a egress = [\"github\", \"example.com\", \"*.example.org\", \"10.20.0.0/16:5432\"]" /etc/boxrunner/config.toml
 # install adds nft where it is missing; the agent starts the class when it restarts.
 sudo boxrunner install --worker "$worker" --token test "${flags[@]}" | tee "$work/install-egress.txt"
 command -v nft >/dev/null || fail "nft is missing after install"
@@ -128,6 +128,32 @@ fi
 step "the other class, which has no allowlist, still cannot reach the private service"
 sudo docker run --rm --network boxrunner boxrunner/runner:local bash -c 'timeout 4 bash -c "exec 3<>/dev/tcp/10.20.0.2/5432" 2>/dev/null && echo open || echo closed' | tee "$work/open-class.txt"
 expect "$work/open-class.txt" '^closed$'
+
+step "a Docker network made after the agent started is denied to the class within the guard's ten seconds"
+# Its subnet is inside the class's entry 10.20.0.0/16:5432, so only the deny list keeps the class out.
+since=$(date '+%F %T')
+sudo docker network create --subnet 10.20.9.0/24 e2e-late >/dev/null
+made=$(date +%s)
+sudo docker run -d --name e2e-late --network e2e-late --ip 10.20.9.2 boxrunner/runner:local python3 -m http.server 5432 >/dev/null
+for _ in $(seq 30); do
+	curl -fsS -o /dev/null --max-time 2 http://10.20.9.2:5432/ 2>/dev/null && break
+	sleep 0.5
+done
+curl -fsS -o /dev/null --max-time 2 http://10.20.9.2:5432/ || fail "the service on the new network does not answer from the host"
+for _ in $(seq 30); do
+	sudo nft list table inet boxrunner | grep -q '10\.20\.9\.0/24' && break
+	sleep 0.5
+done
+denied=$(($(date +%s) - made))
+echo "the new network was denied $denied s after it was made"
+sudo nft list table inet boxrunner | grep -q '10\.20\.9\.0/24' || fail "the table does not deny the network made after the agent started"
+[ "$denied" -le 12 ] || fail "the table denied the new network only after $denied s"
+job bash -c 'timeout 4 bash -c "exec 3<>/dev/tcp/10.20.9.2/5432" 2>/dev/null && echo "late-network open" || echo "late-network closed"' | tee "$work/egress-late.txt"
+expect "$work/egress-late.txt" '^late-network closed$'
+sudo journalctl -u boxrunner.service --no-pager --since "$since" | tee "$work/agent-late.txt" >/dev/null
+expect "$work/agent-late.txt" 'msg="the box.s Docker networks changed; denied them to the egress classes" added=\[10\.20\.9\.0/24\]'
+sudo docker rm -f e2e-late >/dev/null
+sudo docker network rm e2e-late >/dev/null
 
 if [ "$mode" != runc ]; then
 	step "root in a job under Sysbox changes its address to the open class's, and is still refused: the class is the bridge"

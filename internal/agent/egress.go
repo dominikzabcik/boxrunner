@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,9 @@ type egressState struct {
 	baseline map[string]uint64
 	// broken is why the rules are not in place, "" while they are.
 	broken string
+	// boxNets are the subnets of Docker's networks as the guard last listed
+	// them. The table denies them all once verifyEgress has run.
+	boxNets []netip.Prefix
 	// purge is set while jobs that ran without the table may still run. The
 	// verify lock guards it.
 	purge bool
@@ -165,12 +169,8 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 	}
 	var classes []egress.Class
 	var nets []firewall.EgressNet
-	var deny []netip.Prefix
-	for _, n := range all {
-		if subnet, ok := n.Subnet(); ok {
-			deny = append(deny, subnet)
-		}
-	}
+	deny := subnets(all, nil)
+	a.egress.boxNets = deny
 	existing := map[string]docker.Network{}
 	for _, n := range left {
 		existing[n.Labels[layout.LabelEgress]] = n
@@ -254,6 +254,22 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 			Event: func(ev dnsfwd.Event) { a.onLookup(e, ev) },
 		}
 	}
+}
+
+// subnets are the IPv4 subnets of Docker's networks and of the classes,
+// sorted.
+func subnets(all []docker.Network, classes []egress.Class) []netip.Prefix {
+	var out []netip.Prefix
+	for _, n := range all {
+		if subnet, ok := n.Subnet(); ok {
+			out = append(out, subnet)
+		}
+	}
+	for _, c := range classes {
+		out = append(out, c.Net.Subnet)
+	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
+	return slices.Compact(out)
 }
 
 // failEgress marks every configured class as not served.
@@ -691,7 +707,8 @@ func (a *Agent) egressView() []status.Egress {
 }
 
 // guardEgress puts the rules back when someone deleted them, and the
-// classes' networks.
+// classes' networks, and denies the classes the box's networks as they come
+// and go.
 func (a *Agent) guardEgress(ctx context.Context) {
 	interval := cmpDuration(a.EgressGuardEvery, 10*time.Second)
 	for tick := 1; ; tick++ {
@@ -699,6 +716,14 @@ func (a *Agent) guardEgress(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
+		}
+		if all, err := a.Docker.Networks(ctx, ""); err == nil {
+			a.egress.mu.Lock()
+			// A class's own network stays denied while checkEgressNets makes it again.
+			a.egress.boxNets = subnets(all, a.egress.ruleset.Classes)
+			a.egress.mu.Unlock()
+		} else if ctx.Err() == nil {
+			a.Log.Warn("listing Docker's networks to deny new ones to the egress classes", "err", err)
 		}
 		// The table is one command to check and the host's rules take dozens,
 		// so they are checked less often. They matter only without the table:
@@ -711,7 +736,10 @@ func (a *Agent) guardEgress(ctx context.Context) {
 }
 
 // verifyEgress makes sure the table, and with host the host's rules too, are
-// in place, and puts them back when they are not. A missing table means the
+// in place, and puts them back when they are not. When the box's networks
+// changed since the table was built, as when another tool made one, it builds
+// the classes' chains again in one transaction that keeps their sets, so
+// what jobs have open stays open. A missing table means the
 // classes' jobs ran without it, and `nft flush ruleset` takes the host's
 // backstop with it, so a job may hold a connection the rules refuse: every
 // job of an egress class is removed. While the rules cannot be put back, no
@@ -720,7 +748,7 @@ func (a *Agent) verifyEgress(ctx context.Context, host bool) error {
 	a.egress.verify.Lock()
 	defer a.egress.verify.Unlock()
 	a.egress.mu.Lock()
-	rules := a.egress.ruleset
+	rules, boxNets := a.egress.ruleset, a.egress.boxNets
 	a.egress.mu.Unlock()
 	if len(rules.Classes) == 0 {
 		return nil
@@ -728,6 +756,19 @@ func (a *Agent) verifyEgress(ctx context.Context, host bool) error {
 	whole, err := a.egress.enforcer.Verify(ctx, rules)
 	if !whole {
 		a.egress.purge, host = true, true
+	}
+	why := "the egress rules are gone and could not be put back: "
+	if err == nil && !slices.Equal(boxNets, rules.Deny) {
+		added, removed := diff(boxNets, rules.Deny), diff(rules.Deny, boxNets)
+		rules.Deny = boxNets
+		if err = a.egress.enforcer.Apply(ctx, rules); err == nil {
+			a.egress.mu.Lock()
+			a.egress.ruleset = rules
+			a.egress.mu.Unlock()
+			a.Log.Info("the box's Docker networks changed; denied them to the egress classes", "added", added, "removed", removed)
+		} else {
+			why = "the box's Docker networks changed and the egress rules could not deny them: "
+		}
 	}
 	if err == nil && host && firewall.CheckEgress(ctx, a.Run, a.hostNets()) != firewall.Current {
 		if err = firewall.ApplyEgress(ctx, a.Run, a.hostNets()); err == nil {
@@ -740,12 +781,24 @@ func (a *Agent) verifyEgress(ctx context.Context, host bool) error {
 	if a.egress.purge && a.stopEgressJobs(ctx, 0, "the egress rules were gone while it ran") == nil {
 		a.egress.purge = false
 	}
-	why := ""
-	if err != nil {
-		why = "the egress rules are gone and could not be put back: " + err.Error()
+	if err == nil {
+		why = ""
+	} else {
+		why += err.Error()
 	}
 	a.mark(&a.egress.broken, why)
 	return err
+}
+
+// diff are the prefixes of a that b does not have.
+func diff(a, b []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for _, p := range a {
+		if !slices.Contains(b, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // hostNets are the host's input rules for the bridges the table holds.
