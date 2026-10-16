@@ -39,7 +39,10 @@ type egressState struct {
 	enforcer *egress.Enforcer
 	// ruleset is what the agent last put in the table.
 	ruleset egress.Ruleset
-	ledger  *egress.Ledger
+	// verify orders the checks that put the rules back, which the guard and
+	// each runner start run.
+	verify sync.Mutex
+	ledger *egress.Ledger
 	// baseline are the packets the table had counted before this agent started.
 	baseline map[string]uint64
 }
@@ -434,21 +437,25 @@ func (a *Agent) egressView() []status.Egress {
 // closed meanwhile, since the host's rules drop what the table did not mark.
 func (a *Agent) guardEgress(ctx context.Context) {
 	interval := cmpDuration(a.EgressGuardEvery, 10*time.Second)
-	for {
+	for tick := 1; ; tick++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
 		}
-		if err := a.verifyEgress(ctx); err != nil && ctx.Err() == nil {
+		// The table is one command to check and the host's rules take dozens,
+		// and the backstop covers a gap in them, so they are checked less often.
+		if err := a.verifyEgress(ctx, tick%6 == 0); err != nil && ctx.Err() == nil {
 			a.Log.Error("the egress rules are gone and could not be put back; jobs of the classes with an allowlist have no network", "err", err)
 		}
 	}
 }
 
-// verifyEgress makes sure the table and the host's rules are in place, and
-// puts them back when they are not.
-func (a *Agent) verifyEgress(ctx context.Context) error {
+// verifyEgress makes sure the table, and with host the host's rules too, are
+// in place, and puts them back when they are not.
+func (a *Agent) verifyEgress(ctx context.Context, host bool) error {
+	a.egress.verify.Lock()
+	defer a.egress.verify.Unlock()
 	a.egress.mu.Lock()
 	rules := a.egress.ruleset
 	a.egress.mu.Unlock()
@@ -462,7 +469,7 @@ func (a *Agent) verifyEgress(ctx context.Context) error {
 	if !whole {
 		a.Log.Warn("the egress rules were gone; put them back")
 	}
-	if firewall.CheckEgress(ctx, a.Run, a.hostNets()) != firewall.Current {
+	if host && firewall.CheckEgress(ctx, a.Run, a.hostNets()) != firewall.Current {
 		if err := firewall.ApplyEgress(ctx, a.Run, a.hostNets()); err != nil {
 			return err
 		}

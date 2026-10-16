@@ -522,7 +522,7 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	class, _ := a.Config.Class(r.ScaleSet.Class)
 	if class.Egress != nil {
 		// A job of an egress class never starts on a box whose rules are gone.
-		if err := a.verifyEgress(ctx); err != nil {
+		if err := a.verifyEgress(ctx, true); err != nil {
 			log.Error("the egress rules are not in place; not starting a runner", "class", class.Name, "err", err)
 			a.post(scheduler.StartFailed{Runner: r.Name})
 			return
