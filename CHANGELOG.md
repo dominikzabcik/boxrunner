@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.0
+
+**Egress allowlist**
+- Opt-in per class: `egress = ["github", "api.example.com:443", "*.mirror.example", "10.20.0.0/16:5432"]` closes the class's network to everything but the list. The class runs on its own Docker network; a DNS forwarder in the agent answers only listed names and opens their addresses in an nftables set for as long as the answer lives, and an nftables table judges what leaves the bridge. Addresses by number, other resolvers, IPv6, UDP, the host, the metadata service and private networks the list does not name are refused. Classes without `egress` are unchanged (#53, docs/config.md#egress-allowlist).
+- Refused connections and lookups are logged, rate-limited, and counted in `status` and the metrics; `doctor` proves the policy from a container on each egress class's network.
+- Jobs of an egress class never run without their rules: when the rules vanish (`nft flush ruleset`, a deleted table) the agent puts them back and removes the jobs that ran in the gap, and it stops those jobs when it stops and removes survivors after a crash. Restarting or upgrading the agent therefore cancels running egress jobs; drain first.
+- An allowlist limits where a job connects, not what it sends to an allowed service with the credentials it holds. docs/config.md says what it does not stop. Two independent security reviews found and verified fixes for a fail-open start path, the rules flush and TTLs outliving their addresses before release; two smaller gaps are tracked in #95 and #96.
+
+**Docs**
+- docs/coding-agents.md: running an AI coding agent on an egress class, with an example workflow and what to keep it from (fallback to GitHub's runners, production credentials, untrusted triggers).
+
 ## v0.6.0
 
 **Local Actions cache**
