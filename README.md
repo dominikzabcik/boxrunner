@@ -55,6 +55,8 @@ You need a Linux box with systemd and Linux 5.15 or newer (Ubuntu 22.04 or newer
 
 For `services:`, `container:` jobs and `docker build`, add `--docker` to the install command, which installs [Sysbox](https://github.com/nestybox/sysbox) and gives each job its own Docker daemon; the [configuration](docs/config.md#docker-inside-jobs) explains the limits. With `--docker` or `--sysbox`, jobs run under Sysbox, where a job's root is an unprivileged user on the box ([isolation](docs/config.md#isolation)).
 
+To run an AI coding agent on the box, one job at a time behind an egress allowlist, see [running coding agents](docs/coding-agents.md).
+
 `sudo boxrunner doctor` checks the box, including that a job cannot reach the host, your private network or the cloud metadata service. `sudo boxrunner status` shows what runs, and `sudo boxrunner shell` opens a shell in a running job, or in a failed one a class keeps for you. When a new box takes over from one that died, [replacing a box](docs/architecture.md#replacing-a-box) says how to recover the jobs the old one had acquired.
 
 ## Why
