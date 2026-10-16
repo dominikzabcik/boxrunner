@@ -75,3 +75,17 @@ func TestLedgerCounts(t *testing.T) {
 		t.Errorf("Counts(unknown) = %+v", got)
 	}
 }
+
+func TestLedgerGivesEachKindItsOwnShareOfAMinute(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	l := &Ledger{Now: func() time.Time { return now }}
+	for i := range perMinute {
+		l.Admit("agent", Packet, fmt.Sprintf("203.0.113.%d:443", i))
+	}
+	if l.Admit("agent", Packet, "203.0.113.200:443") {
+		t.Error("a packet past the share was admitted")
+	}
+	if !l.Admit("agent", Kind("withheld"), "api.example.com 10.0.0.1") || !l.Admit("agent", Lookup, "data.evil.example") {
+		t.Error("another kind was refused because packets used the share")
+	}
+}

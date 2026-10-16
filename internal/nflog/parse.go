@@ -36,8 +36,8 @@ type Packet struct {
 	Prefix   string
 	Src, Dst netip.Addr
 	// Proto is the IP protocol number: 6 for TCP, 17 for UDP.
-	Proto            uint8
-	SrcPort, DstPort uint16
+	Proto   uint8
+	DstPort uint16
 }
 
 // Parse reads the packets in one datagram of netlink messages.
@@ -112,7 +112,7 @@ func parseIP(p Packet, ip []byte) (Packet, bool) {
 		return Packet{}, false
 	}
 	if (p.Proto == 6 || p.Proto == 17) && len(transport) >= 4 {
-		p.SrcPort, p.DstPort = binary.BigEndian.Uint16(transport), binary.BigEndian.Uint16(transport[2:])
+		p.DstPort = binary.BigEndian.Uint16(transport[2:])
 	}
 	return p, true
 }

@@ -61,8 +61,8 @@ func TestParseReadsLoggedPackets(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Packet{
-		{Prefix: "cd4f0b", Src: netip.MustParseAddr("172.19.0.2"), Dst: netip.MustParseAddr("93.184.216.34"), Proto: 6, SrcPort: 40000, DstPort: 443},
-		{Prefix: "cd4f0b", Src: netip.MustParseAddr("fd00::2"), Dst: netip.MustParseAddr("2001:db8::53"), Proto: 17, SrcPort: 5353, DstPort: 53},
+		{Prefix: "cd4f0b", Src: netip.MustParseAddr("172.19.0.2"), Dst: netip.MustParseAddr("93.184.216.34"), Proto: 6, DstPort: 443},
+		{Prefix: "cd4f0b", Src: netip.MustParseAddr("fd00::2"), Dst: netip.MustParseAddr("2001:db8::53"), Proto: 17, DstPort: 53},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Parse = %+v, want %+v", got, want)
@@ -71,7 +71,7 @@ func TestParseReadsLoggedPackets(t *testing.T) {
 
 func TestParseKeepsIPWithoutPortsForOtherProtocols(t *testing.T) {
 	got, err := Parse(logged(2, "cd4f0b", ipv4(1, "172.19.0.2", "198.51.100.1", 0x0800, 0)))
-	if err != nil || len(got) != 1 || got[0].Proto != 1 || got[0].SrcPort != 0 || got[0].DstPort != 0 {
+	if err != nil || len(got) != 1 || got[0].Proto != 1 || got[0].DstPort != 0 {
 		t.Errorf("Parse(ICMP) = %+v, %v", got, err)
 	}
 }

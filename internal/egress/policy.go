@@ -104,22 +104,15 @@ func (p Policy) AllowsName(name string, port uint16) bool {
 	return ok && ports.Contains(port)
 }
 
-// AllowsAddr reports whether an address of a network entry may be reached on
-// the port. It does not know the addresses names resolve to.
-func (p Policy) AllowsAddr(addr netip.Addr, port uint16) bool {
-	return slices.ContainsFunc(p.Nets, func(r NetRule) bool {
-		return r.Prefix.Contains(addr) && r.Ports.Contains(port)
-	})
-}
-
 // Presets are entries a class can name in place of their hosts.
 var Presets = map[string][]string{
 	// What GitHub lists for self-hosted runners under "Accessible domains by
 	// function": https://docs.github.com/en/actions/reference/runners/self-hosted-runners#accessible-domains-by-function
 	// Its "*.blob.core.windows.net" is replaced by the twenty storage accounts
 	// of the results service that GitHub's meta API lists under
-	// domains.actions (https://docs.github.com/en/rest/meta/meta), because
-	// anyone can open a storage account of their own on that wildcard.
+	// domains.actions (https://docs.github.com/en/rest/meta/meta). The
+	// wildcard would let a job resolve any account, including its owner's own,
+	// and open the addresses of whichever storage cluster holds it.
 	"github": slices.Concat([]string{
 		// Essential operations, including the broker and scale set services.
 		"github.com", "api.github.com", "*.actions.githubusercontent.com",
@@ -340,4 +333,30 @@ type Grant struct {
 	Addr  netip.Addr
 	Ports Ports
 	TTL   time.Duration
+}
+
+// Element is what a grant puts in a set: an address on one port, or on every
+// port when Port is 0.
+type Element struct {
+	Addr netip.Addr
+	Port uint16
+	TTL  time.Duration
+}
+
+// Key names the element for the enforcer's record of what is open.
+func (e Element) Key() string { return e.Addr.String() + " " + strconv.Itoa(int(e.Port)) }
+
+// Elements are the set elements of the grant's IPv4 address, one for each port.
+func (g Grant) Elements() []Element {
+	if !g.Addr.Is4() {
+		return nil
+	}
+	if g.Ports.Any {
+		return []Element{{g.Addr, 0, g.TTL}}
+	}
+	out := make([]Element, len(g.Ports.List))
+	for i, port := range g.Ports.List {
+		out[i] = Element{g.Addr, port, g.TTL}
+	}
+	return out
 }

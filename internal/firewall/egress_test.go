@@ -33,6 +33,7 @@ func TestEgressRules(t *testing.T) {
 		"-d 172.20.0.1/32 -i boxrunner-c84a9 -p tcp --dport 53 -j ACCEPT",
 		"-i boxrunner-d4f0b -j DROP",
 		"-i boxrunner-c84a9 -j DROP",
+		"-i boxrunner-+ -j DROP",
 	}
 	var lines []string
 	for _, r := range got {
@@ -45,8 +46,8 @@ func TestEgressRules(t *testing.T) {
 	for _, r := range V6.EgressRules([]EgressNet{agentNet}) {
 		v6 = append(v6, strings.Join(r, " "))
 	}
-	if !reflect.DeepEqual(v6, []string{"-i boxrunner-d4f0b -j DROP"}) {
-		t.Errorf("V6.EgressRules = %q, want everything from the bridge dropped", v6)
+	if !reflect.DeepEqual(v6, []string{"-i boxrunner-d4f0b -j DROP", "-i boxrunner-+ -j DROP"}) {
+		t.Errorf("V6.EgressRules = %q, want everything from the bridges dropped", v6)
 	}
 }
 

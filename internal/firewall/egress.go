@@ -60,7 +60,9 @@ func (f Family) EgressRules(nets []EgressNet) [][]string {
 	for _, n := range nets {
 		rules = append(rules, []string{"-i", n.Bridge, "-j", "DROP"})
 	}
-	return rules
+	// An egress bridge that no rule above names, such as one whose class the
+	// agent could not set up, gets nothing from the host either.
+	return append(rules, []string{"-i", BridgePrefix + "+", "-j", "DROP"})
 }
 
 // egressJump sends the host's input into the egress chain, ahead of the job

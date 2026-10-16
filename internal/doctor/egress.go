@@ -50,6 +50,19 @@ func (c Checks) egressChecks(ctx context.Context, d *docker.Client, services fir
 		}
 		nets = append(nets, egress.HostNet(n, k.Docker, k.Cache, services, mirrorGateway))
 	}
+	// The agent also keeps the bridge of a class that left the config while its jobs run.
+	configured := map[string]bool{}
+	for _, k := range classes {
+		configured[k.Name] = true
+	}
+	if left, err := d.Networks(ctx, layout.LabelEgress); err == nil {
+		for _, network := range left {
+			class := network.Labels[layout.LabelEgress]
+			if gateway, ok := network.Gateway(); !configured[class] && len(network.Containers) > 0 && ok {
+				nets = append(nets, firewall.EgressNet{Bridge: egress.NetOf(class).Bridge, Gateway: gateway})
+			}
+		}
+	}
 	hostRules := firewall.CheckEgress(ctx, c.Exec, nets)
 	for _, k := range classes {
 		n := egress.NetOf(k.Name)
@@ -134,6 +147,10 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 	add := func(what string, ok bool, format string, args ...any) {
 		results = append(results, Result{"egress " + class + " " + what, ok, fmt.Sprintf(format, args...)})
 	}
+	// refused is for a name: a lookup that fails or a connection that never
+	// starts both count. dropped is for an address, where the host's rules must
+	// drop the packet, so the try times out (124); a refusal or an unreachable
+	// answer means something past the rules saw it.
 	refused := func(name string) (bool, string) {
 		code, ok := codes[name]
 		switch {
@@ -141,6 +158,18 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 			return false, "the probe gave no answer"
 		case code == 0:
 			return false, "a job container got through"
+		}
+		return true, ""
+	}
+	dropped := func(name string) (bool, string) {
+		code, ok := codes[name]
+		switch {
+		case !ok:
+			return false, "the probe gave no answer"
+		case code == 0:
+			return false, "a job container got through"
+		case code != 124:
+			return false, fmt.Sprintf("a job container got an answer (exit %d); the rules should drop the packet", code)
 		}
 		return true, ""
 	}
@@ -163,13 +192,13 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 	}
 	if !p.DeniedAddr.IsValid() {
 		add("refuses an address", true, "skipped: the box could not look up %s to try its address", p.Denied)
-	} else if ok, why := refused("address"); ok {
+	} else if ok, why := dropped("address"); ok {
 		add("refuses an address", true, "%s, the address of %s, is unreachable by number", p.DeniedAddr, p.Denied)
 	} else {
 		add("refuses an address", false, "%s, the address of %s: %s", p.DeniedAddr, p.Denied, why)
 	}
-	okHost, whyHost := refused("host")
-	okMeta, whyMeta := refused("metadata")
+	okHost, whyHost := dropped("host")
+	okMeta, whyMeta := dropped("metadata")
 	if okHost && okMeta {
 		add("host", true, "the host at %s and the metadata service are unreachable from jobs", p.Gateway)
 	} else {
@@ -178,8 +207,8 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 	if !p.Resolver.IsValid() {
 		add("resolver", true, "skipped: the box's resolvers are all on this machine")
 	} else {
-		okTCP, whyTCP := refused("resolver-tcp")
-		okUDP, whyUDP := refused("resolver-udp")
+		okTCP, whyTCP := dropped("resolver-tcp")
+		okUDP, whyUDP := dropped("resolver-udp")
 		if okTCP && okUDP {
 			add("resolver", true, "a job cannot ask %s, the box's resolver, or any other DNS server", p.Resolver)
 		} else {

@@ -66,7 +66,9 @@ type classBlocks struct {
 	ring             []Block
 	last             map[string]time.Time
 	windowStart      time.Time
-	inWindow         int
+	// inWindow counts the refusals admitted in the minute that began at
+	// windowStart, by kind, so one kind cannot use up another's share.
+	inWindow map[Kind]int
 }
 
 func (l *Ledger) now() time.Time {
@@ -82,7 +84,7 @@ func (l *Ledger) class(name string) *classBlocks {
 	}
 	c := l.classes[name]
 	if c == nil {
-		c = &classBlocks{last: map[string]time.Time{}}
+		c = &classBlocks{last: map[string]time.Time{}, inWindow: map[Kind]int{}}
 		l.classes[name] = c
 	}
 	return c
@@ -105,7 +107,7 @@ func (l *Ledger) SetPackets(class string, total uint64) {
 
 // Admit reports whether a refusal is worth recording and logging: false when
 // the class refused the same thing within the last minute, or has recorded as
-// many refusals as it records a minute. Looking up who asked is worth doing
+// many refusals of that kind as it records a minute. Looking up who asked is worth doing
 // only for the ones it admits.
 func (l *Ledger) Admit(class string, kind Kind, dest string) bool {
 	l.mu.Lock()
@@ -117,12 +119,13 @@ func (l *Ledger) Admit(class string, kind Kind, dest string) bool {
 		return false
 	}
 	if now.Sub(c.windowStart) >= time.Minute {
-		c.windowStart, c.inWindow = now, 0
+		c.windowStart = now
+		clear(c.inWindow)
 	}
-	if c.inWindow >= perMinute {
+	if c.inWindow[kind] >= perMinute {
 		return false
 	}
-	c.inWindow++
+	c.inWindow[kind]++
 	if len(c.last) > 4*perMinute {
 		for k, at := range c.last {
 			if now.Sub(at) >= every {

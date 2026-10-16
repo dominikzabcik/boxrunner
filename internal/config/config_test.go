@@ -456,8 +456,11 @@ func TestParseEgress(t *testing.T) {
 	if want := []string{"github", "api.example.com", "10.20.0.0/16:5432"}; !reflect.DeepEqual(policy.Entries, want) {
 		t.Errorf("Entries = %q, want %q", policy.Entries, want)
 	}
-	if !policy.AllowsName("api.example.com", 443) || policy.AllowsName("example.com", 443) || !policy.AllowsAddr(netip.MustParseAddr("10.20.1.1"), 5432) {
+	if !policy.AllowsName("api.example.com", 443) || policy.AllowsName("example.com", 443) {
 		t.Error("the policy does not allow what the entries list")
+	}
+	if len(policy.Nets) != 1 || policy.Nets[0].Prefix != netip.MustParsePrefix("10.20.0.0/16") || !policy.Nets[0].Ports.Contains(5432) || policy.Nets[0].Ports.Contains(443) {
+		t.Errorf("Nets = %+v, want 10.20.0.0/16 on port 5432", policy.Nets)
 	}
 	for _, c := range []struct{ class, want string }{
 		{"egress = []\n", `class "agent": egress: empty: a class with no destinations cannot reach GitHub; start the list with "github", or leave egress out to open the class`},

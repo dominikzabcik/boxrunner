@@ -39,21 +39,12 @@ func TestParseReadsEveryKindOfEntry(t *testing.T) {
 			t.Errorf("Match(%q) = %v, %v, %v; want %v, %v, %v", c.name, ports, exact, ok, c.want, c.exact, c.ok)
 		}
 	}
-	nets := []struct {
-		addr string
-		port uint16
-		want bool
-	}{
-		{"10.20.9.9", 5432, true},
-		{"10.20.9.9", 5433, false},
-		{"10.21.0.1", 5432, false},
-		{"203.0.113.7", 443, true},
-		{"203.0.113.8", 443, false},
+	wantNets := []NetRule{
+		{Prefix: netip.MustParsePrefix("10.20.0.0/16"), Ports: Ports{List: []uint16{5432}}},
+		{Prefix: netip.MustParsePrefix("203.0.113.7/32"), Ports: DefaultPorts()},
 	}
-	for _, c := range nets {
-		if got := p.AllowsAddr(netip.MustParseAddr(c.addr), c.port); got != c.want {
-			t.Errorf("AllowsAddr(%s, %d) = %v, want %v", c.addr, c.port, got, c.want)
-		}
+	if !reflect.DeepEqual(p.Nets, wantNets) {
+		t.Errorf("Nets = %+v, want %+v", p.Nets, wantNets)
 	}
 	wantEntries := []string{"github", "api.example.com", "*.example.org:8443", "registry.example.net:*", "10.20.0.0/16:5432", "203.0.113.7"}
 	if !reflect.DeepEqual(p.Entries, wantEntries) {

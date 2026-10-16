@@ -340,13 +340,18 @@ func (n Network) Subnet() (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
-// Networks lists the networks that carry a label (key or key=value).
+// Networks lists the networks that carry a label (key or key=value), or every
+// network when label is empty.
 func (c *Client) Networks(ctx context.Context, label string) ([]Network, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": {label}})
+	q := url.Values{}
+	if label != "" {
+		filters, _ := json.Marshal(map[string][]string{"label": {label}})
+		q.Set("filters", string(filters))
+	}
 	var list []struct {
 		Name string `json:"Name"`
 	}
-	if err := c.call(ctx, http.MethodGet, "/networks?"+url.Values{"filters": {string(filters)}}.Encode(), "", nil, &list); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/networks?"+q.Encode(), "", nil, &list); err != nil {
 		return nil, err
 	}
 	// The listing leaves out the endpoints, so each network is read again.

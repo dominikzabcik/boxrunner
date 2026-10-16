@@ -73,6 +73,8 @@ func TestJudgeEgressFailsWhatGetsThrough(t *testing.T) {
 		{"a name that connects", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 0\naddress 124\nhost 124\nmetadata 124\nresolver-tcp 124\nresolver-udp 124\n", "egress agent refuses a name"},
 		{"an address by number", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 0\nhost 124\nmetadata 124\nresolver-tcp 124\nresolver-udp 124\n", "egress agent refuses an address"},
 		{"the host", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 124\nhost 0\nmetadata 124\nresolver-tcp 124\nresolver-udp 124\n", "egress agent host"},
+		{"a host that answers with a refusal", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 124\nhost 1\nmetadata 124\nresolver-tcp 124\nresolver-udp 124\n", "egress agent host"},
+		{"an address that answers with a refusal", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 1\nhost 124\nmetadata 124\nresolver-tcp 124\nresolver-udp 124\n", "egress agent refuses an address"},
 		{"the metadata service", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 124\nhost 124\nmetadata 0\nresolver-tcp 124\nresolver-udp 124\n", "egress agent host"},
 		{"the box's resolver over TCP", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 124\nhost 124\nmetadata 124\nresolver-tcp 0\nresolver-udp 124\n", "egress agent resolver"},
 		{"another DNS server over UDP", "lookup-allowed 0\nallowed 0\nlookup-denied 2\ndenied 124\naddress 124\nhost 124\nmetadata 124\nresolver-tcp 124\nresolver-udp 0\n", "egress agent resolver"},

@@ -127,7 +127,7 @@ func TestHandleRefusesANameThePolicyDoesNotAllowWithoutAskingUpstream(t *testing
 	if len(up.asked) != 0 || len(rec.opened()) != 0 {
 		t.Errorf("asked upstream %v and opened %v", up.asked, rec.opened())
 	}
-	if want := []Event{{Kind: Refused, From: job, Name: "data.evil.example", Type: TypeA}}; !reflect.DeepEqual(rec.reported(), want) {
+	if want := []Event{{Kind: Refused, From: job, Name: "data.evil.example"}}; !reflect.DeepEqual(rec.reported(), want) {
 		t.Errorf("events = %+v, want %+v", rec.reported(), want)
 	}
 }
@@ -532,5 +532,63 @@ func TestResolverAsksWithAnIDOfItsOwn(t *testing.T) {
 	}
 	if same == 5 {
 		t.Error("the resolver asked upstream with the job's own query ID every time")
+	}
+}
+
+func TestHandleKeepsATTLAtMostAsLongAsTheAddressStaysOpen(t *testing.T) {
+	up := &fakeUpstream{answers: map[string][]rr{"github.com": {cname(86400, "edge.example.net"), a(86400, "203.0.113.5").from("edge.example.net"), a(30, "203.0.113.6").from("edge.example.net")}}}
+	s, _ := newServer(t, nil, up)
+	q := query(1, "github.com", TypeA)
+	got, err := ParseAnswer(s.Handle(context.Background(), q, job, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ttls []uint32
+	for _, r := range got.Records {
+		ttls = append(ttls, r.TTL)
+	}
+	if want := []uint32{3600, 30}; !reflect.DeepEqual(ttls, want) {
+		t.Errorf("TTLs the job gets = %v, want %v", ttls, want)
+	}
+}
+
+// holdUpstream answers once it is released.
+type holdUpstream struct{ release chan struct{} }
+
+func (h holdUpstream) Exchange(_ context.Context, query []byte, _ bool) ([]byte, error) {
+	<-h.release
+	return response(query, 0, a(60, "203.0.113.5")), nil
+}
+
+func TestServeUDPWaitsForAnswersInFlightBeforeItReturns(t *testing.T) {
+	hold := holdUpstream{make(chan struct{})}
+	s, rec := newServer(t, nil, hold)
+	s.Clients = netip.MustParsePrefix("127.0.0.0/8")
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- s.ServeUDP(ctx, pc) }()
+	conn, err := net.Dial("udp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.Write(query(1, "github.com", TypeA))
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("ServeUDP returned while an answer was still being made")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(hold.release)
+	if err := <-done; err != nil {
+		t.Errorf("ServeUDP = %v", err)
+	}
+	if got := rec.opened(); len(got) != 1 {
+		t.Errorf("opened %+v: the answer in flight was finished", got)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -97,12 +98,34 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 		return
 	}
 
+	// The box's networks are out of every class's reach, whatever its entries cover.
+	all, err := a.Docker.Networks(ctx, "")
+	if err != nil {
+		a.failEgress(configured, fmt.Sprintf("reading Docker's networks: %v", err))
+		return
+	}
 	var classes []egress.Class
 	var nets []firewall.EgressNet
 	var deny []netip.Prefix
-	if main, ok, err := a.Docker.Network(ctx, layout.Network); err == nil && ok {
-		if subnet, ok := main.Subnet(); ok {
+	for _, n := range all {
+		if subnet, ok := n.Subnet(); ok {
 			deny = append(deny, subnet)
+		}
+	}
+	existing := map[string]docker.Network{}
+	for _, n := range left {
+		existing[n.Labels[layout.LabelEgress]] = n
+	}
+	// closed keeps a network that jobs may still run on shut: they keep what
+	// they have open, and nothing new.
+	closed := func(class string, n docker.Network) {
+		en := egress.NetOf(class)
+		var subnetOK, gatewayOK bool
+		en.Subnet, subnetOK = n.Subnet()
+		en.Gateway, gatewayOK = n.Gateway()
+		if subnetOK && gatewayOK {
+			classes = append(classes, egress.Class{Net: en, Closed: true})
+			nets = append(nets, firewall.EgressNet{Bridge: en.Bridge, Gateway: en.Gateway})
 		}
 	}
 	served := map[string]bool{}
@@ -113,16 +136,17 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 		a.egress.classes[c.Name] = e
 		if problem != "" {
 			a.Log.Error("not serving the class; its egress allowlist cannot be put in force", "class", c.Name, "problem", problem)
+			if old, ok := existing[c.Name]; ok {
+				closed(c.Name, old)
+			}
 			continue
 		}
-		deny = append(deny, n.Subnet)
 		host := egress.HostNet(n, c.Docker, c.Cache, services, mirrorGateway)
 		e.rules = egress.Class{Net: n, Policy: *c.Egress, Open: host.Open}
 		classes = append(classes, e.rules)
 		nets = append(nets, host)
 	}
-	for _, n := range left {
-		class := n.Labels[layout.LabelEgress]
+	for class, n := range existing {
 		if served[class] {
 			continue
 		}
@@ -132,13 +156,8 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 			}
 			continue
 		}
-		en := egress.NetOf(class)
-		en.Subnet, _ = n.Subnet()
-		en.Gateway, _ = n.Gateway()
 		a.Log.Warn("a class left the config or lost its egress allowlist while its jobs run; their network is closed to new connections until they finish", "class", class)
-		deny = append(deny, en.Subnet)
-		classes = append(classes, egress.Class{Net: en, Closed: true})
-		nets = append(nets, firewall.EgressNet{Bridge: en.Bridge, Gateway: en.Gateway})
+		closed(class, n)
 	}
 
 	if len(classes) == 0 && len(configured) == 0 {
@@ -235,7 +254,7 @@ func (a *Agent) serveEgress(ctx context.Context) func() {
 			}
 		}
 	}
-	if len(a.egress.classes) > 0 {
+	if len(a.egress.classes) > 0 || len(a.egress.ruleset.Classes) > 0 {
 		wg.Go(func() { a.countBlocked(ctx) })
 		wg.Go(func() { a.logBlocked(ctx) })
 		wg.Go(func() { a.guardEgress(ctx) })
@@ -281,9 +300,13 @@ func (a *Agent) serveForwarder(ctx context.Context, wg *sync.WaitGroup, e *egres
 	return nil
 }
 
-// countBlocked reads the packets the table has dropped every few seconds.
+// countBlocked reads the packets the table has dropped every few seconds. The
+// count only grows: when the table is replaced its counters start again, and
+// what they count then is all new.
 func (a *Agent) countBlocked(ctx context.Context) {
 	interval := cmpDuration(a.EgressCountEvery, 5*time.Second)
+	last := maps.Clone(a.egress.baseline)
+	reported := map[string]uint64{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -297,12 +320,17 @@ func (a *Agent) countBlocked(ctx context.Context) {
 			}
 			continue
 		}
+		for id, now := range counts {
+			if now >= last[id] {
+				reported[id] += now - last[id]
+			} else {
+				reported[id] += now
+			}
+			last[id] = now
+		}
 		a.egress.mu.Lock()
 		for _, e := range a.egress.classes {
-			id := e.net.ID()
-			if now, ok := counts[id]; ok {
-				a.egress.ledger.SetPackets(e.class.Name, now-min(now, a.egress.baseline[id]))
-			}
+			a.egress.ledger.SetPackets(e.class.Name, reported[e.net.ID()])
 		}
 		a.egress.mu.Unlock()
 	}
@@ -378,10 +406,13 @@ func (a *Agent) onLookup(e *egressClass, ev dnsfwd.Event) {
 		if !a.egress.ledger.Admit(e.class.Name, egress.Lookup, ev.Name) {
 			return
 		}
-		b := egress.Block{Kind: egress.Lookup, Dest: ev.Name}
-		b.Runner, b.Repo = a.jobAt(context.Background(), e.net, ev.From)
-		a.egress.ledger.Keep(e.class.Name, b)
-		a.Log.Warn("egress refused a lookup", "class", e.class.Name, "runner", b.Runner, "repo", b.Repo, "name", ev.Name)
+		// Asking Docker who the job is takes a moment the job's refusal need not wait for.
+		go func() {
+			b := egress.Block{Kind: egress.Lookup, Dest: ev.Name}
+			b.Runner, b.Repo = a.jobAt(context.Background(), e.net, ev.From)
+			a.egress.ledger.Keep(e.class.Name, b)
+			a.Log.Warn("egress refused a lookup", "class", e.class.Name, "runner", b.Runner, "repo", b.Repo, "name", ev.Name)
+		}()
 	case dnsfwd.Withheld:
 		if a.egress.ledger.Admit(e.class.Name, "withheld", ev.Name+" "+ev.Addr.String()) {
 			a.Log.Warn("egress did not open an address an allowed name resolved to", "class", e.class.Name, "name", ev.Name, "addr", ev.Addr, "why", ev.Reason)
@@ -407,8 +438,9 @@ func (a *Agent) jobAt(ctx context.Context, n egress.Net, addr netip.Addr) (runne
 			runner = ep.Name
 		}
 	}
-	if i := slices.IndexFunc(a.current().Runners, func(r status.Runner) bool { return r.Name == runner }); i >= 0 {
-		repo = a.current().Runners[i].Repo
+	runners := a.current().Runners
+	if i := slices.IndexFunc(runners, func(r status.Runner) bool { return r.Name == runner }); i >= 0 {
+		repo = runners[i].Repo
 	}
 	return runner, repo
 }

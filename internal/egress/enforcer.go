@@ -77,18 +77,14 @@ func (e *Enforcer) listing(ctx context.Context) string {
 	return out
 }
 
-// Open opens addresses for a class. An address that has most of its time left
+// Open opens addresses for a class. An element that has most of its time left
 // is not touched, so a job that resolves a name again and again costs nothing.
+// One transaction sets the others, whether or not they are open already.
 func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
 	e.exec.Lock()
 	defer e.exec.Unlock()
 	now := e.now()
-	type change struct {
-		key   string
-		grant Grant
-		renew bool
-	}
-	var todo []change
+	var todo []Element
 	fresh := 0
 	e.mu.Lock()
 	if e.open == nil {
@@ -105,18 +101,16 @@ func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
 		}
 	}
 	for _, g := range grants {
-		if !g.Addr.Is4() {
-			continue
-		}
-		key := g.Addr.String() + " " + g.Ports.String()
-		end, open := live[key]
-		switch {
-		case open && end.Sub(now) > g.TTL/2:
-		case open:
-			todo = append(todo, change{key, g, true})
-		default:
-			todo = append(todo, change{key, g, false})
-			fresh++
+		for _, el := range g.Elements() {
+			end, open := live[el.Key()]
+			switch {
+			case open && end.Sub(now) > el.TTL/2:
+			case open:
+				todo = append(todo, el)
+			default:
+				todo = append(todo, el)
+				fresh++
+			}
 		}
 	}
 	full := len(live)+fresh > MaxLive
@@ -127,24 +121,13 @@ func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
 	if len(todo) == 0 {
 		return nil
 	}
-	var renew, all []Grant
-	for _, ch := range todo {
-		all = append(all, ch.grant)
-		if ch.renew {
-			renew = append(renew, ch.grant)
-		}
-	}
-	if len(renew) > 0 {
-		// An address that expired meanwhile is not there to remove, which does not matter.
-		e.Run(ctx, ElementScript(c, renew, true), "nft", "-f", "-")
-	}
-	if out, err := e.Run(ctx, ElementScript(c, all, false), "nft", "-f", "-"); err != nil {
+	if out, err := e.Run(ctx, ElementScript(c, todo), "nft", "-f", "-"); err != nil {
 		return fmt.Errorf("nft add element: %w: %s", err, strings.TrimSpace(out))
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, ch := range todo {
-		live[ch.key] = now.Add(ch.grant.TTL)
+	for _, el := range todo {
+		live[el.Key()] = now.Add(el.TTL)
 	}
 	return nil
 }

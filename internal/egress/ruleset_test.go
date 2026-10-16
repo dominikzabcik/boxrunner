@@ -239,21 +239,21 @@ func TestScriptRemovesWhatEarlierRulesetsLeftBehind(t *testing.T) {
 func TestElementScript(t *testing.T) {
 	c := Class{Net: agentNet(), Policy: mustPolicy(t)}
 	dyn, anyPort := c.Sets()
-	grants := []Grant{
+	var elements []Element
+	for _, g := range []Grant{
 		{Addr: netip.MustParseAddr("203.0.113.5"), Ports: DefaultPorts(), TTL: 5 * time.Minute},
 		{Addr: netip.MustParseAddr("198.51.100.7"), Ports: Ports{Any: true}, TTL: 10 * time.Minute},
 		{Addr: netip.MustParseAddr("203.0.113.6"), Ports: onePort(8443), TTL: time.Hour},
 		{Addr: netip.MustParseAddr("2001:db8::9"), Ports: Ports{Any: true}, TTL: 10 * time.Minute},
+	} {
+		elements = append(elements, g.Elements()...)
 	}
-	want := "add element inet boxrunner " + dyn + " { 203.0.113.5 . 80 timeout 300s, 203.0.113.5 . 443 timeout 300s, 203.0.113.6 . 8443 timeout 3600s }\n" +
-		"add element inet boxrunner " + anyPort + " { 198.51.100.7 timeout 600s }\n"
-	if got := ElementScript(c, grants, false); got != want {
+	add := "add element inet boxrunner " + dyn + " { 203.0.113.5 . 80 timeout 300s, 203.0.113.5 . 443 timeout 300s, 203.0.113.6 . 8443 timeout 3600s }\n"
+	del := "delete element inet boxrunner " + dyn + " { 203.0.113.5 . 80, 203.0.113.5 . 443, 203.0.113.6 . 8443 }\n"
+	addAny := "add element inet boxrunner " + anyPort + " { 198.51.100.7 timeout 600s }\n"
+	delAny := "delete element inet boxrunner " + anyPort + " { 198.51.100.7 }\n"
+	if got, want := ElementScript(c, elements), add+del+add+addAny+delAny+addAny; got != want {
 		t.Errorf("ElementScript =\n%s\nwant\n%s", got, want)
-	}
-	wantRemove := "delete element inet boxrunner " + dyn + " { 203.0.113.5 . 80, 203.0.113.5 . 443, 203.0.113.6 . 8443 }\n" +
-		"delete element inet boxrunner " + anyPort + " { 198.51.100.7 }\n"
-	if got := ElementScript(c, grants, true); got != wantRemove {
-		t.Errorf("ElementScript(remove) =\n%s\nwant\n%s", got, wantRemove)
 	}
 }
 
@@ -299,33 +299,58 @@ func (n *nft) run(_ context.Context, stdin, name string, args ...string) (string
 
 func agentClass(t *testing.T) Class { return Class{Net: agentNet(), Policy: mustPolicy(t)} }
 
+// opened is the script that sets one address on one port for ttl seconds.
+func opened(c Class, addr string, port uint16, ttl int) string {
+	dyn, _ := c.Sets()
+	el := fmt.Sprintf("%s . %d", addr, port)
+	add := fmt.Sprintf("add element inet boxrunner %s { %s timeout %ds }\n", dyn, el, ttl)
+	return add + fmt.Sprintf("delete element inet boxrunner %s { %s }\n", dyn, el) + add
+}
+
 func TestOpenSkipsAddressesThatHaveMostOfTheirTimeLeft(t *testing.T) {
 	f := &nft{}
 	now := time.Unix(1_000_000, 0)
 	e := &Enforcer{Run: f.run, Now: func() time.Time { return now }}
 	c := agentClass(t)
-	dyn, _ := c.Sets()
 	grants := []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(443), TTL: 10 * time.Minute}}
 	for range 2 {
 		if err := e.Open(context.Background(), c, grants); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if want := []string{"add element inet boxrunner " + dyn + " { 203.0.113.5 . 443 timeout 600s }\n"}; !reflect.DeepEqual(f.scripts, want) {
-		t.Fatalf("scripts = %q, want one add for the same grant twice", f.scripts)
+	if want := []string{opened(c, "203.0.113.5", 443, 600)}; !reflect.DeepEqual(f.scripts, want) {
+		t.Fatalf("scripts = %q, want one script for the same grant twice", f.scripts)
 	}
 	now = now.Add(6 * time.Minute)
 	if err := e.Open(context.Background(), c, grants); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.scripts) != 3 || !strings.HasPrefix(f.scripts[1], "delete element") || !strings.HasPrefix(f.scripts[2], "add element") {
-		t.Errorf("scripts = %q, want the address removed and added again once it had less than half its time left, as kernels before 6.12 keep the old time of an element that is there", f.scripts)
+	if len(f.scripts) != 2 || f.scripts[1] != opened(c, "203.0.113.5", 443, 600) {
+		t.Errorf("scripts = %q, want the element set again once it had less than half its time left", f.scripts)
 	}
-	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 4 {
-		t.Errorf("another port was not opened: %v, %d scripts", err, len(f.scripts))
+	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 || f.scripts[2] != opened(c, "203.0.113.5", 80, 60) {
+		t.Errorf("another port was not opened: %v, scripts %q", err, f.scripts)
 	}
-	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("2001:db8::1"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 4 {
+	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("2001:db8::1"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 {
 		t.Errorf("an IPv6 address was opened: %v, %d scripts", err, len(f.scripts))
+	}
+}
+
+func TestOpenKeepsATimeForEachPortOfAnAddress(t *testing.T) {
+	f := &nft{}
+	e := &Enforcer{Run: f.run, Now: func() time.Time { return time.Unix(1_000_000, 0) }}
+	c := agentClass(t)
+	addr := netip.MustParseAddr("203.0.113.5")
+	if err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: DefaultPorts(), TTL: 10 * time.Minute}}); err != nil {
+		t.Fatal(err)
+	}
+	// Another name on the same address that allows 443 finds that element open
+	// and leaves it, and opens the port the first name did not.
+	if err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: Ports{List: []uint16{443, 8443}}, TTL: 10 * time.Minute}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.scripts) != 2 || f.scripts[1] != opened(c, "203.0.113.5", 8443, 600) {
+		t.Errorf("scripts = %q, want the second to set only port 8443", f.scripts)
 	}
 }
 

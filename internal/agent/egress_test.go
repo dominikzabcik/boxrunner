@@ -34,10 +34,12 @@ type fakeHost struct {
 	flushed bool
 	// failApply makes nft refuse a ruleset.
 	failApply bool
-	chains    map[string]bool
-	sets      map[string]bool
-	counters  map[string]bool
-	jumps     []string
+	// packets is what every counter of the table reads.
+	packets  uint64
+	chains   map[string]bool
+	sets     map[string]bool
+	counters map[string]bool
+	jumps    []string
 }
 
 var (
@@ -84,7 +86,13 @@ func (f *fakeHost) run(stdin, name string, args ...string) (string, error) {
 	case cmd == "nft delete table inet boxrunner":
 		f.chains, f.sets, f.counters, f.jumps = nil, nil, nil, nil
 	case cmd == "nft list counters table inet boxrunner":
-		return "table inet boxrunner {\n}\n", nil
+		var b strings.Builder
+		b.WriteString("table inet boxrunner {\n")
+		for name := range f.counters {
+			fmt.Fprintf(&b, "\tcounter %s {\n\t\tpackets %d bytes 0\n\t}\n", name, f.packets)
+		}
+		b.WriteString("}\n")
+		return b.String(), nil
 	case cmd == "nft -f -":
 		if strings.HasPrefix(stdin, "add element") || strings.HasPrefix(stdin, "delete element") {
 			f.elements = append(f.elements, strings.TrimSpace(stdin))
@@ -433,5 +441,52 @@ func TestEgressRemoved(t *testing.T) {
 	waitFor(t, "the table to go", func() bool { return slices.Contains(host.commands(), "nft delete table inet boxrunner") })
 	if got := host.applied(); len(got) != 0 {
 		t.Errorf("the agent built a table for no class: %q", got)
+	}
+}
+
+// TestEgressSetupFails: a class whose setup fails while its jobs run keeps its
+// network closed, so they are not left with the whole internet.
+func TestEgressSetupFails(t *testing.T) {
+	host := &fakeHost{}
+	n := egress.NetOf("boxrunner")
+	e := startEgress(t, host, map[string]*container{
+		"box-1-boxrunner-ab12cd": {Name: "box-1-boxrunner-ab12cd", Labels: map[string]string{"boxrunner.box": "box-1", "boxrunner.runner": "box-1-boxrunner-ab12cd", "boxrunner.class": "boxrunner", "boxrunner.repo": "octo/site"},
+			State: "running", Created: time.Now().Unix(), Body: map[string]any{"HostConfig": map[string]any{"NetworkMode": n.Name}}},
+	}, func(c *config.Class, h *harness) {
+		h.docker.nets = map[string]*fakeNet{n.Name: {Bridge: n.Bridge, Labels: map[string]string{"boxrunner.egress": "boxrunner"}, Subnet: "127.0.0.0/8", Gateway: "127.0.0.1"}}
+		// The agent inspects the network to list it, to list every network and then to set it up.
+		h.docker.failInspect = map[string]int{n.Name: 3}
+	})
+	defer e.stop(t)
+	var snap status.Snapshot
+	waitFor(t, "the class's problem in status", func() bool {
+		snap = e.snapshot(t)
+		return len(snap.Egress) == 1 && snap.Egress[0].Problem != ""
+	})
+	waitFor(t, "the first ruleset", func() bool { return len(host.applied()) >= 1 })
+	script := host.applied()[0]
+	if !strings.Contains(script, "egress_"+n.ID()+" ct state established") || strings.Contains(script, "@"+n.ID()+"_dyn") {
+		t.Errorf("the class whose setup failed is not closed:\n%s", script)
+	}
+	if !slices.ContainsFunc(host.commands(), func(c string) bool { return strings.HasPrefix(c, "iptables-restore ") }) {
+		t.Errorf("the host's rules were not applied for the closed bridge: %q", host.commands())
+	}
+}
+
+// TestEgressCounts: the packets the table dropped only grow, though its counters start again.
+func TestEgressCounts(t *testing.T) {
+	host := &fakeHost{}
+	e := startEgress(t, host, map[string]*container{})
+	defer e.stop(t)
+	<-e.dns // the forwarder starts once the agent has read where the counters begin
+	set := func(n uint64) {
+		host.mu.Lock()
+		host.packets = n
+		host.mu.Unlock()
+	}
+	packets := func() uint64 { return e.snapshot(t).Egress[0].Packets }
+	for _, step := range []struct{ read, want uint64 }{{10, 10}, {3, 13}, {5, 15}} {
+		set(step.read)
+		waitFor(t, fmt.Sprintf("%d packets", step.want), func() bool { return packets() == step.want })
 	}
 }

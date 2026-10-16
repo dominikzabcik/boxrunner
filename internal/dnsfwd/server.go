@@ -60,7 +60,6 @@ type Event struct {
 	Kind Kind
 	From netip.Addr
 	Name string
-	Type uint16
 	// Addr and Reason belong to Withheld, Err to Failed.
 	Addr   netip.Addr
 	Reason string
@@ -160,7 +159,7 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 	}
 	ports, _, ok := s.Policy.Match(q.Name)
 	if !ok {
-		s.event(Event{Kind: Refused, From: from, Name: q.Name, Type: q.Type})
+		s.event(Event{Kind: Refused, From: from, Name: q.Name})
 		return Reply(query, RcodeRefused)
 	}
 	if q.Type == TypeAAAA {
@@ -173,16 +172,16 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 	}
 	response, err := s.Upstream.Exchange(ctx, query, tcp)
 	if err != nil {
-		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: err})
+		s.event(Event{Kind: Failed, From: from, Name: q.Name, Err: err})
 		return Reply(query, RcodeServFail)
 	}
 	answer, err := ParseAnswer(response)
 	if err != nil {
-		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: err})
+		s.event(Event{Kind: Failed, From: from, Name: q.Name, Err: err})
 		return Reply(query, RcodeServFail)
 	}
 	if answer.Question != q {
-		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: errors.New("the answer is to another question")})
+		s.event(Event{Kind: Failed, From: from, Name: q.Name, Err: errors.New("the answer is to another question")})
 		return Reply(query, RcodeServFail)
 	}
 	var grants []egress.Grant
@@ -200,7 +199,7 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 			reason = "a private address, which only a host named in full may have"
 		}
 		if reason != "" {
-			s.event(Event{Kind: Withheld, From: from, Name: q.Name, Type: q.Type, Addr: addr, Reason: reason})
+			s.event(Event{Kind: Withheld, From: from, Name: q.Name, Addr: addr, Reason: reason})
 			continue
 		}
 		ttl := min(max(time.Duration(r.TTL)*time.Second, MinOpen), MaxOpen)
@@ -208,20 +207,22 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 	}
 	if len(grants) > 0 && s.Open != nil {
 		if err := s.Open(ctx, grants); err != nil {
-			s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: err})
+			s.event(Event{Kind: Failed, From: from, Name: q.Name, Err: err})
 			return Reply(query, RcodeServFail)
 		}
 	}
 	for _, g := range grants {
 		s.remember(g.Addr, q.Name, g.TTL)
 	}
-	return response
+	return ClampTTLs(response, uint32(MaxOpen/time.Second))
 }
 
 // ServeUDP answers datagrams on pc until ctx ends.
 func (s *Server) ServeUDP(ctx context.Context, pc net.PacketConn) error {
 	stop := context.AfterFunc(ctx, func() { pc.Close() })
 	defer stop()
+	var handlers sync.WaitGroup
+	defer handlers.Wait()
 	slots := make(chan struct{}, maxInFlight)
 	buf := make([]byte, 65535)
 	for {
@@ -242,14 +243,14 @@ func (s *Server) ServeUDP(ctx context.Context, pc net.PacketConn) error {
 			continue
 		}
 		query := slices.Clone(buf[:n])
-		go func() {
+		handlers.Go(func() {
 			defer func() { <-slots }()
 			qctx, cancel := context.WithTimeout(ctx, queryTimeout)
 			defer cancel()
 			if response := s.Handle(qctx, query, udp.AddrPort().Addr(), false); response != nil {
 				pc.WriteTo(response, addr)
 			}
-		}()
+		})
 	}
 }
 
@@ -257,6 +258,8 @@ func (s *Server) ServeUDP(ctx context.Context, pc net.PacketConn) error {
 func (s *Server) ServeTCP(ctx context.Context, l net.Listener) error {
 	stop := context.AfterFunc(ctx, func() { l.Close() })
 	defer stop()
+	var handlers sync.WaitGroup
+	defer handlers.Wait()
 	slots := make(chan struct{}, maxInFlight)
 	var mu sync.Mutex
 	open := map[netip.Addr]int{}
@@ -292,7 +295,7 @@ func (s *Server) ServeTCP(ctx context.Context, l net.Listener) error {
 			mu.Unlock()
 			continue
 		}
-		go func() {
+		handlers.Go(func() {
 			defer func() {
 				<-slots
 				mu.Lock()
@@ -302,8 +305,9 @@ func (s *Server) ServeTCP(ctx context.Context, l net.Listener) error {
 				mu.Unlock()
 			}()
 			defer conn.Close()
+			defer context.AfterFunc(ctx, func() { conn.Close() })()
 			s.serveConn(ctx, conn)
-		}()
+		})
 	}
 }
 

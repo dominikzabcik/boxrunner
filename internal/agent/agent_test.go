@@ -65,6 +65,9 @@ type fakeDocker struct {
 	nets map[string]*fakeNet
 	// subnet and gateway, when set, are those of every new egress network.
 	subnet, gateway string
+	// failInspect makes the nth inspection of a network, by name, fail.
+	failInspect map[string]int
+	inspected   map[string]int
 }
 
 // fakeNet is an egress class's network.
@@ -115,14 +118,26 @@ func (f *fakeDocker) serve(t *testing.T) string {
 			json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
 			list := []map[string]string{}
 			for name, n := range f.nets {
-				if _, ok := n.Labels[strings.Split(filters["label"][0], "=")[0]]; ok {
+				if labels := filters["label"]; len(labels) == 0 {
+					list = append(list, map[string]string{"Name": name})
+				} else if _, ok := n.Labels[strings.Split(labels[0], "=")[0]]; ok {
 					list = append(list, map[string]string{"Name": name})
 				}
+			}
+			if len(filters["label"]) == 0 && f.network {
+				list = append(list, map[string]string{"Name": "boxrunner"})
 			}
 			json.NewEncoder(w).Encode(list)
 		case strings.HasPrefix(path, "/networks/") && f.nets[strings.TrimPrefix(path, "/networks/")] != nil && r.Method == http.MethodGet:
 			name := strings.TrimPrefix(path, "/networks/")
 			n := f.nets[name]
+			if f.inspected == nil {
+				f.inspected = map[string]int{}
+			}
+			if f.inspected[name]++; f.inspected[name] == f.failInspect[name] {
+				http.Error(w, `{"message":"docker is busy"}`, 500)
+				return
+			}
 			endpoints := map[string]any{}
 			for _, c := range f.containers {
 				if mode, _ := c.Body["HostConfig"].(map[string]any)["NetworkMode"].(string); mode == name {

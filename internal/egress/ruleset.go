@@ -276,38 +276,36 @@ func listed(listing string) objects {
 	return objects{names(chainLine), names(setLine), names(counterLine)}
 }
 
-// ElementScript opens grants in a class's sets, or with remove closes the
-// ones that are open. Only an address that is not open yet gets the time it
-// is given: nftables, before Linux 6.12, leaves the time of an element that is
-// open already as it was, so a renewal removes the address first.
-func ElementScript(c Class, grants []Grant, remove bool) string {
+// ElementScript sets the elements open in a class's sets, each for its time.
+// For every set it adds the elements, deletes them and adds them again in one
+// transaction. The first add makes the delete find something, which nftables
+// refuses to delete otherwise, and the delete makes the second add give an
+// element that was open already its new time: the nftables wiki says the time
+// of an element cannot be changed, and some kernels renew it on an add and
+// others leave it.
+func ElementScript(c Class, elements []Element) string {
 	dyn, anyPort := c.Sets()
-	var perPort, perAddr []string
-	for _, g := range grants {
-		if !g.Addr.Is4() {
+	var perPort, perAddr, perPortKeys, perAddrKeys []string
+	for _, e := range elements {
+		timeout := fmt.Sprintf(" timeout %ds", int(e.TTL.Seconds()))
+		if e.Port == 0 {
+			perAddr = append(perAddr, e.Addr.String()+timeout)
+			perAddrKeys = append(perAddrKeys, e.Addr.String())
 			continue
 		}
-		timeout := ""
-		if !remove {
-			timeout = fmt.Sprintf(" timeout %ds", int(g.TTL.Seconds()))
-		}
-		if g.Ports.Any {
-			perAddr = append(perAddr, g.Addr.String()+timeout)
-			continue
-		}
-		for _, port := range g.Ports.List {
-			perPort = append(perPort, fmt.Sprintf("%s . %d%s", g.Addr, port, timeout))
-		}
+		perPort = append(perPort, fmt.Sprintf("%s . %d%s", e.Addr, e.Port, timeout))
+		perPortKeys = append(perPortKeys, fmt.Sprintf("%s . %d", e.Addr, e.Port))
 	}
-	verb := map[bool]string{false: "add", true: "delete"}[remove]
 	var b strings.Builder
 	for _, set := range []struct {
-		name     string
-		elements []string
-	}{{dyn, perPort}, {anyPort, perAddr}} {
-		if len(set.elements) > 0 {
-			fmt.Fprintf(&b, "%s element inet %s %s { %s }\n", verb, Table, set.name, strings.Join(set.elements, ", "))
+		name          string
+		with, without []string
+	}{{dyn, perPort, perPortKeys}, {anyPort, perAddr, perAddrKeys}} {
+		if len(set.with) == 0 {
+			continue
 		}
+		add := fmt.Sprintf("add element inet %s %s { %s }\n", Table, set.name, strings.Join(set.with, ", "))
+		fmt.Fprintf(&b, "%sdelete element inet %s %s { %s }\n%s", add, Table, set.name, strings.Join(set.without, ", "), add)
 	}
 	return b.String()
 }

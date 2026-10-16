@@ -118,22 +118,46 @@ func TestParseAnswerReadsAddressesThroughAliases(t *testing.T) {
 	}
 }
 
-func TestParseAnswerReportsCodeAndTruncation(t *testing.T) {
+func TestParseAnswerRefusesWhatIsNotAnAnswer(t *testing.T) {
 	q := query(9, "example.com", TypeA)
-	nx := response(q, 3)
-	if got, err := ParseAnswer(nx); err != nil || got.Rcode != 3 || len(got.Records) != 0 {
-		t.Errorf("ParseAnswer(NXDOMAIN) = %+v, %v", got, err)
-	}
-	cut := response(q, 0)
-	cut[2] |= 0x02
-	if got, err := ParseAnswer(cut); err != nil || !got.Truncated {
-		t.Errorf("ParseAnswer(truncated) = %+v, %v", got, err)
-	}
 	if _, err := ParseAnswer(q); err == nil {
 		t.Error("ParseAnswer accepted a query")
 	}
 	if _, err := ParseAnswer(response(q, 0, a(1, "203.0.113.5"))[:40]); err == nil {
 		t.Error("ParseAnswer accepted a cut record")
+	}
+	if got, err := ParseAnswer(response(q, 3)); err != nil || len(got.Records) != 0 {
+		t.Errorf("ParseAnswer(NXDOMAIN) = %+v, %v", got, err)
+	}
+}
+
+func TestClampTTLs(t *testing.T) {
+	q := query(9, "www.example.com", TypeA)
+	resp := response(q, 0, cname(86400, "edge.example.net"), a(86400, "203.0.113.5").from("edge.example.net"), a(30, "203.0.113.6").from("edge.example.net"))
+	// An OPT record: its TTL field holds the extended code and flags, here 0x00008000.
+	opt := []byte{0, 0, 41, 0x10, 0, 0, 0, 0x80, 0, 0, 0}
+	resp = append(resp, opt...)
+	binary.BigEndian.PutUint16(resp[10:], 1)
+	got := ClampTTLs(resp, 3600)
+	parsed, err := ParseAnswer(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ttls []uint32
+	for _, r := range parsed.Records {
+		ttls = append(ttls, r.TTL)
+	}
+	if want := []uint32{3600, 30}; !reflect.DeepEqual(ttls, want) {
+		t.Errorf("TTLs = %v, want %v", ttls, want)
+	}
+	if !reflect.DeepEqual(got[len(got)-len(opt):], opt) {
+		t.Errorf("the OPT record changed: % x", got[len(got)-len(opt):])
+	}
+	if binary.BigEndian.Uint32(resp[len(q)+2+2+2:]) != 86400 {
+		t.Error("ClampTTLs changed its input")
+	}
+	if short := ClampTTLs(resp[:20], 3600); len(short) != 20 {
+		t.Errorf("a cut response came back as %d bytes", len(short))
 	}
 }
 

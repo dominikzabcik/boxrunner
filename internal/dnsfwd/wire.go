@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -77,14 +78,12 @@ type Alias struct {
 	Owner, Target string
 }
 
-// Answer is what a response says: its code, whether it was cut short, the
-// question it answers, and the addresses and aliases in its answer section.
+// Answer is what a response says: the question it answers, and the addresses
+// and aliases in its answer section.
 type Answer struct {
-	Rcode     int
-	Truncated bool
-	Question  Question
-	Records   []Record
-	Aliases   []Alias
+	Question Question
+	Records  []Record
+	Aliases  []Alias
 }
 
 // Reachable are the addresses the question's name resolves to: those whose
@@ -112,7 +111,7 @@ func (a Answer) Reachable() []Record {
 	return out
 }
 
-// ParseAnswer reads a response's address records.
+// ParseAnswer reads a response's question, address records and aliases.
 func ParseAnswer(msg []byte) (Answer, error) {
 	if len(msg) < headerLen {
 		return Answer{}, errShort
@@ -121,7 +120,7 @@ func ParseAnswer(msg []byte) (Answer, error) {
 	if flags&0x8000 == 0 {
 		return Answer{}, errors.New("dns: not a response")
 	}
-	a := Answer{Rcode: int(flags & 0xf), Truncated: flags&0x0200 != 0}
+	var a Answer
 	questions, answers := int(binary.BigEndian.Uint16(msg[4:6])), int(binary.BigEndian.Uint16(msg[6:8]))
 	off := headerLen
 	for i := range questions {
@@ -243,4 +242,37 @@ func readName(msg []byte, off int) (string, int, error) {
 // underscore of service names.
 func nameByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+}
+
+const typeOPT = 41
+
+// ClampTTLs returns the response with no TTL above max seconds. A job that
+// caches an answer for as long as its TTL says would otherwise keep using an
+// address after the forwarder closed it.
+func ClampTTLs(msg []byte, max uint32) []byte {
+	out := slices.Clone(msg)
+	if len(out) < headerLen {
+		return out
+	}
+	off := headerLen
+	for range int(binary.BigEndian.Uint16(out[4:6])) {
+		_, next, err := readName(out, off)
+		if err != nil || next+4 > len(out) {
+			return out
+		}
+		off = next + 4
+	}
+	records := int(binary.BigEndian.Uint16(out[6:8])) + int(binary.BigEndian.Uint16(out[8:10])) + int(binary.BigEndian.Uint16(out[10:12]))
+	for range records {
+		_, next, err := readName(out, off)
+		if err != nil || next+10 > len(out) {
+			return out
+		}
+		// An OPT record's TTL field holds flags, not a time.
+		if binary.BigEndian.Uint16(out[next:]) != typeOPT && binary.BigEndian.Uint32(out[next+4:]) > max {
+			binary.BigEndian.PutUint32(out[next+4:], max)
+		}
+		off = next + 10 + int(binary.BigEndian.Uint16(out[next+8:]))
+	}
+	return out
 }

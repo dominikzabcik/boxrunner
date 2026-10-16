@@ -320,3 +320,21 @@ func TestNetworksListsByLabelWithTheirEndpoints(t *testing.T) {
 		t.Errorf("listing request = %s, want %s", (*requests)[0].uri, want)
 	}
 }
+
+func TestNetworksWithoutALabelListsEveryNetwork(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.47/networks":
+			io.WriteString(w, `[{"Name":"bridge"},{"Name":"boxrunner"}]`)
+		default:
+			io.WriteString(w, `{"Name":"x","IPAM":{"Config":[{"Subnet":"172.17.0.0/16","Gateway":"172.17.0.1"}]}}`)
+		}
+	})
+	got, err := c.Networks(context.Background(), "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("Networks = %+v, %v", got, err)
+	}
+	if (*requests)[0].uri != "/v1.47/networks?" {
+		t.Errorf("listing request = %s, want no filter", (*requests)[0].uri)
+	}
+}
