@@ -500,3 +500,37 @@ func TestServeTCPCapsConnectionsPerSource(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestResolverAsksWithAnIDOfItsOwn(t *testing.T) {
+	server, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ids := make(chan uint16, 8)
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := server.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			ids <- binary.BigEndian.Uint16(buf)
+			server.WriteTo(response(buf[:n], 0, a(30, "203.0.113.1")), addr)
+		}
+	}()
+	r := &Resolver{Timeout: time.Second, Servers: func() []netip.AddrPort { return []netip.AddrPort{server.LocalAddr().(*net.UDPAddr).AddrPort()} }}
+	same := 0
+	for range 5 {
+		got, err := r.Exchange(context.Background(), query(0x0102, "github.com", TypeA), false)
+		if err != nil || binary.BigEndian.Uint16(got) != 0x0102 {
+			t.Fatalf("Exchange = % x, %v; want the client's ID in the answer", got, err)
+		}
+		if <-ids == 0x0102 {
+			same++
+		}
+	}
+	if same == 5 {
+		t.Error("the resolver asked upstream with the job's own query ID every time")
+	}
+}
