@@ -13,641 +13,996 @@
 <meta property="og:image" content="https://boxrunner.zabcik.me/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="CI on the box you already pay for. A box drawn in particles holds four job containers.">
+<meta property="og:image:alt" content="CI on the box you already pay for. An engraving of a box that holds one main job and five idle ones, tinted blue and amber.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#070a10">
+<meta name="theme-color" content="#e9dfc9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#17120d" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/castoro.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/instrument-sans.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-/* Layout: one dark instrument. A full-bleed particle box in the hero, then four chapters that each animate one claim, then the install line. */
+/* Paper: warm laid paper, a serif for display, ink drawn in hatching and dots, washes of blue and amber. */
 /* Each fallback face is a local font scaled to its web font's width and line metrics (measured in Chromium), so swapping fonts barely moves the text. */
-@font-face { font-family: "Bricolage Grotesque"; src: url(/fonts/bricolage-grotesque.woff2) format("woff2"); font-weight: 500 800; font-display: swap; }
-@font-face { font-family: "Geist"; src: url(/fonts/geist.woff2) format("woff2"); font-weight: 400 600; font-display: swap; }
+@font-face { font-family: "Castoro"; src: url(/fonts/castoro.woff2) format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Castoro"; src: url(/fonts/castoro-italic.woff2) format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url(/fonts/instrument-sans.woff2) format("woff2"); font-weight: 400 600; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url(/fonts/geist-mono.woff2) format("woff2"); font-weight: 400 500; font-display: swap; }
-@font-face { font-family: "Bricolage Fallback"; src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"); font-weight: 500 800; size-adjust: 91.89%; ascent-override: 101.21%; descent-override: 29.38%; line-gap-override: 0%; }
-@font-face { font-family: "Geist Fallback"; src: local("Arial"), local("ArialMT"), local("Liberation Sans"); font-weight: 400 600; size-adjust: 101.78%; ascent-override: 98.74%; descent-override: 28.98%; line-gap-override: 0%; }
+@font-face { font-family: "Castoro Fallback"; src: local("Georgia"); font-style: normal; size-adjust: 100.64%; ascent-override: 75%; descent-override: 24.3%; line-gap-override: 32.8%; }
+@font-face { font-family: "Castoro Fallback"; src: local("Georgia Italic"), local("Georgia-Italic"); font-style: italic; size-adjust: 97.48%; ascent-override: 77.4%; descent-override: 25.1%; line-gap-override: 33.9%; }
+@font-face { font-family: "Instrument Fallback"; src: local("Arial"), local("ArialMT"), local("Liberation Sans"); font-weight: 400 600; size-adjust: 100.99%; ascent-override: 96%; descent-override: 24.8%; line-gap-override: 0%; }
 @font-face { font-family: "Geist Mono Fallback"; src: local("Menlo"), local("Courier New"), local("Liberation Mono"); font-weight: 400 500; size-adjust: 99.66%; ascent-override: 100.84%; descent-override: 29.6%; line-gap-override: 0%; }
 :root {
-  --night: #070a10;
-  --deep: #0c1119;
-  --panel: #111824;
-  --rule: #1f2a3a;
-  --ink: #edf1f7;
-  --dim: #8c99ab;
-  --faint: #56637a;
-  --normal: #5aa7ff;
-  --idle: #f5b54a;
-  --key: #ff6a3d;
-  --ok: #45d48a;
-  --f-display: "Bricolage Grotesque", "Bricolage Fallback", system-ui, sans-serif;
-  --f-ui: "Geist", "Geist Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --paper: #e9dfc9;
+  --plate: #ddd0b2;
+  --slip: #f5efe1;
+  --ink: #241c14;
+  --ink-2: #463a2d;
+  --dim: #66584a;
+  --faint: #93846d;
+  --rule: rgba(36, 28, 20, .16);
+  --rule-2: rgba(36, 28, 20, .28);
+  --blue: #2c69ad;
+  --amber: #93620f;
+  --key: #b8461f;
+  --ok: #26794a;
+  --wash-blue: rgba(90, 167, 255, .55);
+  --wash-amber: rgba(245, 181, 74, .62);
+  --wash-key: rgba(255, 106, 61, .5);
+  --wash-ok: rgba(69, 212, 138, .28);
+  --wash-del: rgba(255, 106, 61, .16);
+  --blend: multiply;
+  --emboss: rgba(255, 252, 240, .55);
+  --tex: 36, 28, 20;
+  --floor: #1d1711;
+  --floor-ink: #efe5cf;
+  --floor-dim: #a69680;
+  --floor-dot: 239, 229, 207;
+  --f-display: "Castoro", "Castoro Fallback", "Iowan Old Style", Georgia, serif;
+  --f-ui: "Instrument Sans", "Instrument Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
   --f-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, "SFMono-Regular", Menlo, monospace;
-  color-scheme: dark;
+  --gutter: clamp(18px, 4.6vw, 64px);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #17120d;
+    --plate: #221b14;
+    --slip: #2b231a;
+    --ink: #ede2cb;
+    --ink-2: #d6c9b0;
+    --dim: #ab9c84;
+    --faint: #7f725e;
+    --rule: rgba(237, 226, 203, .13);
+    --rule-2: rgba(237, 226, 203, .24);
+    --blue: #8dc0f8;
+    --amber: #f1c477;
+    --key: #ff9068;
+    --ok: #6cd8a2;
+    --wash-blue: rgba(90, 167, 255, .40);
+    --wash-amber: rgba(245, 181, 74, .40);
+    --wash-key: rgba(255, 106, 61, .45);
+    --wash-ok: rgba(69, 212, 138, .16);
+    --wash-del: rgba(255, 106, 61, .14);
+    --blend: screen;
+    --emboss: rgba(0, 0, 0, .35);
+    --tex: 237, 226, 203;
+    --floor: #0d0a07;
+    color-scheme: dark;
+  }
 }
 * { box-sizing: border-box; }
-body { background: var(--night); color: var(--ink); font: 16px/1.6 var(--f-ui); overflow-x: hidden; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; color: var(--ink); font: 17px/1.6 var(--f-ui);
+  background-color: var(--paper);
+  /* laid paper: fine laid lines, wider chain lines, a little fiber */
+  background-image:
+    url(/paper.svg),
+    repeating-linear-gradient(90deg, rgba(var(--tex), .035) 0 1px, transparent 1px 38px),
+    repeating-linear-gradient(0deg, rgba(var(--tex), .022) 0 1px, transparent 1px 4px);
+  overflow-x: hidden;
+}
 a { color: inherit; }
 button, input { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--normal); outline-offset: 3px; border-radius: 4px; }
-.gutter { padding-inline: clamp(16px, 4vw, 48px); }
-.measure { max-width: 1180px; margin-inline: auto; }
-.mono { font-family: var(--f-mono); }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 2px; }
+code, .mono { font-family: var(--f-mono); font-size: .86em; }
+.wrap { max-width: 1240px; margin-inline: auto; padding-inline: var(--gutter); }
+.wrap.wide { max-width: 1440px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 400; margin: 0; letter-spacing: -.01em; }
+h2 { font-size: clamp(32px, 4vw, 54px); line-height: 1.06; text-wrap: balance; }
+h2 .s { display: block; }
+.lede { font-size: clamp(17px, 1.35vw, 19px); color: var(--ink-2); }
+.sec { padding-block: clamp(64px, 7.4vw, 112px); }
+.fig-no { font: italic 400 15px/1.3 var(--f-display); color: var(--dim); }
 
 /* nav */
-nav.top { position: absolute; inset: env(safe-area-inset-top, 0px) 0 auto 0; z-index: 3; }
-nav.top .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; }
-.mark { font: 500 15px/1 var(--f-mono); letter-spacing: .02em; display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
-.mark svg { width: 18px; height: 18px; flex: none; }
-nav.top ul { display: flex; gap: clamp(12px, 3vw, 28px); list-style: none; margin: 0; padding: 0; font-size: 14px; color: var(--dim); }
+nav.top { display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 76px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 600 17px/1 var(--f-ui); letter-spacing: -.01em; }
+.brand svg { width: 22px; height: 22px; color: var(--ink); }
+nav.top ul { display: flex; gap: clamp(14px, 2.4vw, 30px); list-style: none; margin: 0; padding: 0; font-size: 15px; color: var(--dim); }
 nav.top a { text-decoration: none; }
 nav.top a:hover { color: var(--ink); }
-@media (max-width: 560px) { nav.top ul li.in-page { display: none; } }
+nav.top a[aria-current] { color: var(--ink); }
+@media (max-width: 720px) { nav.top ul .in { display: none; } }
+
+.colo { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; padding-block: 26px 34px; font-size: 14px; color: var(--colo-dim, var(--dim)); }
+.colo .brand { color: var(--colo-ink, var(--ink)); font-size: 16px; }
+.colo .brand svg { color: var(--colo-ink, var(--ink)); }
+.colo a { text-decoration: none; }
+.colo a:hover { color: var(--colo-ink, var(--ink)); }
+.colo .right { margin-left: auto; display: flex; gap: 22px; flex-wrap: wrap; }
+.sr { position: fixed; top: 0; left: 0; margin: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip { position: absolute; left: 16px; top: -100px; z-index: 9; background: var(--ink); color: var(--paper); padding: 11px 15px; border-radius: 3px; font: 500 15px/1 var(--f-ui); text-decoration: none; }
+.skip:focus { top: 12px; }
+.act { justify-self: start; display: inline-flex; align-items: center; gap: 12px; background: var(--ink); color: var(--paper); text-decoration: none; font: 500 16px/1 var(--f-ui); padding: 15px 20px 15px 18px; border-radius: 3px; transition: background-color .2s; }
+.act:hover { background: var(--ink-2); }
+.act svg { width: 16px; height: 16px; transition: transform .25s cubic-bezier(.2, .7, .2, 1); }
+.act:hover svg { transform: translateX(3px); }
 /* Everything above this line is shared with the docs and 404 pages: build.ts cuts the stylesheet here. */
 
-/* hero */
-.hero { position: relative; min-height: min(100svh, 940px); display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; overflow: hidden; isolation: isolate; }
-header.hero, main, footer { position: relative; z-index: 1; }
+p code, dd code, li code { background: rgba(var(--tex), .07); padding: .08em .3em; border-radius: 3px; white-space: nowrap; }
 
-.hero::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: none; }
-.hero .copy { padding-block: 112px 48px; width: 100%; }
-.copytext { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; max-width: 640px; min-width: 0; }
-.install > * { min-width: 0; }
-.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 10px; }
-.eyebrow .live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: ping 2.4s infinite; }
-@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(69,212,138,.6) } 70% { box-shadow: 0 0 0 9px rgba(69,212,138,0) } 100% { box-shadow: 0 0 0 0 rgba(69,212,138,0) } }
-h1 { font: 800 clamp(46px, 7.4vw, 112px)/0.92 var(--f-display); letter-spacing: -0.035em; margin: 0; text-wrap: balance; }
-h1 .w { display: inline-block; }
-h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 1.5px var(--ink); }
-.lede { font-size: clamp(17px, 1.6vw, 20px); color: var(--dim); max-width: 56ch; margin: 0; }
-.lede b { color: var(--ink); font-weight: 500; }
-.install { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
-.cmd { display: flex; align-items: center; gap: 12px; min-width: 0; max-width: 100%; background: rgba(17,24,36,.82); backdrop-filter: blur(8px); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 12px 12px 16px; font: 14px/1.4 var(--f-mono); }
-.cmd code { overflow-x: auto; white-space: nowrap; min-width: 0; color: var(--ink); }
-.cmd code .p { color: var(--faint); }
-.copybtn { flex: none; border: 1px solid var(--rule); background: var(--panel); border-radius: 7px; padding: 7px 10px; font: 500 12px/1 var(--f-mono); cursor: pointer; color: var(--dim); }
-.copybtn:hover { color: var(--ink); border-color: var(--faint); }
-.ghost { display: inline-flex; align-items: center; gap: 8px; padding: 12px 16px; border-radius: 10px; text-decoration: none; font-weight: 500; border: 1px solid var(--rule); }
-.ghost:hover { border-color: var(--faint); }
-.ticker { display: flex; flex-wrap: wrap; gap: 8px 22px; font: 13px/1.3 var(--f-mono); color: var(--dim); font-variant-numeric: tabular-nums; }
-.ticker b { color: var(--ink); font-weight: 500; }
-.ticker .n { color: var(--normal); } .ticker .i { color: var(--idle); }
+/* hero plate */
+.hero { padding-inline: var(--gutter); max-width: 1440px; margin-inline: auto; }
+.plate {
+  position: relative; border-radius: 3px; background: var(--plate); overflow: hidden;
+  min-height: clamp(600px, calc(100svh - 76px - 70px), 820px);
+  display: grid; grid-template-columns: minmax(0, 470px) minmax(0, 1fr); padding: clamp(44px, 5.4vw, 78px) clamp(40px, 5vw, 76px) clamp(40px, 4.6vw, 64px);
+  box-shadow: 0 1px 0 var(--emboss), 0 2px 6px -3px rgba(36, 28, 20, .35);
+}
+/* the plate mark: the bevel an etching plate presses into the paper */
+.plate::before { content: ""; position: absolute; inset: 14px; border: 1px solid var(--rule-2); border-radius: 2px; box-shadow: 1px 1px 0 var(--emboss); pointer-events: none; z-index: 1; }
+.art { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.plate-left { position: relative; z-index: 2; display: flex; flex-direction: column; justify-content: space-between; gap: 36px; }
+.plate-copy { display: grid; gap: 22px; }
+h1 { font-size: clamp(40px, 4.5vw, 66px); line-height: 1.02; letter-spacing: -.015em; }
+h1 span { display: block; white-space: nowrap; }
+.plate-copy .lede { margin: 0; max-width: 25em; text-wrap: pretty; }
+.acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 8px; }
+.act.light { background: var(--floor-ink); color: var(--floor); }
+.act.light:hover { background: #fff7e4; }
+.act.ghost { background: transparent; color: var(--floor-ink); box-shadow: inset 0 0 0 1px rgba(var(--floor-dot), .35); }
+.act.ghost:hover { background: rgba(var(--floor-dot), .1); }
 
-/* chapters */
-section.ch { padding-block: clamp(72px, 11vw, 140px); border-top: 1px solid var(--rule); }
-.ch .head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-bottom: clamp(28px, 4vw, 48px); max-width: 600px; }
-.ch .kicker { font: 500 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
-.ch h2 { font: 800 clamp(34px, 5.4vw, 72px)/0.96 var(--f-display); letter-spacing: -0.03em; margin: 0; text-wrap: balance; }
-.ch h2 .n { color: var(--normal); } .ch h2 .i { color: var(--idle); } .ch h2 .k { color: var(--key); }
-.ch p.sub { margin: 0; color: var(--dim); font-size: 18px; max-width: 62ch; }
-.reveal { transition: transform .9s cubic-bezier(.2,.7,.2,1), filter .9s; }
-.js .reveal.pending { transform: translateY(18px); filter: blur(2px); }
+/* the printed slip */
+.slip { position: relative; margin: 0; width: 360px; max-width: 100%; background: var(--slip); color: var(--ink); border-radius: 2px; box-shadow: 0 1px 0 rgba(36, 28, 20, .12), 1px 3px 8px -4px rgba(36, 28, 20, .45); font: 13px/1.75 var(--f-mono); transform: rotate(-.6deg); }
+.slip header { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px 8px; border-bottom: 1px dashed var(--rule-2); color: var(--dim); font-size: 12px; }
+.slip header b { font-weight: 500; color: var(--ink-2); }
+.slip pre { margin: 0; padding: 10px 0 14px; font: inherit; overflow: hidden; }
+.slip .l { display: block; padding: 0 16px 0 14px; white-space: pre; }
+.slip .l i { font-style: normal; display: inline-block; width: 18px; color: var(--faint); }
+.slip .del { background: var(--wash-del); }
+.slip .del i { color: var(--key); }
+.slip .add { background: var(--wash-ok); }
+.slip .add i { color: var(--ok); }
+.strike { position: relative; color: var(--dim); }
+.strike::after { content: ""; position: absolute; left: -1px; right: -1px; top: 54%; height: 1.5px; background: var(--key); border-radius: 1px; transform-origin: left; animation: strike .7s 1.1s cubic-bezier(.5, 0, .2, 1) both; }
+@keyframes strike { from { transform: scaleX(0); } }
+.slip .add b { font-weight: 500; color: var(--ink); }
 
-/* cores */
-.scope { background: var(--deep); border: 1px solid var(--rule); border-radius: 14px; padding: clamp(14px, 2vw, 22px); display: grid; gap: 16px; }
-.scope canvas { width: 100%; height: clamp(180px, 26vw, 280px); display: block; border-radius: 8px; }
-.scope .bar { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; font: 13px/1.3 var(--f-mono); color: var(--dim); }
-.sw { width: 14px; height: 10px; display: inline-block; border-radius: 2px; vertical-align: -1px; margin-right: 7px; }
-.sw.n { background: var(--normal); }
-.sw.i { background: repeating-linear-gradient(135deg, var(--idle) 0 3px, transparent 3px 6px); outline: 1px solid var(--idle); }
-.switch { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 3px; gap: 3px; }
-.switch button { border: 0; background: transparent; border-radius: 999px; padding: 7px 12px; cursor: pointer; color: var(--dim); font: 500 12px/1 var(--f-mono); }
-.switch button[aria-pressed="true"] { background: var(--ink); color: var(--night); }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; margin-top: 26px; }
-.stat { border-left: 1px solid var(--rule); padding: 6px 0 6px 18px; display: grid; gap: 6px; }
-.stat dt { font: 12px/1.2 var(--f-mono); color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
-.stat dd { margin: 0; font: 600 clamp(32px, 4vw, 48px)/1 var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-.stat dd small { font-size: 15px; color: var(--dim); font-weight: 400; letter-spacing: 0; }
-.stat.bad dd { color: var(--key); }
+.plate-cap { display: flex; justify-content: space-between; gap: 8px 24px; flex-wrap: wrap; padding: 16px 4px 0; color: var(--dim); font-size: 14px; }
+.plate-cap em { font: italic 400 16px/1.4 var(--f-display); color: var(--ink-2); }
+.plate-cap .tally { font-variant-numeric: tabular-nums; }
+.plate-cap .tally b { font: 500 13px var(--f-mono); color: var(--ink); }
 
-/* vault */
-.vault { display: grid; grid-template-columns: minmax(0, 1fr); }
-.caption { color: var(--dim); font-size: 13px; margin: -16px 0 28px; max-width: 600px; }
-.caption .k { color: var(--key); } .caption .n { color: var(--normal); }
-.vault svg { width: 100%; height: auto; display: block; overflow: visible; }
-.vault .node rect { fill: var(--deep); stroke: var(--rule); stroke-width: 1.5; }
-.vault .node.keyed rect { stroke: var(--key); }
-.vault text { font-family: var(--f-mono); fill: var(--dim); font-size: 13px; }
-.vault text.t { fill: var(--ink); font: 600 17px var(--f-ui); }
-.vault text.kt { fill: var(--key); }
-.vault .wire { stroke: var(--rule); stroke-width: 2; fill: none; stroke-dasharray: 4 6; }
-.vault .pkt rect { fill: var(--normal); }
-.vault .pkt text { fill: var(--night); font: 600 11px var(--f-mono); }
-.vault .pkt.key rect { fill: var(--key); }
-.claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px 28px; max-width: 760px; }
-.claim { border-left: 2px solid var(--rule); padding: 4px 0 4px 16px; }
-.claim strong { display: block; font: 600 15px/1.3 var(--f-ui); margin-bottom: 4px; }
-.claim span { color: var(--dim); font-size: 15px; }
-.claim.k { border-color: var(--key); }
-
-/* install */
-.pair { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px; align-items: start; }
-@media (max-width: 880px) { .pair { grid-template-columns: 1fr; } }
-.term { background: var(--deep); border: 1px solid var(--rule); border-radius: 14px; overflow: hidden; min-width: 0; }
-.term .chrome { display: flex; gap: 7px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
-.term .chrome i { width: 10px; height: 10px; border-radius: 50%; background: var(--rule); }
-.term pre { margin: 0; padding: 16px 18px 22px; font: 13px/1.65 var(--f-mono); color: #c9d3e1; min-height: 360px; overflow-x: auto; }
-.term .p { color: var(--faint); } .term .ok { color: var(--ok); } .term .hi { color: var(--idle); } .term .b { color: var(--normal); }
-.term .caret { display: inline-block; width: 8px; height: 15px; background: var(--ink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
-@keyframes blink { 50% { opacity: 0 } }
-.receipt { background: #f4f3ee; color: #17171a; padding: 22px 20px 30px; font: 13px/1.6 var(--f-mono); display: grid; gap: 12px; position: relative; transform: rotate(-1.2deg); box-shadow: 0 24px 60px rgba(0,0,0,.45);
-  -webkit-mask: radial-gradient(circle 7px at 50% 100%, transparent 98%, #000) bottom / 16px 100% repeat-x; mask: radial-gradient(circle 7px at 50% 100%, transparent 98%, #000) bottom / 16px 100% repeat-x; }
-.receipt h3 { margin: 0; text-align: center; font: 600 12px/1 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; }
-.receipt .row { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
-.receipt .row.total { border-top: 1px dashed #9a9a92; padding-top: 10px; font-size: 16px; font-weight: 600; }
-.receipt .strike { color: #c03a1a; text-decoration: line-through; }
-.receipt label { display: grid; gap: 8px; color: #55554f; font-size: 12px; }
-.receipt input[type=range] { width: 100%; accent-color: #17171a; }
-.receipt .src { font-size: 11px; color: #6c6c66; margin: 0; }
-.stamp { position: absolute; right: 16px; top: 46px; border: 2px solid #1f8a4c; color: #1f8a4c; padding: 4px 8px; font: 700 13px/1 var(--f-mono); transform: rotate(9deg); letter-spacing: .1em; opacity: .85; }
-
-/* race */
-.race { display: grid; gap: 18px; }
-.lane { display: grid; grid-template-columns: 180px minmax(0, 1fr) 90px; gap: 14px; align-items: center; font: 14px/1.3 var(--f-mono); }
-@media (max-width: 620px) { .lane { grid-template-columns: 1fr 70px; } .lane .track { grid-column: 1 / -1; grid-row: 2; } }
-.track { height: 14px; background: var(--deep); border-radius: 999px; overflow: hidden; border: 1px solid var(--rule); }
-.fill { height: 100%; width: var(--w); border-radius: 999px; background: var(--c); transform-origin: left; }
-.race .fill { transform-origin: left; }
-.fill.hosted { --w: 100%; --c: var(--faint); } .fill.proto { --w: 83%; --c: var(--idle); } .fill.ours { --w: 77%; --c: var(--normal); }
-.lane .t { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
-.lane .who { color: var(--dim); }
-
-/* honest */
-.nots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-.not { background: var(--deep); border: 1px solid var(--rule); border-radius: 12px; padding: 16px 18px; }
-.not strong { display: block; margin-bottom: 6px; }
-.not span { color: var(--dim); font-size: 15px; }
-
-footer { border-top: 1px solid var(--rule); padding-block: 72px 56px; display: grid; gap: 22px; }
-footer h2 { font: 800 clamp(34px, 6vw, 80px)/.95 var(--f-display); letter-spacing: -0.03em; margin: 0; }
-footer .meta { color: var(--faint); font: 13px/1.5 var(--f-mono); display: flex; flex-wrap: wrap; gap: 8px 20px; }
-.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px); opacity: 0; background: var(--ink); color: var(--night); padding: 10px 14px; border-radius: 8px; font: 500 13px var(--f-mono); transition: .25s; pointer-events: none; z-index: 9; }
-.toast.on { opacity: 1; transform: translate(-50%, 0); }
-@media (prefers-reduced-motion: reduce) { .reveal, .race .fill { transition: none; } .eyebrow .live, .term .caret { animation: none; } }
-/* Each chapter pairs its words with a stage that holds its own particle scene. */
-.split, .intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); gap: clamp(24px, 4vw, 64px); align-items: center; }
-.intro { margin-bottom: clamp(28px, 4vw, 48px); }
-.intro .head { margin-bottom: 0; }
-.stage { min-height: clamp(300px, 32vw, 440px); position: relative; }
-.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.hero .stage { min-height: clamp(380px, 44vw, 600px); }
-.foot { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
 @media (max-width: 900px) {
-  .split, .intro { grid-template-columns: minmax(0, 1fr); }
-  .stage, .hero .stage { min-height: 260px; order: -1; }
-  .hero .copy { padding-top: 84px; }
+  .plate { min-height: 0; display: flex; flex-direction: column; padding: 34px 26px 30px; }
+  .plate-left { display: contents; }
+  .plate-copy { gap: 18px; order: 1; position: relative; z-index: 2; }
+  .art { order: 2; position: relative; height: 320px; margin: 10px -10px 6px; width: calc(100% + 20px); }
+  .plate-left .slip { order: 3; width: auto; transform: none; z-index: 2; }
+}
+@media (max-width: 520px) {
+  h1 { font-size: 8.7vw; }
+  .slip { font-size: 12px; }
+  .slip header span { display: none; }
+  .slip .l { padding: 0 12px 0 10px; }
+  .slip .l i { width: 14px; }
 }
 
-/* the job feed under the hero */
-.feed { position: relative; z-index: 1; display: grid; gap: 10px; padding-block: 8px 28px; overflow: hidden; -webkit-mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
-.feed .row { display: flex; gap: 10px; list-style: none; margin: 0; padding: 0; width: max-content; will-change: transform; }
-.job { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; background: var(--deep); border: 1px solid var(--rule); border-radius: 999px; padding: 8px 14px; font: 13px/1 var(--f-mono); color: var(--dim); }
-.job b { color: var(--ink); font-weight: 500; }
-.job .dot { width: 8px; height: 8px; border-radius: 2px; }
-.job .dot.n { background: var(--normal); }
-.job .dot.i { background: repeating-linear-gradient(135deg, var(--idle) 0 2px, transparent 2px 4px); outline: 1px solid var(--idle); }
-.job em { font-style: normal; font-weight: 600; }
-.job em.ok { color: var(--ok); } .job em.failed { color: var(--key); }
-/* scroll-lit headings */
-.wd { transition: opacity .25s linear; }
-</style>
+/* priorities */
+.prio h2 { max-width: 15em; margin-bottom: clamp(36px, 5vw, 64px); }
+.prio-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(32px, 5vw, 80px); align-items: start; }
+.prio-text p { margin: 0 0 1em; color: var(--ink-2); }
+.classes { margin: 28px 0 0; display: grid; gap: 14px; }
+.classes div { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 2px 12px; align-items: baseline; }
+.classes .sq { width: 14px; height: 14px; border: 1.2px solid var(--ink); transform: translateY(2px); }
+.classes .sq.n { background: var(--wash-blue); }
+.classes .sq.i { width: 10px; height: 10px; background: var(--wash-amber); transform: translate(2px, 0); }
+.classes dt { font-weight: 600; }
+.classes dd { margin: 0; grid-column: 2; color: var(--ink-2); font-size: 16px; }
 
-<nav class="top gutter" aria-label="Site">
-  <div class="row measure">
-    <a class="mark" href="#top"><!--mark-->boxrunner</a>
+.bench { margin: 0; background: var(--slip); border-radius: 3px; padding: clamp(20px, 2.4vw, 30px); box-shadow: 0 1px 0 rgba(36, 28, 20, .1); }
+.bench-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 26px; }
+.bench-head .fig-no { max-width: 22em; margin: 0; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--rule-2); border-radius: 4px; }
+.seg button { border: 0; background: transparent; padding: 7px 12px; border-radius: 3px; cursor: pointer; font: 500 13px/1 var(--f-ui); color: var(--dim); transition: background-color .2s, color .2s; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--slip); }
+.seg button:not([aria-pressed="true"]):hover { color: var(--ink); }
+.rows { display: grid; gap: 22px; }
+.brow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; }
+.brow .lab { font-size: 15px; display: flex; align-items: center; gap: 10px; }
+.brow .nb { display: inline-flex; gap: 3px; }
+.brow .nb i { width: 9px; height: 9px; border: 1px solid var(--ink); }
+.brow .nb.i i { background: var(--wash-amber); }
+.brow .nb.n i { background: var(--wash-blue); }
+.brow .val { font: 500 14px/1 var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.brow .val.bad { color: var(--key); }
+.track { grid-column: 1 / -1; height: 26px; position: relative; }
+.track .base, .track .extra { position: absolute; top: 0; bottom: 0; border: 1.2px solid var(--ink); transition: width .7s cubic-bezier(.3, .7, .2, 1), left .7s cubic-bezier(.3, .7, .2, 1); }
+.track .base { left: 0; background: var(--wash-blue); }
+.track .extra { border-left: 0; background: repeating-linear-gradient(-45deg, var(--ink) 0 1px, transparent 1px 5px), repeating-linear-gradient(45deg, rgba(var(--tex), .45) 0 1px, transparent 1px 5px); opacity: .8; }
+.axis { position: relative; height: 22px; margin-top: 12px; border-top: 1px solid var(--rule-2); font: 12px/1 var(--f-mono); color: var(--dim); }
+.axis span { position: absolute; top: 8px; transform: translateX(-50%); }
+.axis span:first-child { transform: none; }
+.bench-note { margin: 20px 0 0; color: var(--ink-2); font-size: 15px; }
+.bench-note b { font-weight: 600; }
+.legend-x { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--dim); font-size: 13px; }
+.legend-x i { width: 22px; height: 10px; border: 1px solid var(--ink); background: repeating-linear-gradient(-45deg, var(--ink) 0 1px, transparent 1px 5px); opacity: .8; }
+
+/* key custody */
+.keyfig { margin: 0 0 clamp(36px, 5vw, 64px); }
+.keyfig svg { width: 100%; height: auto; display: block; color: var(--ink); overflow: visible; }
+.keyfig .ed { fill: none; stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.keyfig .ed.thin { stroke-width: .8; opacity: .75; }
+.keyfig .key path { fill: var(--wash-key); stroke: var(--key); stroke-width: 1.3; stroke-linejoin: round; mix-blend-mode: var(--blend); }
+.keyfig .job .wl, .keyfig .job .wr, .keyfig .job .wt { stroke: none; mix-blend-mode: var(--blend); }
+.keyfig .job.n .wt { fill: rgba(90, 167, 255, .28); } .keyfig .job.n .wl { fill: rgba(90, 167, 255, .45); } .keyfig .job.n .wr { fill: rgba(90, 167, 255, .62); }
+.keyfig .job.i .wt { fill: rgba(245, 181, 74, .3); } .keyfig .job.i .wl { fill: rgba(245, 181, 74, .48); } .keyfig .job.i .wr { fill: rgba(245, 181, 74, .66); }
+.keyfig .job .ed { stroke-width: 1; }
+.keyfig .letter { font: italic 400 34px var(--f-display); fill: var(--ink); }
+.keyfig .route { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: .1 7; opacity: .7; }
+.keyfig figcaption { margin-top: 14px; max-width: 40em; }
+.keyfig .token rect.p { fill: var(--slip); stroke: var(--ink); stroke-width: 1.1; }
+.keyfig .token rect.w { fill: var(--wash-blue); mix-blend-mode: var(--blend); }
+.keyfig .token circle { fill: var(--plate); stroke: var(--ink); stroke-width: .9; }
+.key-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(28px, 5vw, 80px); }
+.key-grid h2 { max-width: 9em; }
+.key-grid > div > p { margin: 0 0 28px; color: var(--ink-2); }
+.parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 0; }
+.parts div { display: grid; gap: 6px; align-content: start; }
+.parts dt { display: flex; align-items: baseline; gap: 10px; font-weight: 600; }
+.parts dt i { font: italic 400 26px/1 var(--f-display); color: var(--dim); }
+.parts dt.k i { color: var(--key); }
+.parts dd { margin: 0; color: var(--ink-2); font-size: 15.5px; }
+
+/* install */
+.inst-cmd { display: flex; align-items: center; gap: 16px; padding: clamp(18px, 2.4vw, 28px) clamp(18px, 2.6vw, 32px); background: var(--ink); color: var(--paper); border-radius: 3px; margin-bottom: clamp(40px, 5vw, 64px); }
+.inst-cmd code { flex: 1; min-width: 0; white-space: pre-wrap; font-size: clamp(14px, 1.55vw, 21px); line-height: 1.5; overflow-wrap: anywhere; }
+.inst-cmd code .p { opacity: .5; user-select: none; }
+.copy { flex: none; border: 1px solid rgba(var(--tex), .3); background: transparent; color: inherit; border-radius: 3px; padding: 9px 14px; cursor: pointer; font: 500 14px/1 var(--f-ui); transition: background-color .2s; }
+.inst-cmd .copy { border-color: color-mix(in srgb, var(--paper) 35%, transparent); }
+.copy:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.inst-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(28px, 5vw, 80px); align-items: start; }
+.steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px clamp(24px, 3vw, 44px); margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.steps li { counter-increment: step; }
+.steps p { margin: 0; color: var(--ink-2); font-size: 16px; }
+.steps h3 { font-size: 24px; margin-bottom: 8px; }
+.steps h3::before { content: counter(step) "."; font-style: italic; color: var(--dim); margin-right: .45em; }
+.steps a { text-underline-offset: 3px; }
+.speed { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 14px 18px; margin-top: clamp(28px, 3.4vw, 44px); padding-top: 24px; border-top: 1px solid var(--rule); }
+.speed .num { font: 400 clamp(40px, 4.4vw, 60px)/1 var(--f-display); letter-spacing: -.01em; }
+.speed .num small { font-size: .45em; color: var(--dim); margin-left: 4px; }
+.speed p { margin: 0; color: var(--dim); max-width: 26em; font-size: 15.5px; }
+
+/* origin */
+.origin-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: clamp(28px, 5vw, 72px); align-items: start; }
+.twelve { font: 400 clamp(150px, 19vw, 280px)/.78 var(--f-display); letter-spacing: -.04em; margin-top: 6px; }
+.twelve small { display: block; font: italic 400 clamp(22px, 2.2vw, 30px)/1 var(--f-display); letter-spacing: 0; color: var(--dim); margin-top: 20px; text-align: right; }
+.origin h2 { max-width: 14em; margin-bottom: 22px; }
+.origin .cols { columns: 2 22em; column-gap: 40px; color: var(--ink-2); }
+.origin .cols p { margin: 0 0 1em; }
+.month { margin: 34px 0 0; }
+.days { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 4px; }
+.days i { aspect-ratio: 1 / 1.6; border: 1px solid var(--ink); border-radius: 1px; }
+.days i.f { background: var(--wash-blue); }
+.days i.b { border-color: var(--rule-2); background: repeating-linear-gradient(-45deg, rgba(var(--tex), .35) 0 1px, transparent 1px 4px); }
+.month .keys { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 18px; margin-top: 10px; font-size: 14px; color: var(--dim); }
+.runs { display: grid; gap: 12px; margin-top: 30px; }
+.run { display: grid; grid-template-columns: 11em minmax(0, 1fr) 4.5em; gap: 14px; align-items: center; font-size: 15px; }
+.run .bar { height: 12px; border: 1.2px solid var(--ink); }
+.run .bar.gh { width: 100%; background: repeating-linear-gradient(-45deg, rgba(var(--tex), .5) 0 1px, transparent 1px 5px); }
+.run .bar.bx { width: 80%; background: var(--wash-blue); }
+.run span:last-child { font: 500 14px var(--f-mono); text-align: right; white-space: nowrap; }
+
+/* cost */
+.say { font: 400 clamp(30px, 3.6vw, 50px)/1.15 var(--f-display); max-width: 21em; margin: 0 0 clamp(30px, 4vw, 48px); text-wrap: balance; letter-spacing: -.01em; }
+.say b { font-weight: 400; font-variant-numeric: tabular-nums; box-shadow: inset 0 -.2em 0 var(--wash-amber); }
+.chart { margin: 0; background: var(--slip); border-radius: 3px; padding: clamp(18px, 2.4vw, 30px); box-shadow: 0 1px 0 rgba(36, 28, 20, .1); }
+.chart-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 28px; margin-bottom: 22px; }
+.slider { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; flex: 1 1 300px; min-width: 0; font-size: 15px; }
+.slider label { white-space: nowrap; color: var(--dim); }
+.slider output { font: 500 14px var(--f-mono); min-width: 6.5em; text-align: right; font-variant-numeric: tabular-nums; }
+input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28px; }
+.legend { display: flex; gap: 22px; font-size: 14px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 20px; height: 0; border-top: 2px solid var(--ink); }
+.legend i.bx { border-top: 3px solid var(--blue); }
+.plot { position: relative; height: clamp(220px, 26vw, 330px); margin-left: 48px; margin-bottom: 30px; }
+.plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.plot .grid line { stroke: var(--rule-2); stroke-width: 1; stroke-dasharray: 2 5; vector-effect: non-scaling-stroke; }
+.plot .gh { fill: none; stroke: var(--ink); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.plot .bx { fill: none; stroke: var(--blue); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.plot .area { fill: var(--wash-amber); mix-blend-mode: var(--blend); }
+.plot .cursor { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: .45; }
+.ylab, .xlab { position: absolute; white-space: nowrap; font: 12px/1 var(--f-mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.ylab { left: -48px; width: 40px; text-align: right; transform: translateY(-50%); }
+.y0 { top: 0; } .y1 { top: 25%; } .y2 { top: 50%; } .y3 { top: 75%; } .y4 { top: 100%; }
+.xlab { top: calc(100% + 10px); transform: translateX(-50%); }
+.x0 { left: 0; transform: none; } .x1 { left: 25%; } .x2 { left: 50%; } .x3 { left: 75%; } .x4 { left: 100%; transform: translateX(-100%); }
+.dot { position: absolute; width: 11px; height: 11px; border-radius: 50%; background: var(--slip); border: 2px solid var(--ink); transform: translate(-50%, -50%); }
+.dot.bx { border-color: var(--blue); top: 100%; }
+.endlab { position: absolute; right: 0; top: 100%; font-size: 13px; color: var(--blue); transform: translateY(-140%); font-weight: 500; }
+.src { margin: 0; color: var(--dim); font-size: 13.5px; max-width: 62em; }
+.src .fig-no { font-size: 14px; margin-right: 4px; }
+
+/* also */
+.also h2 { margin-bottom: clamp(30px, 4vw, 52px); }
+.index { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 56px); margin: 0; }
+.index div { padding: 18px 0 20px; border-top: 1px solid var(--rule); }
+.index dt { font: 400 22px/1.25 var(--f-display); margin-bottom: 6px; }
+.index dd { margin: 0; color: var(--ink-2); font-size: 15.5px; }
+
+/* not for */
+.nots h2 { max-width: 12em; margin-bottom: clamp(30px, 4vw, 52px); }
+.nots-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 3vw, 40px) clamp(28px, 5vw, 80px); }
+.not { align-content: start; display: grid; grid-template-columns: 2.4em minmax(0, 1fr); gap: 0 10px; }
+.not i { font: italic 400 22px/1.25 var(--f-display); color: var(--dim); }
+.not h3 { font-size: 24px; line-height: 1.25; margin-bottom: 6px; }
+.not p { grid-column: 2; margin: 0; color: var(--ink-2); }
+
+/* faq */
+.faq { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(24px, 5vw, 80px); }
+.faq-title { position: sticky; top: 32px; align-self: start; }
+.faq-title h2 { font-size: clamp(40px, 5vw, 68px); }
+.faq-title p { color: var(--dim); font-size: 15.5px; margin: 16px 0 0; max-width: 18em; }
+.qa { margin: 0; }
+.qa div { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 10px 32px; padding: 22px 0 24px; border-top: 1px solid var(--rule); }
+.qa div:last-child { border-bottom: 1px solid var(--rule); }
+.qa dt { font: 400 22px/1.3 var(--f-display); }
+.qa dd { margin: 0; color: var(--ink-2); font-size: 16px; }
+
+/* floor */
+.floor { --colo-ink: var(--floor-ink); --colo-dim: var(--floor-dim); background: var(--floor); color: var(--floor-ink); position: relative; overflow: hidden; margin-top: clamp(40px, 6vw, 80px); }
+.floor-top { position: relative; }
+.floor .colo { background: linear-gradient(rgba(var(--floor-dot), .14), rgba(var(--floor-dot), .14)) top / calc(100% - 2 * var(--gutter)) 1px no-repeat; }
+.cores { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.floor-copy { position: relative; text-align: center; padding: clamp(110px, 13vw, 180px) var(--gutter) clamp(90px, 10vw, 140px); display: grid; justify-items: center; gap: 22px; }
+.floor-copy h2 { font-size: clamp(40px, 5.6vw, 78px); }
+.floor-copy p { margin: 0; color: var(--floor-dim); max-width: 30em; font-size: 17px; }
+
+@media (max-width: 900px) {
+  .prio-grid, .key-grid, .inst-grid, .faq { grid-template-columns: minmax(0, 1fr); }
+  .parts, .steps { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .origin-grid { grid-template-columns: minmax(0, 1fr); }
+  .twelve { display: flex; align-items: baseline; gap: 14px; }
+  .twelve small { margin: 0; }
+  .qa div { grid-template-columns: minmax(0, 1fr); }
+  .faq-title { position: static; }
+}
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  h2 { font-size: clamp(26px, 7.4vw, 32px); }
+  .say { font-size: clamp(25px, 6.9vw, 30px); }
+  .index, .nots-grid { grid-template-columns: minmax(0, 1fr); }
+  .days { gap: 2px; }
+  .run { grid-template-columns: 8.4em minmax(0, 1fr) 4.6em; gap: 10px; font-size: 14px; }
+  .slider input { order: 3; flex-basis: 100%; }
+  .slider output { margin-left: auto; }
+  .plot { margin-left: 40px; }
+  .ylab { left: -42px; width: 36px; }
+  .colo .right { margin-left: 0; }
+  .inst-cmd { flex-direction: column; align-items: stretch; }
+  .inst-cmd code { font-size: 12.5px; overflow-wrap: anywhere; }
+  .inst-cmd .copy { align-self: flex-start; }
+  .keyfig { margin-inline: -8px; }
+  .keyfig figcaption { margin-inline: 8px; }
+  .keyfig .letter { font-size: 62px; }
+  .keyfig .route { stroke-width: 3.4; stroke-dasharray: .1 11; opacity: .85; }
+  .keyfig .tk { transform: scale(2.1); }
+  .keyfig .ed { stroke-width: 2; }
+  .keyfig .ed.thin { stroke-width: 1.3; }
+  .keyfig .job .ed { stroke-width: 1.6; }
+  .floor .act { padding: 14px 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .strike::after { animation: none; }
+  .track .base, .track .extra, .act svg { transition: none; }
+}
+</style>
+<a class="skip" href="#content">Skip to content</a>
+<div class="wrap wide">
+  <nav class="top" aria-label="Site">
+    <a class="brand" href="#top"><!--mark-->boxrunner</a>
     <ul>
-      <li class="in-page"><a href="#cores">Priorities</a></li>
-      <li class="in-page"><a href="#key">Security</a></li>
-      <li class="in-page"><a href="#install">Install</a></li>
+      <li class="in"><a href="#priorities">Priorities</a></li>
+      <li class="in"><a href="#key">Security</a></li>
+      <li class="in"><a href="#install">Install</a></li>
+      <li class="in"><a href="#faq">Questions</a></li>
       <li><a href="/docs/">Docs</a></li>
       <li><a href="https://github.com/dominikzabcik/boxrunner">GitHub</a></li>
     </ul>
-  </div>
-</nav>
+  </nav>
+</div>
 
-<header class="hero gutter" id="top" data-scene="hero">
-  <div class="copy measure split">
-    <div class="copytext">
-      <div class="eyebrow"><span class="live" aria-hidden="true"></span>Self-hosted GitHub Actions runners</div>
-      <h1><span class="w">CI on the box</span> <span class="w">you <em>already</em></span> <span class="w">pay for.</span></h1>
-      <p class="lede">Every job gets a <b>fresh container that is gone when the job ends</b>. Your GitHub App key <b>never touches the box</b>. And your test suite keeps every core while the rest runs on what it leaves idle.</p>
-      <div class="install">
-        <div class="cmd"><code><span class="p">$ </span>curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh</code><button class="copybtn" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh" id="copy-hero">copy</button></div>
-        <a class="ghost" href="#install">How it installs</a>
-      </div>
-      <div class="ticker" aria-live="off">
-        <span>box <b>box-1</b></span>
-        <span>4 cores · <b class="n">1</b> normal · <b class="i">3</b> idle</span>
-        <span>queue to start <b>6–8 s</b></span>
-        <span>containers since load <b id="tk-born">0</b></span>
-      </div>
+<header class="hero" id="top">
+  <div class="plate">
+    <canvas class="art" aria-hidden="true"></canvas>
+    <div class="plate-left">
+    <div class="plate-copy">
+      <h1><span>CI on the box</span> <span>you already pay for.</span></h1>
+      <p class="lede">Self-hosted GitHub Actions runners on one Linux box. Every job gets a fresh container that is gone when the job ends, and your GitHub App key never touches the box.</p>
+      <a class="act" href="#install">Install on your box <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
     </div>
-    <div class="stage" aria-hidden="true"></div>
+    <figure class="slip" aria-label="The one line that changes in a workflow">
+      <header><b>.github/workflows/ci.yml</b><span>one line</span></header>
+<pre><span class="l"><i> </i>jobs:</span><span class="l"><i> </i>  build:</span><span class="l del"><i>−</i>    runs-on: <span class="strike">ubuntu-latest</span></span><span class="l add"><i>+</i>    runs-on: <b>boxrunner</b></span><span class="l"><i> </i>    steps:</span><span class="l"><i> </i>      - uses: actions/checkout@v4</span></pre>
+    </figure>
+    </div>
+  </div>
+  <div class="plate-cap">
+    <span><em>Plate I.</em> One box, one main job, five idle ones. Each container forms from ink, runs, then breaks back into dots.</span>
+    <span class="tally">Containers formed since you arrived: <b id="born">0</b></span>
   </div>
 </header>
 
-<main>
-  <div class="feed" aria-label="Jobs a box like yours runs in a day">
-    <ul class="row" data-dir="-1"><li class="job"><i class="dot n"></i><b>Check, build and test</b><span>octo/site</span><span>11m30s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Analyze (javascript-typescript)</b><span>octo/site</span><span>4m07s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Deploy preview</b><span>octo/site</span><span>1m12s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>e2e (webkit)</b><span>octo/shop</span><span>2m51s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Link check</b><span>octo/docs</span><span>48s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>go test -race ./...</b><span>octo/api</span><span>1m05s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Analyze (actions)</b><span>octo/api</span><span>3m23s</span><em class="ok">✓</em></li></ul>
-    <ul class="row" data-dir="1"><li class="job"><i class="dot n"></i><b>docker build</b><span>octo/shop</span><span>2m10s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>Lighthouse</b><span>octo/site</span><span>3m40s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Production check</b><span>octo/site</span><span>22s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>e2e (chromium)</b><span>octo/shop</span><span>2m02s</span><em class="failed">✗</em></li><li class="job"><i class="dot i"></i><b>Profile README</b><span>octo/site</span><span>31s</span><em class="ok">✓</em></li><li class="job"><i class="dot n"></i><b>services: postgres</b><span>octo/api</span><span>39s</span><em class="ok">✓</em></li><li class="job"><i class="dot i"></i><b>Dependabot auto-merge</b><span>octo/docs</span><span>12s</span><em class="ok">✓</em></li></ul>
-  </div>
-  <section class="ch gutter" id="cores">
-    <div class="measure">
-      <div class="head reveal">
-        <div class="kicker">Priority classes</div>
-        <h2>Your <span class="n">tests</span> keep every core. <span class="i">The rest</span> waits its turn.</h2>
-        <p class="sub">Light jobs run in an idle-priority class, scheduled by Linux's SCHED_IDLE: they use any core your main job is not using, and give it back the instant it wants it. Flip the switch to see the same box without it.</p>
+<main id="content">
+  <section class="sec wrap prio" id="priorities">
+    <h2><span class="s">Your tests keep every core.</span> <span class="s">The rest waits its turn.</span></h2>
+    <div class="prio-grid">
+      <div class="prio-text">
+        <p class="lede">boxrunner runs two classes of runner on the same box. The normal class gets the box’s full speed. The idle class runs only on cores nothing else wants, so your test suite never waits for it.</p>
+        <dl class="classes">
+          <div><i class="sq n" aria-hidden="true"></i><dt>Normal class, <code>runs-on: boxrunner</code></dt><dd>Keeps the whole box. Put the test suite and the build here.</dd></div>
+          <div><i class="sq i" aria-hidden="true"></i><dt>Idle class, <code>runs-on: boxrunner-light</code></dt><dd>Runs only on cores the normal class leaves idle, through Linux’s SCHED_IDLE, and gives a core back the moment the main job wants it. CodeQL, link checks and deploys go here.</dd></div>
+        </dl>
       </div>
-      <div class="scope reveal">
-        <canvas id="lanes" role="img" aria-label="Four CPU cores over time: a normal-priority job takes cores in bursts, idle-priority jobs fill the gaps"></canvas>
-        <div class="bar">
-          <span><i class="sw n"></i>normal priority &nbsp; <i class="sw i"></i>idle priority</span>
-          <div class="switch" role="group" aria-label="Scheduling">
-            <button aria-pressed="true" id="sched-on">boxrunner</button>
-            <button aria-pressed="false" id="sched-off">no priorities</button>
+      <figure class="bench" id="bench">
+        <div class="bench-head">
+          <figcaption class="fig-no">Fig. 2. One CPU-bound job, timed alone and beside four busy jobs.</figcaption>
+          <div class="seg" role="group" aria-label="Machine">
+            <button type="button" aria-pressed="true" data-arch="arm">4-core ARM</button>
+            <button type="button" aria-pressed="false" data-arch="x86">4-core x86</button>
           </div>
         </div>
+        <div class="rows">
+          <div class="brow"><span class="lab">Alone</span><span class="val">428 ms</span><div class="track"><div class="base"></div><div class="extra"></div></div></div>
+          <div class="brow"><span class="lab">Beside four idle jobs <span class="nb i" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span><span class="val">429 ms</span><div class="track"><div class="base"></div><div class="extra"></div></div></div>
+          <div class="brow"><span class="lab">Beside four normal jobs <span class="nb n" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span><span class="val bad">2.10 s</span><div class="track"><div class="base"></div><div class="extra"></div></div></div>
+        </div>
+        <div class="axis" aria-hidden="true"></div>
+        <div class="legend-x"><i aria-hidden="true"></i>time spent waiting for a core</div>
+        <p class="bench-note">Beside idle jobs the main job slowed <b>0 to 3%</b>. Beside normal ones, <b>about 390%</b>. Median of three runs.</p>
+      </figure>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="key">
+    <figure class="keyfig">
+      <svg viewBox="80 -12 935 400" role="img" aria-label="The Worker, A, holds the orange GitHub App key. A token, B, travels from it to your box, C, where jobs run. The key stays behind.">
+        <defs>
+          <pattern id="hv" width="4.5" height="4.5" patternUnits="userSpaceOnUse"><path d="M1 0V4.5" stroke="currentColor" stroke-width=".7" opacity=".55"/></pattern>
+          <pattern id="hx" width="4.2" height="4.2" patternUnits="userSpaceOnUse" patternTransform="rotate(30)"><path d="M0 1H4.2M1 0V4.2" stroke="currentColor" stroke-width=".65" opacity=".55"/></pattern>
+          <pattern id="hs" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(-30)"><path d="M0 1H6" stroke="currentColor" stroke-width=".55" opacity=".5"/></pattern>
+          <pattern id="hh" width="6" height="3.2" patternUnits="userSpaceOnUse"><path d="M0 1H6" stroke="currentColor" stroke-width=".6" opacity=".6"/></pattern>
+        </defs>
+        <path d="M334.7 240L434.5 283.2L309.8 355.2L210 312Z" fill="url(#hh)" opacity=".75"/>
+<path d="M85.3 240L210 312L210 192L85.3 120Z" fill="var(--plate)"/>
+<path d="M85.3 240L210 312L210 192L85.3 120Z" fill="url(#hv)"/>
+<path d="M334.7 240L210 312L210 192L334.7 120Z" fill="var(--plate)"/>
+<path d="M334.7 240L210 312L210 192L334.7 120Z" fill="url(#hx)"/>
+<path d="M210 48L334.7 120L210 192L85.3 120Z" fill="var(--plate)"/>
+<path d="M210 48L334.7 120L210 192L85.3 120Z" fill="url(#hs)" opacity=".6"/>
+<path class="ed" d="M210 48L334.7 120L210 192L85.3 120Z M85.3 120L85.3 240 M85.3 240L210 312 M210 312L334.7 240 M334.7 240L334.7 120 M210 312L210 192"/>
+<path class="ed thin" d="M320.2 231.6L224.5 286.8L224.5 200.4L320.2 145.2Z"/>
+<path d="M248.5 229.8L248.7 226.1L249.3 222.2L250.3 218.2L251.7 214.2L253.4 210.1L255.5 206.2L257.8 202.5L260.4 199L263.2 195.8L266.2 192.9L269.2 190.4L272.4 188.4L275.5 186.8L278.5 185.8L281.5 185.2L284.3 185.2L286.9 185.7L289.3 186.7L291.3 188.2L293.1 190.2L294.4 192.7L295.4 195.5L296.1 198.7L296.3 202.2L296.1 205.9L295.4 209.8L294.4 213.8L293.1 217.8L291.3 221.9L289.3 225.8L286.9 229.5L284.3 233L281.5 236.2L278.5 239.1L275.5 241.6L272.4 243.6L269.2 245.2L266.2 246.2L263.2 246.8L260.4 246.8L257.8 246.3L255.5 245.3L253.4 243.8L251.7 241.8L250.3 239.3L249.3 236.5L248.7 233.3L248.5 229.8Z" fill="var(--plate)" class="ed"/>
+<path class="ed thin" d="M254.7 226.2L250.5 228.6"/>
+<path class="ed thin" d="M257.1 214.6L253.5 214.3"/>
+<path class="ed thin" d="M263.5 203.4L261.4 200.5"/>
+<path class="ed thin" d="M272.4 195.6L272.4 190.8"/>
+<path class="ed thin" d="M281.2 193.2L283.3 187.9"/>
+<path class="ed thin" d="M287.7 197L291.3 192.5"/>
+<path class="ed thin" d="M290 205.8L294.2 203.4"/>
+<path class="ed thin" d="M287.7 217.4L291.3 217.7"/>
+<path class="ed thin" d="M281.2 228.6L283.3 231.5"/>
+<path class="ed thin" d="M272.4 236.4L272.4 241.2"/>
+<path class="ed thin" d="M263.5 238.8L261.4 244.1"/>
+<path class="ed thin" d="M257.1 235L253.5 239.5"/>
+<path class="ed" d="M272.4 216L283.8 196.2"/>
+<g class="key"><path d="M134.1 205.8L133.9 202.9L133.4 199.8L132.4 196.6L131.2 193.5L129.6 190.4L127.7 187.5L125.6 184.8L123.4 182.5L121 180.4L118.5 178.8L116.1 177.6L113.7 176.9L111.5 176.7L109.4 176.9L107.5 177.7L105.9 178.9L104.7 180.6L103.7 182.7L103.2 185.1L103 187.8L103.2 190.7L103.7 193.8L104.7 197L105.9 200.1L107.5 203.2L109.4 206.1L111.5 208.8L113.7 211.1L116.1 213.2L118.5 214.8L121 216L123.4 216.7L125.6 216.9L127.7 216.7L129.6 215.9L131.2 214.7L132.4 213L133.4 210.9L133.9 208.5L134.1 205.8Z M124.8 200.4L124.6 198.8L124.2 197.2L123.6 195.5L122.7 193.9L121.7 192.4L120.5 191.1L119.2 190L117.9 189.3L116.6 188.8L115.4 188.8L114.4 189L113.5 189.7L112.9 190.6L112.4 191.8L112.3 193.2L112.4 194.8L112.9 196.4L113.5 198.1L114.4 199.7L115.4 201.2L116.6 202.5L117.9 203.6L119.2 204.3L120.5 204.8L121.7 204.8L122.7 204.6L123.6 203.9L124.2 203L124.6 201.8L124.8 200.4Z" fill-rule="evenodd"/><path d="M133.1 201.6L187.1 232.8L187.1 240L133.1 208.8Z"/><path d="M168.4 229.2L168.4 243.6L174.7 247.2L174.7 240L179.9 243L179.9 250.2L187.1 254.4L187.1 240Z"/></g>
+<text class="letter" x="206" y="16.8" text-anchor="middle">A</text>
+<path d="M947.1 261L1007.5 288.1L846.4 381.1L786 354Z" fill="url(#hh)" opacity=".7"/>
+<path d="M786 168L947.1 261L786 354L624.9 261Z" fill="url(#hs)" opacity=".7"/>
+<path d="M786 168L624.9 261L624.9 168L786 75Z" fill="url(#hv)" opacity=".75"/>
+<path d="M786 168L947.1 261L947.1 168L786 75Z" fill="url(#hx)" opacity=".75"/>
+<path class="ed thin" d="M786 168L786 75 M786 168L947.1 261 M786 168L624.9 261"/>
+<g class="job n"><path d="M718.9 237.8L786 276.5L786 199L718.9 160.3Z" class="wl"/><path d="M853.1 237.8L786 276.5L786 199L853.1 160.3Z" class="wr"/><path d="M786 121.5L853.1 160.3L786 199L718.9 160.3Z" class="wt"/><path class="ed" d="M786 121.5L853.1 160.3L786 199L718.9 160.3Z M718.9 160.3L718.9 237.8 M718.9 237.8L786 276.5 M786 276.5L853.1 237.8 M853.1 237.8L853.1 160.3 M786 276.5L786 199"/></g>
+<g class="job i"><path d="M839.7 261L866.5 276.5L866.5 245.5L839.7 230Z" class="wl"/><path d="M893.4 261L866.5 276.5L866.5 245.5L893.4 230Z" class="wr"/><path d="M866.5 214.5L893.4 230L866.5 245.5L839.7 230Z" class="wt"/><path class="ed" d="M866.5 214.5L893.4 230L866.5 245.5L839.7 230Z M839.7 230L839.7 261 M839.7 261L866.5 276.5 M866.5 276.5L893.4 261 M893.4 261L893.4 230 M866.5 276.5L866.5 245.5"/></g>
+<g class="job i"><path d="M799.4 284.3L826.3 299.8L826.3 268.8L799.4 253.3Z" class="wl"/><path d="M853.1 284.3L826.3 299.8L826.3 268.8L853.1 253.3Z" class="wr"/><path d="M826.3 237.8L853.1 253.3L826.3 268.8L799.4 253.3Z" class="wt"/><path class="ed" d="M826.3 237.8L853.1 253.3L826.3 268.8L799.4 253.3Z M799.4 253.3L799.4 284.3 M799.4 284.3L826.3 299.8 M826.3 299.8L853.1 284.3 M853.1 284.3L853.1 253.3 M826.3 299.8L826.3 268.8"/></g>
+<g class="job i"><path d="M678.6 261L705.5 276.5L705.5 245.5L678.6 230Z" class="wl"/><path d="M732.3 261L705.5 276.5L705.5 245.5L732.3 230Z" class="wr"/><path d="M705.5 214.5L732.3 230L705.5 245.5L678.6 230Z" class="wt"/><path class="ed" d="M705.5 214.5L732.3 230L705.5 245.5L678.6 230Z M678.6 230L678.6 261 M678.6 261L705.5 276.5 M705.5 276.5L732.3 261 M732.3 261L732.3 230 M705.5 276.5L705.5 245.5"/></g>
+<g class="job i"><path d="M718.9 284.3L745.7 299.8L745.7 268.8L718.9 253.3Z" class="wl"/><path d="M772.6 284.3L745.7 299.8L745.7 268.8L772.6 253.3Z" class="wr"/><path d="M745.7 237.8L772.6 253.3L745.7 268.8L718.9 253.3Z" class="wt"/><path class="ed" d="M745.7 237.8L772.6 253.3L745.7 268.8L718.9 253.3Z M718.9 253.3L718.9 284.3 M718.9 284.3L745.7 299.8 M745.7 299.8L772.6 284.3 M772.6 284.3L772.6 253.3 M745.7 299.8L745.7 268.8"/></g>
+<g class="job i"><path d="M759.2 307.5L786 323L786 292L759.2 276.5Z" class="wl"/><path d="M812.8 307.5L786 323L786 292L812.8 276.5Z" class="wr"/><path d="M786 261L812.8 276.5L786 292L759.2 276.5Z" class="wt"/><path class="ed" d="M786 261L812.8 276.5L786 292L759.2 276.5Z M759.2 276.5L759.2 307.5 M759.2 307.5L786 323 M786 323L812.8 307.5 M812.8 307.5L812.8 276.5 M786 323L786 292"/></g>
+<path class="ed" d="M786 75L947.1 168L786 261L624.9 168Z M624.9 168L624.9 261 M624.9 261L786 354 M786 354L947.1 261 M947.1 261L947.1 168 M786 354L786 261"/>
+<path class="ed thin" d="M786 82.8L933.7 168L786 253.3L638.3 168Z"/>
+<text class="letter" x="786" y="50.2" text-anchor="middle">C</text>
+        <path id="route" class="route" d="M239.1 194.4C359.1 44.4 596 -49.9 786 140.1"/>
+        <text class="letter" x="513" y="84" text-anchor="middle">B</text>
+        <g class="token"><g class="tk"><rect class="p" x="-15" y="-10" width="30" height="20" rx="1.5"/><rect class="w" x="-12" y="-7" width="17" height="14"/><circle cx="9.5" cy="0" r="2.4"/></g>
+          <animateMotion id="tok" dur="4.8s" repeatCount="indefinite" calcMode="spline" keyPoints="0;1" keyTimes="0;1" keySplines=".45 0 .35 1"><mpath href="#route"/></animateMotion>
+          <animate attributeName="opacity" dur="4.8s" repeatCount="indefinite" values="0;1;1;0" keyTimes="0;.08;.88;1"/>
+        </g>
+      </svg>
+      <figcaption class="fig-no">Fig. 3. The key stays at A. A token, B, travels to the box, C.</figcaption>
+    </figure>
+    <div class="key-grid">
+      <h2>The key stays in your Worker.</h2>
+      <div>
+        <p class="lede">The GitHub App can administer your repositories, so its private key lives in a Cloudflare Worker you deploy, on the free plan. GitHub hands the key straight to the Worker during setup, so nobody copies it, and the box never holds it.</p>
+        <dl class="parts">
+          <div><dt class="k"><i>A</i>The Worker</dt><dd>Holds the GitHub App key and asks GitHub for runners on the box’s behalf.</dd></div>
+          <div><dt><i>B</i>The token</dt><dd>The box holds a token that can only ask for runners. Nothing else.</dd></div>
+          <div><dt><i>C</i>Your box</dt><dd>If someone takes it over, they get runner registrations for minutes, not the key.</dd></div>
+        </dl>
       </div>
-      <dl class="stats">
-        <div class="stat"><dt>Main job alone</dt><dd><span data-count="428">428</span><small> ms</small></dd></div>
-        <div class="stat"><dt>Beside busy idle jobs</dt><dd><span data-count="429">429</span><small> ms · +0%</small></dd></div>
-        <div class="stat bad"><dt>Beside busy normal jobs</dt><dd><span data-count="2096">2,096</span><small> ms · +390%</small></dd></div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="install">
+    <div class="inst-cmd">
+      <code><span class="p">$ </span>curl -fsSL https://boxrunner.zabcik.me/install.sh \
+  | sudo sh -s -- --worker https://&lt;your worker&gt; --token &lt;box token&gt;</code>
+      <button class="copy" type="button" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh \&#10;  | sudo sh -s -- --worker https://&lt;your worker&gt; --token &lt;box token&gt;">Copy</button>
+    </div>
+    <div class="inst-grid">
+      <div class="inst-head">
+        <h2>One line on the box.</h2>
+        <div class="speed">
+          <span class="num">6 to 12<small>s</small></span>
+          <p>from the moment a job is queued to the moment it starts on your box.</p>
+          <span class="num">2<small>s</small></span>
+          <p>when a warm runner is already waiting.</p>
+        </div>
+      </div>
+      <ol class="steps">
+        <li><h3>Deploy the Worker</h3><p><a href="https://deploy.workers.cloudflare.com/?url=https://github.com/dominikzabcik/boxrunner/tree/stable/worker">Deploy it to Cloudflare</a> with one click, on the free plan. It asks for a setup secret: keep it, because the setup page needs it.</p></li>
+        <li><h3>Create the GitHub App</h3><p>Open <code>/setup</code> on your Worker, enter the secret and confirm on GitHub. Install the App on the private repositories that should use your box.</p></li>
+        <li><h3>Install the agent</h3><p>The setup page shows the line above with your Worker and token filled in. The installer checks the binary’s checksum and build attestation before anything runs.</p></li>
+        <li><h3>Use it</h3><p>In a workflow, change <code>runs-on: ubuntu-latest</code> to <code>runs-on: boxrunner</code>. That is the whole migration.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sec wrap origin" id="origin">
+    <div class="origin-grid">
+      <div class="twelve" aria-hidden="true">12<small>days</small></div>
+      <div>
+        <h2>2,000 free minutes lasted twelve days.</h2>
+        <div class="cols">
+          <p>boxrunner started on a personal website. Its CI runs Lighthouse, Playwright and CodeQL on every pull request, and it used all 2,000 of GitHub Free’s private minutes in twelve days.</p>
+          <p>A 4-core VPS was already paid for and mostly idle. It now runs every job, and a full run takes 11.6 to 12.6 minutes against about 15 on GitHub’s runners.</p>
+        </div>
+        <figure class="month">
+          <div class="days" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i><i class="b"></i></div>
+          <figcaption class="keys"><span>Days 1 to 12: the 2,000 free minutes</span><span>Days 13 to 30: billed at $0.006 a minute</span></figcaption>
+        </figure>
+        <div class="runs" role="img" aria-label="One full CI run: about 15 minutes on GitHub’s runners, about 12 minutes on the VPS">
+          <div class="run"><span>GitHub’s runners</span><div class="bar gh"></div><span>~15 min</span></div>
+          <div class="run"><span>The VPS</span><div class="bar bx"></div><span>~12 min</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="cost">
+    <p class="say" aria-live="polite"><b id="say-min">10,000</b> minutes a month: <b id="say-gh">$48</b> on GitHub, $0 on boxrunner.</p>
+    <figure class="chart">
+      <div class="chart-top">
+        <div class="slider"><label for="mins">Minutes a month</label><input id="mins" type="range" min="2000" max="40000" step="500" value="10000"><output id="mins-out" for="mins">10,000</output></div>
+        <div class="legend"><span><i></i>GitHub</span><span><i class="bx"></i>boxrunner</span></div>
+      </div>
+      <div class="plot" id="plot">
+        <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+          <g class="grid"><line x1="0" x2="1000" y1="0" y2="0"/><line x1="0" x2="1000" y1="250" y2="250"/><line x1="0" x2="1000" y1="500" y2="500"/><line x1="0" x2="1000" y1="750" y2="750"/><line x1="0" x2="1000" y1="1000" y2="1000"/></g>
+          <path class="area" id="area" d="M50 1000L250 1000L250 800Z"/>
+          <path class="gh" d="M0 1000L50 1000L1000 50"/>
+          <path class="bx" d="M0 1000L1000 1000"/>
+          <line class="cursor" id="cursor" x1="250" x2="250" y1="0" y2="1000"/>
+        </svg>
+        <span class="ylab y0">$240</span><span class="ylab y1">$180</span><span class="ylab y2">$120</span><span class="ylab y3">$60</span><span class="ylab y4">$0</span>
+        <span class="xlab x0">0</span><span class="xlab x1">10k</span><span class="xlab x2">20k</span><span class="xlab x3">30k</span><span class="xlab x4">40k</span>
+        <span class="dot" id="dot-gh"></span>
+        <span class="dot bx" id="dot-bx"></span>
+        <span class="endlab">boxrunner, $0</span>
+      </div>
+      <figcaption class="src"><span class="fig-no">Fig. 5.</span> GitHub’s list price for the 2-core Linux runner, October 2026: $0.006 a minute after the 2,000 minutes GitHub Free includes for private repositories. Self-hosted minutes are free. You still pay for the box, which you were paying for already.</figcaption>
+    </figure>
+  </section>
+
+  <section class="sec wrap also">
+    <h2>Also in the box</h2>
+    <dl class="index">
+      <div><dt>Docker inside jobs</dt><dd>Opt-in, through Sysbox: each job gets its own Docker daemon with no privileged mode, and a job’s root is not root on the host.</dd></div>
+      <div><dt>A doctor</dt><dd><code>boxrunner doctor</code> checks that a job cannot reach the host, your private network or the cloud metadata service.</dd></div>
+      <div><dt>Fork warnings</dt><dd>The doctor and the dashboard warn when a private repository runs workflows from fork pull requests without approval, or hands them secrets or write tokens.</dd></div>
+      <div><dt>Checked images</dt><dd>The job image is built only from an <code>actions/runner</code> image whose build attestation CI has verified.</dd></div>
+      <div><dt>A fallback</dt><dd>Opt-in: while the box is silent, a variable in your workflow sends jobs to GitHub’s runners instead.</dd></div>
+      <div><dt>Alerts</dt><dd>A webhook for ntfy, Discord or Slack says when the box goes silent, and when a repository’s jobs wait with no runner starting, with the likely cause.</dd></div>
+      <div><dt>Unserved jobs</dt><dd>The dashboard lists jobs nobody here runs: a label that is not a class, a repository the Worker does not serve, a paused class.</dd></div>
+      <div><dt>A dashboard</dt><dd>Served by the Worker: the box, its runners and their jobs.</dd></div>
+      <div><dt>Prometheus metrics</dt><dd>Opt-in: runners, jobs, durations, queue time and disk, on a port jobs cannot reach.</dd></div>
+    </dl>
+  </section>
+
+  <section class="sec wrap nots">
+    <h2>Four cases where it is the wrong tool.</h2>
+    <div class="nots-grid">
+      <div class="not"><i>i.</i><h3>Public repositories</h3><p>The Worker refuses them. Anyone who can open a pull request could run code on your box.</p></div>
+      <div class="not"><i>ii.</i><h3>macOS or Windows jobs</h3><p>boxrunner runs Linux containers, on amd64 and arm64.</p></div>
+      <div class="not"><i>iii.</i><h3>A fleet of machines</h3><p>One Worker serves one box, or several if you split classes or repositories. Actions Runner Controller and GARM manage fleets.</p></div>
+      <div class="not"><i>iv.</i><h3>Untrusted code</h3><p>Jobs share the host’s kernel, like every container does.</p></div>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="faq">
+    <div class="faq">
+      <div class="faq-title"><h2>Questions</h2><p>Something else? Ask on <a href="https://github.com/dominikzabcik/boxrunner/discussions">GitHub Discussions</a>.</p></div>
+      <dl class="qa">
+        <div><dt>Do I change anything else in my workflows?</dt><dd>No. You change <code>runs-on</code> and nothing else. Send light jobs such as CodeQL or a link check to <code>boxrunner-light</code> so they run on idle cores.</dd></div>
+        <div><dt>Can jobs run Docker?</dt><dd>Yes, when you add <code>--docker</code> to the install command. Docker then works inside jobs through Sysbox, with no privileged mode, and a job’s root is not root on the host.</dd></div>
+        <div><dt>What happens when the box is down?</dt><dd>With fallback turned on, jobs run on GitHub’s runners while the box is silent. Without it, they wait for the box. An alert webhook, if you set one, tells you either way.</dd></div>
+        <div><dt>How fast do jobs start?</dt><dd>6 to 12 seconds after they are queued, and 2 seconds when a warm runner is waiting.</dd></div>
+        <div><dt>What does it cost?</dt><dd>Nothing. boxrunner is Apache-2.0, the Worker fits Cloudflare’s free plan and GitHub does not bill self-hosted minutes. You pay for the box, which you already do.</dd></div>
+        <div><dt>Does it work with public repositories?</dt><dd>No. The Worker refuses them, because anyone who can open a pull request could run code on your box.</dd></div>
+        <div><dt>How do I watch it?</dt><dd>The Worker serves a dashboard and sends alerts, and boxrunner can export Prometheus metrics. On the box, <code>boxrunner status</code> lists runners and recent jobs.</dd></div>
+        <div><dt>How do I patch the box?</dt><dd><code>boxrunner drain</code> lets running jobs finish and takes no new ones. Patch and reboot, run <code>boxrunner upgrade</code> when a release is out, then <code>boxrunner resume</code>.</dd></div>
       </dl>
-    </div>
-  </section>
-
-  <section class="ch gutter" id="key">
-    <div class="measure">
-      <div class="head reveal">
-        <div class="kicker">Key custody</div>
-        <h2>The <span class="k">key</span> stays in your Worker. The box gets tokens that expire.</h2>
-        <p class="sub">The GitHub App can administer your repositories, so its private key lives only in a Cloudflare Worker you deploy. The box can ask for one thing: a runner for one job.</p>
-      </div>
-      <p class="caption mono reveal"><span class="k">●</span> the vault holds your key &nbsp; <span class="n">●</span> tokens travel to your box &nbsp; <span class="n">●</span> one job's container forms and dissolves</p>
-      <div class="vault">
-        <div class="claims reveal">
-          <div class="claim k"><strong>If someone owns your box</strong><span>they get runner registrations for your private repositories for minutes, not the key that can delete them.</span></div>
-          <div class="claim"><strong>Checked against github.com</strong><span>A session token asked to mint a runner or delete a scale set is refused with "Invalid Claims". Only the Worker can.</span></div>
-          <div class="claim"><strong>Nobody copies a key</strong><span>GitHub hands the key straight to your Worker through the App manifest flow during setup.</span></div>
-          <div class="claim"><strong>Jobs can't wander</strong><span>From a job, the host, your LAN, a tailnet and the cloud metadata service do not answer. <span class="mono">boxrunner doctor</span> proves it.</span></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="ch gutter" id="install">
-    <div class="measure">
-      <div class="head reveal">
-        <div class="kicker">Install</div>
-        <h2>One line on the box. Then minutes stop costing money.</h2>
-        <p class="sub">Deploy the Worker with one click, open its setup page, run the line it gives you. The installer checks the binary's checksum and its build attestation before anything runs.</p>
-      </div>
-      <div class="pair">
-        <div class="term"><div class="chrome" aria-hidden="true"><i></i><i></i><i></i></div><pre id="term" aria-label="Installing boxrunner and checking its status"></pre></div>
-        <div class="receipt">
-          <div class="stamp" aria-hidden="true">PAID $0</div>
-          <h3>Your CI · last month</h3>
-          <label for="mins">Linux minutes: <b id="minsOut">5,000</b><input id="mins" type="range" min="2000" max="40000" step="500" value="5000"></label>
-          <div class="row"><span>Included in GitHub Free</span><span>2,000 min</span></div>
-          <div class="row"><span>Billed at $0.006/min</span><span class="strike" id="ghCost">$18.00</span></div>
-          <div class="row"><span>boxrunner</span><span>$0.00</span></div>
-          <div class="row total"><span>You keep</span><span id="kept">$18.00</span></div>
-          <p class="src">GitHub's published rate for a standard 2-core Linux runner on private repositories, October 2026. Self-hosted minutes are free today.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="ch gutter" id="proof">
-    <div class="measure">
-      <div class="head reveal">
-        <div class="kicker">Why it exists</div>
-        <h2>A personal site spent 2,000 free minutes in twelve days.</h2>
-        <p class="sub">Lighthouse, Playwright and CodeQL on every pull request. A 4-core ARM VPS that was already paid for now runs all of it, faster.</p>
-      </div>
-      <div class="race pending" id="race">
-        <div class="lane"><span class="who">GitHub's runners</span><div class="track"><div class="fill hosted"></div></div><span class="t">~15 min</span></div>
-        <div class="lane"><span class="who">first prototype</span><div class="track"><div class="fill proto"></div></div><span class="t">12.4 min</span></div>
-        <div class="lane"><span class="who">boxrunner</span><div class="track"><div class="fill ours"></div></div><span class="t">11.6 min</span></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="ch gutter" id="not">
-    <div class="measure">
-      <div class="head reveal">
-        <div class="kicker">When not to use it</div>
-        <h2>Honest limits.</h2>
-      </div>
-      <div class="nots">
-        <div class="not"><strong>Public repositories</strong><span>Anyone who can open a pull request could run code on your box. The Worker refuses them.</span></div>
-        <div class="not"><strong>macOS or Windows jobs</strong><span>boxrunner runs Linux containers, on amd64 and arm64.</span></div>
-        <div class="not"><strong>A fleet of machines</strong><span>One Worker serves one box today. GARM and Actions Runner Controller manage fleets.</span></div>
-        <div class="not"><strong>Untrusted code</strong><span>Jobs share the host's kernel, like every container.</span></div>
-      </div>
     </div>
   </section>
 </main>
 
-<footer class="gutter">
-  <div class="measure">
-   <div class="foot">
-    <h2>Your box is waiting.</h2>
-    <div class="install">
-      <div class="cmd"><code><span class="p">$ </span>curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh</code><button class="copybtn" data-copy="curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh" id="copy-foot">copy</button></div>
-      <a class="ghost" href="https://github.com/dominikzabcik/boxrunner">Read the source</a>
-    </div>
-    <div class="meta"><span>Apache-2.0</span><span>Go agent · Cloudflare Worker</span><span>amd64 · arm64</span><span>Built by Dominik Žabčík</span></div>
-   </div>
+<footer class="floor">
+  <div class="floor-top">
+  <canvas class="cores" aria-hidden="true"></canvas>
+  <div class="floor-copy">
+    <h2>Your box is already paid for.</h2>
+    <p>Deploy the Worker, run one line on the box and change one line in each workflow.</p>
+    <div class="acts"><a class="act light" href="/docs/">Read the quickstart <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a><a class="act ghost" href="https://github.com/dominikzabcik/boxrunner">Read the source</a></div>
+  </div>
+  </div>
+  <div class="wrap colo">
+    <a class="brand" href="#top"><!--mark-->boxrunner</a>
+    <span>Apache-2.0</span><span>Go agent and Cloudflare Worker</span><span>amd64 and arm64</span>
+    <span class="right"><a href="/docs/">Docs</a><a href="https://github.com/dominikzabcik/boxrunner">GitHub</a><span>Built by Dominik Žabčík</span></span>
   </div>
 </footer>
-<div class="toast" id="toast" role="status">Copied</div>
+<p class="sr" id="announce" aria-live="polite"></p>
 
 <script>
 (function () {
-  document.documentElement.classList.add('js');
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-  const C = { normal: css('--normal'), idle: css('--idle'), ink: css('--ink'), dim: css('--dim'), faint: css('--faint'), key: css('--key'), deep: css('--deep'), rule: css('--rule') };
-  const rgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
-  const RGB = { normal: rgb(C.normal), idle: rgb(C.idle), ink: rgb(C.ink) };
+  const scheme = matchMedia('(prefers-color-scheme: dark)');
+  const root = document.documentElement;
+  const tok = () => { const cs = getComputedStyle(root), g = (v) => cs.getPropertyValue(v).trim(); return { ink: g('--ink'), plate: g('--plate'), washBlue: g('--wash-blue'), washAmber: g('--wash-amber'), blend: g('--blend'), dot: g('--floor-dot') }; };
+  let T = tok();
+  const listeners = [];
+  scheme.addEventListener('change', () => { T = tok(); listeners.forEach((f) => f()); });
+  const clamp = (x) => x < 0 ? 0 : x > 1 ? 1 : x;
+  const ease = (x) => { x = clamp(x); return x * x * (3 - 2 * x); };
+  function rng(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
 
-  // ---------------- The box: particle scenes, one per chapter ----------------
-  // Every scene places every particle at a moment in time. Each chapter's stage
-  // draws its own scene, which assembles from scattered particles the first
-  // time the chapter scrolls into view and runs while it stays on screen.
-  let seed = 20261013;
-  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const unit = () => { const u = rand() * 2 - 1, th = rand() * Math.PI * 2, s = Math.sqrt(1 - u * u); return [s * Math.cos(th), u, s * Math.sin(th)]; };
-  const EDGES = [[0,1],[1,3],[3,2],[2,0],[4,5],[5,7],[7,6],[6,4],[0,4],[1,5],[2,6],[3,7]];
-  // A point on edge e of a box with half-sizes h around c, t in [0,1).
-  function edgePoint(e, t, h, c, out) {
-    const [a, b] = EDGES[e];
-    for (let k = 0; k < 3; k++) {
-      const A = (a >> k & 1 ? 1 : -1) * h[k], B = (b >> k & 1 ? 1 : -1) * h[k];
-      out[k] = c[k] + A + (B - A) * t;
+  /* ---------- Plate I: the box, engraved ---------- */
+  const art = document.querySelector('.art'), ctx = art.getContext('2d');
+  const back = document.createElement('canvas'), bctx = back.getContext('2d');
+  const front = document.createElement('canvas'), fctx = front.getContext('2d');
+  const C30 = 0.8660254, N = 12, HT = 7;
+  let W = 0, H = 0, dpr = 1, s = 20, ox = 0, oy = 0;
+  const P = (x, y, z) => [ox + (x - y) * C30 * s, oy + (x + y) * 0.5 * s - z * s];
+
+  function hatch(c, pts, ang, gap, lw, alpha, r) {
+    c.save(); c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.clip();
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    const mx = (Math.min(...xs) + Math.max(...xs)) / 2, my = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const R = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2 + 2;
+    const dx = Math.cos(ang), dy = Math.sin(ang), nx = -dy, ny = dx;
+    c.strokeStyle = T.ink; c.lineCap = 'round';
+    for (let d = -R; d <= R; d += gap) {
+      c.globalAlpha = alpha * (0.7 + 0.6 * r()); c.lineWidth = lw * (0.8 + 0.4 * r());
+      const px = mx + nx * d, py = my + ny * d;
+      c.beginPath(); c.moveTo(px - dx * R, py - dy * R); c.lineTo(px + dx * R, py + dy * R); c.stroke();
     }
-    return out;
+    c.restore();
   }
-  const ease = (x) => x < 0 ? 0 : x > 1 ? 1 : x * x * (3 - 2 * x);
-
-  const SHELL = 480, SLOT = 168, DUST = 260;
-  const parts = [];
-  for (let i = 0; i < SHELL; i++) parts.push({ kind: 'shell', i, s: unit(), r: rand() });
-  for (let j = 0; j < 4; j++) for (let m = 0; m < SLOT; m++) parts.push({ kind: 'slot', j, m, g: j * SLOT + m, s: unit(), r: rand() });
-  for (let d = 0; d < DUST; d++) parts.push({ kind: 'dust', i: d, s: unit(), r: 1.4 + rand() * 1.4, ph: rand() * 6.28 });
-  
-  const COL = { ink: RGB.ink, normal: RGB.normal, idle: RGB.idle, key: rgb(C.key) };
-  const tmp = [0, 0, 0];
-  const SLOT_CENTERS = [[-.48, .48, -.48], [.48, .48, -.48], [-.48, .48, .48], [.48, .48, .48]];
-
-  // A container's life: forms from scattered particles, runs, then dissolves outward.
-  function container(p, local, t, period, offset, h, c, o) {
-    const ph = (t + offset) % period, e = Math.floor(local / (SLOT / 12)), tt = (local % (SLOT / 12)) / (SLOT / 12);
-    edgePoint(e, tt, [h, h, h], c, tmp);
-    if (ph < .8) { const k = ease(ph / .8); for (let q = 0; q < 3; q++) o.x[q] = tmp[q] + p.s[q] * (1 - k) * 1.1; o.a = k; }
-    else if (ph < period - 1.3) { for (let q = 0; q < 3; q++) o.x[q] = tmp[q]; o.a = .82 + .18 * Math.sin(t * 5 + offset); }
-    else { const d = (ph - (period - 1.3)) / 1.3; for (let q = 0; q < 3; q++) o.x[q] = tmp[q] + (tmp[q] - c[q]) * d * 2.4 + p.s[q] * d * .5; o.a = 1 - d; }
-  }
-  function dust(p, t, o, a) {
-    const ang = p.ph + t * .05, r = p.r;
-    o.x[0] = Math.cos(ang) * r * Math.sqrt(1 - p.s[1] * p.s[1]); o.x[1] = p.s[1] * r * .6; o.x[2] = Math.sin(ang) * r * Math.sqrt(1 - p.s[1] * p.s[1]);
-    o.c = COL.ink; o.a = a; o.size = .8;
+  function seg(c, a, b, lw, alpha) { c.globalAlpha = alpha; c.lineWidth = lw; c.beginPath(); c.moveTo(...P(...a)); c.lineTo(...P(...b)); c.stroke(); }
+  function hull(points) {
+    const p = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], up = [];
+    for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (const q of p.reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
   }
 
-  const SCENES = {
-    hero(p, t, o) {
-      o.size = 1.2;
-      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [1, 1, 1], [0, 0, 0], o.x); o.c = COL.ink; o.a = .5; return; }
-      if (p.kind === 'dust') return dust(p, t, o, .12);
-      const normal = p.j === 0;
-      container(p, p.m, t, normal ? 8.5 : 4.6 + p.j * .9, p.j * 1.7, .3, SLOT_CENTERS[p.j], o);
-      o.c = normal ? COL.normal : COL.idle; o.size = 1.6;
-    },
-    cores(p, t, o) {
-      o.size = 1.2;
-      const xs = [-.84, -.28, .28, .84];
-      if (p.kind === 'shell') { const k = Math.floor(p.i / 120), l = p.i % 120; edgePoint(Math.floor(l / 10), (l % 10) / 10, [.2, .8, .2], [xs[k], -.35, 0], o.x); o.c = COL.ink; o.a = .45; return; }
-      if (p.kind === 'dust') return dust(p, t, o, .08);
-      // One block rises through each core. While the main job is busy it owns all four; then idle jobs take the free cores.
-      const busy = (t % 7) < 4.2, rise = ((t * .32 + p.j * .27) % 1), y = .3 - rise * 1.3;
-      const e = Math.floor(p.m / 14), tt = (p.m % 14) / 14;
-      edgePoint(e, tt, [.15, .15, .15], [xs[p.j], y, 0], o.x);
-      o.c = busy || p.j === 0 ? COL.normal : COL.idle; o.a = rise < .08 ? rise / .08 : rise > .92 ? (1 - rise) / .08 : 1; o.size = 1.5;
-    },
-    key(p, t, o) {
-      o.size = 1.2;
-      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [.42, .42, .42], [-.95, -.05, 0], o.x); o.c = COL.key; o.a = .55; return; }
-      if (p.kind === 'dust') return dust(p, t, o, .07);
-      const m = p.m;
-      if (p.j === 0) {
-        // The key itself, inside the vault.
-        if (m < 84) { const a = m / 84 * Math.PI * 2; o.x[0] = -.95 + Math.cos(a) * .14; o.x[1] = -.2 + Math.sin(a) * .14; o.x[2] = 0; }
-        else if (m < 140) { o.x[0] = -.95; o.x[1] = -.06 + (m - 84) / 56 * .34; o.x[2] = 0; }
-        else { const k = m - 140; o.x[0] = -.95 + (k < 14 ? (k / 14) * .1 : ((k - 14) / 14) * .07); o.x[1] = k < 14 ? .2 : .1; o.x[2] = 0; }
-        o.c = COL.key; o.a = .95; o.size = 1.7; return;
-      }
-      if (p.j === 1) { edgePoint(Math.floor(m / 14), (m % 14) / 14, [.34, .34, .34], [.95, -.05, 0], o.x); o.c = COL.ink; o.a = .6; return; }
-      if (p.j === 2) {
-        // Tokens travel from the vault to the box in three packets.
-        const u = (m / SLOT + t * .2) % 1, a = 1 - u;
-        o.x[0] = a * a * -.5 + 2 * a * u * 0 + u * u * .58; o.x[1] = a * a * -.1 + 2 * a * u * -1.05 + u * u * -.1; o.x[2] = Math.sin(m) * .03;
-        const packet = ((u * 3) % 1) < .28;
-        o.c = COL.normal; o.a = packet ? .95 : .08; o.size = packet ? 1.7 : 1; return;
-      }
-      container(p, m, t, 3.4, 0, .17, [.95, .72, 0], o); o.c = COL.normal; o.size = 1.5;
-    },
-    install(p, t, o) {
-      o.size = 1.2;
-      if (p.kind === 'shell') { edgePoint(Math.floor(p.i / 40), (p.i % 40) / 40, [.8, .5, .8], [0, -.25, 0], o.x); o.c = COL.ink; o.a = .5; return; }
-      if (p.kind === 'dust') return dust(p, t, o, .08);
-      // Twelve small containers fall into the box, one job each.
-      const k = Math.floor(p.g / 56), l = p.g % 56;
-      if (l >= 48) { o.x[0] = 0; o.x[1] = -.25; o.x[2] = 0; o.a = 0; o.c = COL.ink; return; }
-      const ph = (t * .28 + k / 12) % 1, x = ((k % 4) - 1.5) * .34, z = (Math.floor(k / 4) - 1) * .34, y = -2.3 + ph * 2.2;
-      edgePoint(Math.floor(l / 4), (l % 4) / 4, [.09, .09, .09], [x, y, z], o.x);
-      o.c = k % 3 === 0 ? COL.normal : COL.idle; o.a = ph < .1 ? ph / .1 : ph > .82 ? Math.max(0, (1 - ph) / .18) : 1; o.size = 1.5;
-    },
-  };
-  const SPIN = { hero: 1, cores: .45, key: .2, install: .8 };
-  const PITCH = { hero: -.42, cores: -.12, key: -.18, install: -.38 };
-
-  const tkBorn = document.getElementById('tk-born');
-  let born = 0;
-  function makeStage(el, scene) {
-    const cv = document.createElement('canvas'); cv.setAttribute('aria-hidden', 'true'); el.appendChild(cv);
-    const ctx = cv.getContext('2d');
-    let w = 0, h = 0;
-    const size = () => { const d = Math.min(2, devicePixelRatio || 1); w = el.clientWidth; h = el.clientHeight; cv.width = w * d; cv.height = h * d; ctx.setTransform(d, 0, 0, d, 0, 0); };
-    size(); addEventListener('resize', size);
-    const pos = parts.map((p) => [p.s[0] * 3, p.s[1] * 3, p.s[2] * 3]), push = parts.map(() => [0, 0]);
-    const ptr = { x: -1e4, y: -1e4, tx: 0, ty: 0, on: false };
-    el.addEventListener('pointermove', (e) => { const r = cv.getBoundingClientRect(); ptr.x = e.clientX - r.left; ptr.y = e.clientY - r.top; ptr.tx = ptr.x / w - .5; ptr.ty = ptr.y / h - .5; ptr.on = e.pointerType === 'mouse'; });
-    el.addEventListener('pointerleave', () => { ptr.on = false; });
-    let rotY = .6, tiltX = 0, tiltY = 0, t = 0, last = 0, visible = false, started = false;
-    const prevPh = [0, 0, 0, 0], A = { x: [0, 0, 0], c: COL.ink, a: 0, size: 1 };
-    function draw(now) {
-      const dt = last ? Math.min(.05, (now - last) / 1000) : 0; last = now; t += dt;
-      if (!reduce) rotY += dt * .16 * SPIN[scene];
-      tiltX += ((ptr.on ? ptr.ty * .5 : 0) - tiltX) * .05; tiltY += ((ptr.on ? ptr.tx * .6 : 0) - tiltY) * .05;
-      const cx = w / 2, cy = h / 2, scale = Math.min(w, h) * .4, pitch = PITCH[scene] + tiltX, yaw = rotY + tiltY;
-      const cyR = Math.cos(yaw), syR = Math.sin(yaw), cxR = Math.cos(pitch), sxR = Math.sin(pitch);
-      const settle = reduce ? 1 : Math.min(1, dt * 3.2);
-      ctx.clearRect(0, 0, w, h); ctx.globalCompositeOperation = 'lighter';
-      for (let n = 0; n < parts.length; n++) {
-        const q = pos[n];
-        SCENES[scene](parts[n], t, A);
-        for (let k = 0; k < 3; k++) q[k] += (A.x[k] - q[k]) * settle;
-        if (A.a <= .01) continue;
-        const X = q[0] * cyR - q[2] * syR; let Z = q[0] * syR + q[2] * cyR; const Y = q[1] * cxR - Z * sxR; Z = q[1] * sxR + Z * cxR;
-        const f = 4.5 / (4.5 + Z); if (f <= 0) continue;
-        const x = cx + X * scale * f, y = cy + Y * scale * f, d = push[n];
-        if (ptr.on) { const dx = x - ptr.x, dy = y - ptr.y, d2 = dx * dx + dy * dy; if (d2 < 12100) { const r = Math.sqrt(d2) || 1, f2 = (1 - r / 110) * 2.6; d[0] += dx / r * f2; d[1] += dy / r * f2; } }
-        d[0] *= .9; d[1] *= .9;
-        const c = A.c; ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, A.a * (.55 + .45 * f))})`;
-        ctx.beginPath(); ctx.arc(x + d[0], y + d[1], A.size * f, 0, 6.2832); ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-      if (scene === 'hero' && tkBorn) { for (let j = 0; j < 4; j++) { const per = j === 0 ? 8.5 : 4.6 + j * .9, ph = (t + j * 1.7) % per; if (ph < prevPh[j]) born++; prevPh[j] = ph; } tkBorn.textContent = born + 4; }
-      if (visible && !reduce) requestAnimationFrame(draw);
+  function drawStatic() {
+    const r = rng(7);
+    for (const c of [bctx, fctx]) { c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H); c.strokeStyle = T.ink; c.lineCap = 'round'; }
+    const c = bctx;
+    // cast shadow on the ground, light from the upper left
+    const L = [0.42, -0.1];
+    const base = [[0, 0], [N, 0], [N, N], [0, N]];
+    const sh = hull(base.concat(base.map(([x, y]) => [x + L[0] * HT, y + L[1] * HT]))).map(([x, y]) => P(x, y, 0));
+    c.save(); c.beginPath(); sh.forEach((p, i) => i ? c.lineTo(...p) : c.moveTo(...p)); c.closePath();
+    base.slice().reverse().forEach(([x, y], i) => i ? c.lineTo(...P(x, y, 0)) : c.moveTo(...P(x, y, 0))); c.closePath(); c.clip('evenodd');
+    hatch(c, sh, 0, 2.6, 0.7, 0.55, r); c.restore();
+    // ground strokes, short and horizontal, the engraver's way of laying a floor
+    c.globalAlpha = 1;
+    for (let i = 0; i < 46; i++) {
+      const u = r(), v = r();
+      const [x, y] = P(N + 0.2 + u * 6.5, -1 + v * (N + 2), 0);
+      const len = (6 + r() * 26) * (s / 24);
+      if (y < P(N, 0, 0)[1] - 4) continue;
+      c.globalAlpha = 0.18 + r() * 0.25; c.lineWidth = 0.6; c.beginPath(); c.moveTo(x, y); c.lineTo(x + len, y); c.stroke();
     }
-    if (reduce) { t = 3; draw(0); addEventListener('resize', () => draw(0)); return; }
-    new IntersectionObserver(([e]) => {
-      const was = visible; visible = e.isIntersecting;
-      if (visible && !was) { if (!started) { started = true; t = 0; } last = 0; requestAnimationFrame(draw); }
-    }, { threshold: .15 }).observe(el);
+    // floor inside the case
+    const floor = base.map(([x, y]) => P(x, y, 0));
+    hatch(c, floor, Math.atan2(0.5, C30), 5.2 * (s / 24), 0.6, 0.3, r);
+    // back walls
+    const wallL = [[0, 0, 0], [0, N, 0], [0, N, HT], [0, 0, HT]].map((p) => P(...p));
+    const wallR = [[0, 0, 0], [N, 0, 0], [N, 0, HT], [0, 0, HT]].map((p) => P(...p));
+    hatch(c, wallL, Math.PI / 2, 4.4 * (s / 24), 0.6, 0.34, r);
+    hatch(c, wallR, Math.PI / 2, 4.2 * (s / 24), 0.6, 0.36, r);
+    hatch(c, wallR, -Math.atan2(0.5, C30), 5.2 * (s / 24), 0.55, 0.3, r);
+    // a darker band where the floor meets the back walls
+    hatch(c, [[0, 0, 0], [N, 0, 0], [N, 1.1, 0], [1.1, 1.1, 0], [1.1, N, 0], [0, N, 0]].map((p) => P(...p)), -Math.atan2(0.5, C30), 3 * (s / 24), 0.5, 0.35, r);
+    c.strokeStyle = T.ink;
+    seg(c, [0, 0, 0], [0, 0, HT], 0.9, 0.7); seg(c, [0, 0, 0], [N, 0, 0], 0.9, 0.7); seg(c, [0, 0, 0], [0, N, 0], 0.9, 0.7);
+    // front layer: glass edges, the rim and a few glints
+    const f = fctx; f.strokeStyle = T.ink;
+    const E = [[[0, N, 0], [N, N, 0]], [[N, N, 0], [N, 0, 0]], [[N, N, 0], [N, N, HT]], [[0, N, 0], [0, N, HT]], [[N, 0, 0], [N, 0, HT]], [[0, 0, HT], [N, 0, HT]], [[N, 0, HT], [N, N, HT]], [[N, N, HT], [0, N, HT]], [[0, N, HT], [0, 0, HT]]];
+    for (const [a, b] of E) seg(f, a, b, 1.5, 0.95);
+    const k = 0.45;
+    for (const [a, b] of [[[k, k, HT], [N - k, k, HT]], [[N - k, k, HT], [N - k, N - k, HT]], [[N - k, N - k, HT], [k, N - k, HT]], [[k, N - k, HT], [k, k, HT]]]) seg(f, a, b, 0.7, 0.6);
+    // plinth: the base of the case, densely hatched
+    hatch(f, [[0, N, 0], [N, N, 0], [N, N, 0.55], [0, N, 0.55]].map((p) => P(...p)), Math.PI / 2, 2.6, 0.6, 0.5, r);
+    hatch(f, [[N, 0, 0], [N, N, 0], [N, N, 0.55], [N, 0, 0.55]].map((p) => P(...p)), Math.PI / 2, 2, 0.6, 0.62, r);
+    f.strokeStyle = T.ink;
+    seg(f, [0, N, 0.55], [N, N, 0.55], 0.8, 0.8); seg(f, [N, N, 0.55], [N, 0, 0.55], 0.8, 0.8);
+    for (let i = 0; i < 3; i++) seg(f, [N, 1.2 + i * 0.55, HT - 0.7], [N, 2.6 + i * 0.55, HT - 2.6], 0.8, 0.45);
+    for (let i = 0; i < 2; i++) seg(f, [1.4 + i * 0.55, N, HT - 0.8], [2.4 + i * 0.55, N, HT - 2.2], 0.8, 0.35);
+    for (const c2 of [bctx, fctx]) c2.globalAlpha = 1;
   }
-  document.querySelectorAll('[data-scene] .stage').forEach((el) => makeStage(el, el.closest('[data-scene]').dataset.scene));
 
-  // ---------------- Cores: four lanes ----------------
-  const lc = document.getElementById('lanes'), lx = lc.getContext('2d');
-  let fair = false;
-  const on = document.getElementById('sched-on'), off = document.getElementById('sched-off');
-  on.onclick = () => { fair = false; on.setAttribute('aria-pressed', 'true'); off.setAttribute('aria-pressed', 'false'); };
-  off.onclick = () => { fair = true; off.setAttribute('aria-pressed', 'true'); on.setAttribute('aria-pressed', 'false'); };
-  const cols = 150, lanes = 4, hist = [];
-  let step = 0;
-  function nextCol() {
-    const ph = step++ % 100, main = ph < 58 ? 4 : ph < 74 ? 2 : 0, col = [];
-    for (let l = 0; l < lanes; l++) col.push(l < main ? (fair ? (Math.random() < .5 ? 1 : 3) : 1) : 2);
-    hist.push(col); if (hist.length > cols) hist.shift();
-  }
-  for (let i = 0; i < cols; i++) nextCol();
-  function drawLanes() {
-    const w = lc.clientWidth, h = lc.clientHeight, d = Math.min(2, devicePixelRatio || 1);
-    if (lc.width !== Math.round(w * d)) { lc.width = w * d; lc.height = h * d; }
-    lx.setTransform(d, 0, 0, d, 0, 0);
-    lx.fillStyle = C.deep; lx.fillRect(0, 0, w, h);
-    const lh = h / lanes, cw = w / cols;
-    for (let c = 0; c < hist.length; c++) for (let l = 0; l < lanes; l++) {
-      const v = hist[c][l], x = c * cw, y = l * lh + 7, hh = lh - 14;
-      if (v === 1 || v === 3) { lx.fillStyle = C.normal; lx.globalAlpha = v === 3 ? .4 : .95; lx.fillRect(x, y, cw + .6, hh); lx.globalAlpha = 1; }
-      if (v === 2 || v === 3) { lx.save(); lx.beginPath(); lx.rect(x, y, cw + .6, hh); lx.clip(); lx.strokeStyle = C.idle; lx.lineWidth = 1.4; for (let k = -hh; k < cw + hh; k += 6) { lx.beginPath(); lx.moveTo(x + k - (c * cw) % 6, y + hh); lx.lineTo(x + k - (c * cw) % 6 + hh, y); lx.stroke(); } lx.restore(); }
-    }
-    lx.strokeStyle = C.rule; for (let l = 1; l < lanes; l++) { lx.beginPath(); lx.moveTo(0, l * lh); lx.lineTo(w, l * lh); lx.stroke(); }
-    lx.fillStyle = C.dim; lx.font = '11px "Geist Mono", monospace'; for (let l = 0; l < lanes; l++) lx.fillText('cpu' + l, 10, l * lh + 20);
-    // the "now" edge
-    lx.fillStyle = C.ink; lx.fillRect(w - 2, 0, 2, h);
-  }
-  let lanesLast = 0, lanesVisible = true;
-  new IntersectionObserver(([e]) => { lanesVisible = e.isIntersecting; }).observe(lc);
-  function lanesLoop(now) { if (lanesVisible && now - lanesLast > 90) { nextCol(); lanesLast = now; } if (lanesVisible) drawLanes(); requestAnimationFrame(lanesLoop); }
-  drawLanes(); if (!reduce) requestAnimationFrame(lanesLoop); else addEventListener('resize', drawLanes);
-
-  // ---------------- Install: terminal and receipt ----------------
-  const script = [
-    ['p', '$ '], ['', 'curl -fsSL boxrunner.zabcik.me/install.sh | sudo sh -s -- --worker https://ci.example.workers.dev --token ••••••••\n'],
-    ['', '==> download boxrunner 0.2.0 for linux/arm64\n'], ['ok', '==> checksum ok\n'], ['ok', '==> build attestation ok\n'],
-    ['', '==> create the Docker network boxrunner on bridge boxrunner0\n'], ['', '==> apply the firewall rules for boxrunner0\n'],
-    ['', '==> build the job image boxrunner/runner:local\n'], ['', '==> enable and start boxrunner.service\n'], ['ok', 'Done in 9 steps.\n\n'],
-    ['p', '$ '], ['', 'sudo boxrunner status\n'],
-    ['', 'CLASS            PRIORITY  RUNNERS  MAX\n'], ['b', 'boxrunner'], ['', '        normal    1        1\n'], ['hi', 'boxrunner-light'], ['', '  idle      2        3\n\n'],
-    ['', 'FINISHED  REPOSITORY  JOB                     QUEUED  TOOK\n'],
-    ['', '09:41     octo/site   Check, build and test   '], ['hi', '7s'], ['', '      11m30s\n'],
-    ['', '09:34     octo/site   Analyze (javascript)    '], ['hi', '6s'], ['', '      4m7s\n'],
+  // jobs laid out like the logo: one big main job, five small idle ones
+  const JOBS = [
+    { x: 2, y: 2, w: 5, h: 5, kind: 'n', per: 11, off: 0.1 },
+    { x: 8, y: 2, w: 2, h: 2, kind: 'i', per: 6.3, off: 4.1 },
+    { x: 8, y: 5, w: 2, h: 2, kind: 'i', per: 7.2, off: 2.4 },
+    { x: 2, y: 8, w: 2, h: 2, kind: 'i', per: 6.7, off: 5.6 },
+    { x: 5, y: 8, w: 2, h: 2, kind: 'i', per: 7.7, off: 0.9 },
+    { x: 8, y: 8, w: 2, h: 2, kind: 'i', per: 6.9, off: 3.2 },
   ];
-  const term = document.getElementById('term');
-  const total = script.reduce((a, [, t]) => a + t.length, 0);
-  function renderTerm(upto, caret) {
-    term.textContent = ''; let budget = upto;
-    for (const [cls, text] of script) { if (budget <= 0) break; const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text.slice(0, budget); budget -= text.length; term.appendChild(s); }
-    if (caret) { const c = document.createElement('span'); c.className = 'caret'; term.appendChild(c); }
-  }
-  renderTerm(total, true);
-  const mins = document.getElementById('mins'), fmt = new Intl.NumberFormat('en-US'), usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
-  function bill() { const m = +mins.value, cost = Math.max(0, m - 2000) * 0.006; document.getElementById('minsOut').textContent = fmt.format(m); document.getElementById('ghCost').textContent = usd.format(cost); document.getElementById('kept').textContent = usd.format(cost); }
-  mins.addEventListener('input', bill); bill();
-
-  // ---------------- Reveals, counters, race ----------------
-  const io = new IntersectionObserver((entries) => entries.forEach((e) => {
-    if (!e.isIntersecting) return;
-    e.target.classList.remove('pending'); io.unobserve(e.target);
-    e.target.querySelectorAll?.('[data-count]').forEach(count);
-  }), { threshold: .15 });
-  if (!reduce) document.querySelectorAll('.reveal').forEach((el) => { const r = el.getBoundingClientRect(); if (r.top > innerHeight) { el.classList.add('pending'); io.observe(el); } });
-  function count(el) {
-    if (reduce) return; const to = +el.dataset.count, t0 = performance.now();
-    (function step(now) { const k = Math.min(1, (now - t0) / 1400), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt.format(Math.round(to * e)); if (k < 1) requestAnimationFrame(step); })(t0);
-  }
-  const statIo = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { count(e.target); statIo.unobserve(e.target); } }), { threshold: .6 });
-  document.querySelectorAll('[data-count]').forEach((el) => { if (el.getBoundingClientRect().top > innerHeight) statIo.observe(el); });
-
-
-  // ---------------- Scroll: lit headings, a scrubbed terminal, the race, the feed ----------------
-  const headings = [...document.querySelectorAll('.ch h2')];
-  for (const h of headings) {
-    const walk = (node) => {
-      for (const child of [...node.childNodes]) {
-        if (child.nodeType === 3) {
-          const frag = document.createDocumentFragment();
-          for (const part of child.textContent.split(/(\s+)/)) {
-            if (!part) continue;
-            if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); continue; }
-            const w = document.createElement('span'); w.className = 'wd'; w.textContent = part; frag.appendChild(w);
-          }
-          child.replaceWith(frag);
-        } else walk(child);
+  const F = 1.9, D = 1.7, R = 1.3;
+  const parts = [];
+  {
+    const r = rng(20261015);
+    JOBS.forEach((j, ji) => {
+      const { x, y, w, h } = j, x1 = x + w, y1 = y + w;
+      // faces: top (light), left (+y, mid), right (+x, dark)
+      const faces = [
+        { dens: 2.4, shade: 0, at: (u, v) => [x + u * w, y + v * w, h] },
+        { dens: 5.5, shade: 1, at: (u, v) => [x + u * w, y1, v * h] },
+        { dens: 10, shade: 2, at: (u, v) => [x1, y + u * w, v * h] },
+      ];
+      for (const fc of faces) {
+        const n = Math.round(fc.dens * w * (fc.shade === 0 ? w : h));
+        for (let i = 0; i < n; i++) {
+          const t = fc.at(r(), r());
+          const cx = x + w / 2, cy = y + w / 2, sp = Math.max(w, 3) * 0.95;
+          const sxy = [Math.min(11.4, Math.max(0.6, cx + (r() + r() - 1) * sp)), Math.min(11.4, Math.max(0.6, cy + (r() + r() - 1) * sp)), 0.3 + r() * 6.2];
+          parts.push({ j: ji, t, sc: sxy, a: r(), ph: r() * 6.283, shade: fc.shade });
+        }
       }
-    };
-    walk(h);
-    h.words = [...h.querySelectorAll('.wd')];
-  }
-  const feedRows = [...document.querySelectorAll('.feed .row')];
-  for (const row of feedRows) row.innerHTML += row.innerHTML;
-  const offsets = feedRows.map(() => 0);
-  const raceFills = [...document.querySelectorAll('#race .fill')];
-  document.getElementById('race').classList.remove('pending');
-  const clamp01 = (x) => Math.max(0, Math.min(1, x));
-  let typedTo = -1, lastY = scrollY, vel = 0, lastFrame = performance.now();
-  function onFrame(now) {
-    const vh = innerHeight, dt = Math.min(.05, (now - lastFrame) / 1000); lastFrame = now;
-    vel += ((scrollY - lastY) - vel) * .2; lastY = scrollY;
-    for (const h of headings) {
-      const r = h.getBoundingClientRect(), p = clamp01((vh * .9 - r.top) / (vh * .45)), lit = p * h.words.length;
-      h.words.forEach((w, i) => { w.style.opacity = .14 + .86 * clamp01(lit - i); });
-    }
-    const tr = term.getBoundingClientRect(), tp = clamp01((vh * .95 - tr.top) / (vh * .6)), chars = Math.round(tp * total);
-    if (chars !== typedTo) { typedTo = chars; renderTerm(chars, true); }
-    const rr = document.getElementById('race').getBoundingClientRect(), rp = clamp01((vh * .95 - rr.top) / (vh * .55));
-    raceFills.forEach((f) => { f.style.transform = `scaleX(${rp})`; });
-    feedRows.forEach((row, i) => {
-      const half = row.scrollWidth / 2, dir = +row.dataset.dir;
-      offsets[i] = (offsets[i] + dir * (28 + Math.abs(vel) * 9) * dt) % half;
-      row.style.transform = `translateX(${dir < 0 ? offsets[i] : offsets[i] - half}px)`;
     });
-    requestAnimationFrame(onFrame);
   }
-  if (!reduce) requestAnimationFrame(onFrame);
+  const born = document.getElementById('born');
+  let bornN = 0;
+  const prevP = JOBS.map(() => -1);
+  function life(j, t) {
+    const p = (t + j.off) % j.per, run = j.per - D - R;
+    return p;
+  }
+  function frame(t) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalAlpha = 1; ctx.drawImage(back, 0, 0, W, H);
+    const ph = JOBS.map((j, i) => {
+      const p = reduce ? F + 1 : (t + j.off) % j.per, endRun = j.per - D - R;
+      let formed;
+      if (p < F) formed = ease((p - 0.55 * F) / (0.45 * F));
+      else if (p < endRun) formed = 1;
+      else formed = 1 - ease((p - endRun) / (0.45 * D));
+      if (!reduce && prevP[i] >= 0 && prevP[i] < F && p >= F) bornN++;
+      prevP[i] = p;
+      return { p, formed, endRun };
+    });
+    const bornText = String(reduce ? JOBS.length : bornN);
+    if (born.textContent !== bornText) born.textContent = bornText;
+    const order = JOBS.map((j, i) => i).sort((a, b) => (JOBS[a].x + JOBS[a].y + JOBS[a].w) - (JOBS[b].x + JOBS[b].y + JOBS[b].w));
+    const dotR = Math.max(0.7, 0.95 * s / 24);
+    for (const ji of order) {
+      const j = JOBS[ji], st = ph[ji], { x, y, w, h } = j, x1 = x + w, y1 = y + w;
+      // the wash, slightly off register like a hand-tinted print
+      if (st.formed > 0.01) {
+        ctx.save(); ctx.globalCompositeOperation = T.blend; ctx.translate(1.6, 1.1);
+        const col = j.kind === 'n' ? T.washBlue : T.washAmber;
+        const faces = [[[x, y, h], [x1, y, h], [x1, y1, h], [x, y1, h]], [[x, y1, 0], [x1, y1, 0], [x1, y1, h], [x, y1, h]], [[x1, y, 0], [x1, y1, 0], [x1, y1, h], [x1, y, h]]];
+        const al = [0.45, 0.75, 1];
+        faces.forEach((fc, k) => {
+          ctx.globalAlpha = st.formed * al[k]; ctx.fillStyle = col; ctx.beginPath(); fc.forEach((q, i) => i ? ctx.lineTo(...P(...q)) : ctx.moveTo(...P(...q))); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha = st.formed * al[k] * 0.5; ctx.strokeStyle = col; ctx.lineWidth = 2.2; ctx.stroke();
+        });
+        ctx.restore();
+      }
+    }
+    // the ink dots
+    ctx.fillStyle = T.ink;
+    for (const q of parts) {
+      const j = JOBS[q.j], st = ph[q.j];
+      let k;
+      if (st.p < F) k = ease((st.p - q.a * 0.55 * F) / (0.45 * F));
+      else if (st.p < st.endRun) k = 1;
+      else k = 1 - ease((st.p - st.endRun - q.a * 0.5 * D) / (0.5 * D));
+      const dr = reduce ? 0 : 0.18;
+      const sx = q.sc[0] + Math.sin(t * 0.35 + q.ph) * dr, sy = q.sc[1] + Math.cos(t * 0.3 + q.ph) * dr, sz = q.sc[2] + Math.sin(t * 0.25 + q.ph * 2) * dr;
+      const X = sx + (q.t[0] - sx) * k, Y = sy + (q.t[1] - sy) * k, Z = sz + (q.t[2] - sz) * k;
+      const [px, py] = P(X, Y, Z);
+      ctx.globalAlpha = 0.22 + 0.7 * k * (0.6 + q.shade * 0.2);
+      ctx.beginPath(); ctx.arc(px, py, dotR * (1 - 0.25 * (1 - k)), 0, 6.2832); ctx.fill();
+    }
+    // the container edges
+    ctx.strokeStyle = T.ink; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const ji of order) {
+      const j = JOBS[ji], st = ph[ji];
+      if (st.formed < 0.01) continue;
+      const { x, y, w, h } = j, x1 = x + w, y1 = y + w;
+      ctx.globalAlpha = st.formed * 0.9; ctx.lineWidth = j.kind === 'n' ? 1.25 : 1;
+      const path = [[[x, y, h], [x1, y, h], [x1, y1, h], [x, y1, h], [x, y, h]], [[x, y1, h], [x, y1, 0], [x1, y1, 0], [x1, y, 0], [x1, y, h]], [[x1, y1, 0], [x1, y1, h]]];
+      for (const pl of path) { ctx.beginPath(); pl.forEach((q, i) => i ? ctx.lineTo(...P(...q)) : ctx.moveTo(...P(...q))); ctx.stroke(); }
+    }
+    ctx.globalAlpha = 1; ctx.drawImage(front, 0, 0, W, H);
+  }
+  function layout() {
+    dpr = Math.min(2, devicePixelRatio || 1);
+    W = art.clientWidth; H = art.clientHeight;
+    for (const c of [art, back, front]) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+    if (!W || !H) return;
+    const wide = W >= 860;
+    const cx = wide ? W * 0.68 : W * 0.5, cy = wide ? H * 0.5 : H * 0.5;
+    const aw = wide ? W * 0.5 : W * 0.86, ah = wide ? H * 0.8 : H * 0.88;
+    s = Math.min(aw / 23.5, ah / 19.5, 31);
+    ox = cx - 0.6 * s; oy = cy - 2.5 * s;
+    drawStatic();
+    frame(clock);
+  }
+  let clock = 0, last = 0, running = false, onScreen = true;
+  function loop(now) {
+    const dt = last ? Math.min(0.05, (now - last) / 1000) : 0; last = now; clock += dt;
+    frame(clock);
+    if (running) requestAnimationFrame(loop); else last = 0;
+  }
+  function setRun() { const want = onScreen && !document.hidden && !reduce; if (want && !running) { running = true; requestAnimationFrame(loop); } else if (!want) running = false; }
+  new ResizeObserver(layout).observe(art);
+  new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; setRun(); }).observe(art);
+  document.addEventListener('visibilitychange', setRun);
+  listeners.push(() => { drawStatic(); frame(clock); });
 
-  // ---------------- Copy ----------------
-  const toast = document.getElementById('toast');
+  /* ---------- Fig. 2: the benchmark ---------- */
+  const DATA = {
+    arm: { v: [428, 429, 2100], max: 2200, ticks: [[0, '0'], [500, '0.5 s'], [1000, '1 s'], [1500, '1.5 s'], [2000, '2 s']] },
+    x86: { v: [1390, 1440, 6910], max: 7400, ticks: [[0, '0'], [2000, '2 s'], [4000, '4 s'], [6000, '6 s']] },
+  };
+  const fmt = (ms) => ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(2) + ' s';
+  const bench = document.getElementById('bench');
+  function setArch(a) {
+    const d = DATA[a];
+    bench.querySelectorAll('.seg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.arch === a)));
+    bench.querySelectorAll('.brow').forEach((row, i) => {
+      const base = d.v[0] / d.max * 100, all = d.v[i] / d.max * 100;
+      row.querySelector('.base').style.width = base + '%';
+      const ex = row.querySelector('.extra'); ex.style.left = base + '%'; ex.style.width = Math.max(0, all - base) + '%';
+      row.querySelector('.val').textContent = fmt(d.v[i]);
+    });
+    const axis = bench.querySelector('.axis');
+    axis.replaceChildren(...d.ticks.map(([v, l]) => { const t = document.createElement('span'); t.textContent = l; t.style.left = v / d.max * 100 + '%'; return t; }));
+  }
+  bench.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setArch(b.dataset.arch)));
+  setArch('arm');
+
+  /* ---------- Key: hold the token mid-route without motion ---------- */
+  const ksvg = document.querySelector('.keyfig svg');
+  if (reduce && ksvg.pauseAnimations) { ksvg.pauseAnimations(); ksvg.setCurrentTime(2.3); }
+
+  /* ---------- Fig. 4: one month of CI ---------- */
+
+  /* ---------- the cost chart ---------- */
+  const mins = document.getElementById('mins'), num = new Intl.NumberFormat('en-US'), usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  const MAXM = 40000, MAXC = 240, X = (m) => m / MAXM * 1000, Y = (c) => 1000 - c / MAXC * 1000;
+  function cost() {
+    const m = +mins.value, c = Math.max(0, m - 2000) * 0.006;
+    document.getElementById('mins-out').textContent = num.format(m);
+    document.getElementById('say-min').textContent = num.format(m);
+    document.getElementById('say-gh').textContent = usd.format(c);
+    document.getElementById('area').setAttribute('d', m > 2000 ? `M${X(2000)} 1000L${X(m)} 1000L${X(m)} ${Y(c)}Z` : 'M0 0Z');
+    const cur = document.getElementById('cursor'); cur.setAttribute('x1', X(m)); cur.setAttribute('x2', X(m));
+    const g = document.getElementById('dot-gh'), b = document.getElementById('dot-bx');
+    g.style.left = b.style.left = (m / MAXM * 100) + '%'; g.style.top = (100 - c / MAXC * 100) + '%';
+  }
+  mins.addEventListener('input', cost); cost();
+
+  /* ---------- copy ---------- */
+  const announce = document.getElementById('announce');
   document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
-    const text = b.dataset.copy;
-    const done = () => { toast.classList.add('on'); setTimeout(() => toast.classList.remove('on'), 1400); };
-    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(done, () => { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const s = getSelection(); s.removeAllRanges(); s.addRange(r); });
+    const done = () => { b.textContent = 'Copied'; announce.textContent = 'Install command copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1600); };
+    (navigator.clipboard ? navigator.clipboard.writeText(b.dataset.copy) : Promise.reject()).then(done, () => {
+      const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    });
   }));
+
+  /* ---------- the floor: a grid of cores ---------- */
+  const cv = document.querySelector('.cores'), cx2 = cv.getContext('2d'), copy = document.querySelector('.floor-copy');
+  let fw = 0, fh = 0, gap = 18, cols = 0, rows = 0, gx = 0, gy = 0, occ = null, jobs = [], hole = null;
+  const rf = rng(99);
+  function fit() {
+    const d = Math.min(2, devicePixelRatio || 1);
+    fw = cv.clientWidth; fh = cv.clientHeight; if (fw < 40 || fh < 40) return; cv.width = Math.round(fw * d); cv.height = Math.round(fh * d); cx2.setTransform(d, 0, 0, d, 0, 0);
+    gap = fw < 600 ? 15 : 19; cols = Math.floor((fw - 20) / gap); rows = Math.floor((fh - 20) / gap);
+    gx = (fw - (cols - 1) * gap) / 2; gy = (fh - (rows - 1) * gap) / 2;
+    const a = copy.getBoundingClientRect(), c = cv.getBoundingClientRect();
+    const h1 = copy.querySelector('h2').getBoundingClientRect(), cmd = copy.querySelector('.acts').getBoundingClientRect();
+    const l = Math.min(h1.left, cmd.left) - c.left - 28, r2 = Math.max(h1.right, cmd.right) - c.left + 28;
+    hole = { l, r: r2, t: h1.top - c.top - 24, b: cmd.bottom - c.top + 24 };
+    occ = new Uint8Array(cols * rows); jobs = [];
+    for (let i = 0; i < 16; i++) spawn(true);
+    paint(0);
+  }
+  function free(c0, r0, w, h) { for (let r = r0; r < r0 + h; r++) for (let c = c0; c < c0 + w; c++) if (occ[r * cols + c]) return false; return true; }
+  function mark(j, v) { for (let r = j.r; r < j.r + j.h; r++) for (let c = j.c; c < j.c + j.w; c++) occ[r * cols + c] = v; }
+  function spawn(seeded) {
+    const normal = jobs.filter((j) => j.kind === 'n').length < 3 && rf() < 0.4;
+    const w = normal ? 6 + Math.floor(rf() * 7) : 2 + Math.floor(rf() * 3), h = normal ? 3 + Math.floor(rf() * 3) : 2 + Math.floor(rf() * 2);
+    for (let tries = 0; tries < 14; tries++) {
+      const c = Math.floor(rf() * Math.max(1, cols - w)), r = Math.floor(rf() * Math.max(1, rows - h));
+      if (!free(c, r, w, h)) continue;
+      const hold = normal ? 6 + rf() * 6 : 3 + rf() * 4;
+      const j = { c, r, w, h, kind: normal ? 'n' : 'i', age: seeded ? rf() * (hold + 1) : 0, hold };
+      mark(j, 1); jobs.push(j); return;
+    }
+  }
+  function level(j) { const up = 1.6, down = 2.2; return j.age < up ? ease(j.age / up) : j.age < up + j.hold ? 1 : 1 - ease((j.age - up - j.hold) / down); }
+  const COL = { n: '90,167,255', i: '245,181,74' };
+  function paint(dt) {
+    for (const j of jobs) j.age += dt;
+    jobs = jobs.filter((j) => { const done = j.age > 1.6 + j.hold + 2.2; if (done) mark(j, 0); return !done; });
+    if (dt && rf() < dt * 2.6 && jobs.length < 18) spawn(false);
+    cx2.clearRect(0, 0, fw, fh);
+    const lit = new Float32Array(cols * rows), kind = new Uint8Array(cols * rows);
+    for (const j of jobs) { const v = level(j); for (let r = j.r; r < j.r + j.h; r++) for (let c = j.c; c < j.c + j.w; c++) { lit[r * cols + c] = v; kind[r * cols + c] = j.kind === 'n' ? 1 : 2; } }
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const x = gx + c * gap, y = gy + r * gap, v = lit[r * cols + c];
+      const inHole = hole && x > hole.l && x < hole.r && y > hole.t && y < hole.b;
+      const m = inHole ? 0.18 : 1;
+      cx2.fillStyle = `rgba(${T.dot},${0.16 * m})`; cx2.beginPath(); cx2.arc(x, y, 1.1, 0, 6.2832); cx2.fill();
+      if (v > 0.01) { cx2.fillStyle = `rgba(${kind[r * cols + c] === 1 ? COL.n : COL.i},${0.85 * v * m})`; cx2.beginPath(); cx2.arc(x, y, 1.2 + 1.1 * v, 0, 6.2832); cx2.fill(); }
+    }
+  }
+  let fl = 0, fRun = false, fOn = false, acc = 0;
+  function floorLoop(now) { const dt = fl ? Math.min(0.1, (now - fl) / 1000) : 0; fl = now; acc += dt; if (acc > 1 / 30) { paint(acc); acc = 0; } if (fRun) requestAnimationFrame(floorLoop); else fl = 0; }
+  function floorRun() { const want = fOn && !document.hidden && !reduce; if (want && !fRun) { fRun = true; requestAnimationFrame(floorLoop); } else if (!want) fRun = false; }
+  new ResizeObserver(fit).observe(cv);
+  new IntersectionObserver(([e]) => { fOn = e.isIntersecting; floorRun(); }).observe(cv);
+  document.addEventListener('visibilitychange', floorRun);
+  listeners.push(() => paint(0));
 })();
 </script>

@@ -1,5 +1,5 @@
 // Builds dist/: the landing page, the docs rendered from ../docs and ../README.md, a 404 page,
-// fonts under content-hashed names, the icons, the OG image, the web manifest, robots.txt,
+// fonts under content-hashed names, the paper texture, the icons, the OG image, the web manifest, robots.txt,
 // sitemap.xml and _headers with a CSP that allows each inline <script> and <style> by its hash.
 import { Marked } from 'marked';
 import { chromium, type Browser } from 'playwright-core';
@@ -38,19 +38,26 @@ const docPath = (doc: Doc) => `/docs/${doc.slug ? `${doc.slug}/` : ''}`;
 type Page = { path: string; html: string };
 type Rendered = { doc: Doc; title: string; description: string; toc: { id: string; html: string }[]; body: string };
 
-// The header's mark, drawn by docs/art/build.py, is inlined where index.html says <!--mark-->.
-const mark = (await Bun.file(join(site, 'mark.svg')).text()).trim();
-const landing = (await read('site/index.html')).replace('<!--mark-->', mark);
+// The logo mark, drawn by docs/art/build.py in the dark theme's ink, is inlined where index.html says
+// <!--mark-->, with its frame in the current text color so it follows the theme.
+const mark = (await Bun.file(join(site, 'mark.svg')).text()).trim().replace(/fill="#edf1f7"/, 'fill="currentColor"');
+if (!mark.includes('currentColor')) throw new Error('mark.svg: the frame is no longer #edf1f7, so it cannot follow the theme');
+const landing = (await read('site/index.html')).replaceAll('<!--mark-->', mark);
 if (!landing.includes(mark)) throw new Error('index.html: the <!--mark--> placeholder is missing');
 const landingStyle = landing.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
 const cut = landingStyle.indexOf('/* Everything above this line is shared');
 if (cut < 0) throw new Error('index.html: the marker that ends the shared stylesheet is missing');
 const base = landingStyle.slice(0, cut);
-const tokens = Object.fromEntries([...base.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
+// The light tokens sit in the first :root block, the dark ones in the prefers-color-scheme block.
+const tokenMap = (css: string) => Object.fromEntries([...css.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
+const darkAt = base.indexOf('@media (prefers-color-scheme: dark)');
+if (darkAt < 0) throw new Error('index.html: the dark theme tokens are missing');
+const light = tokenMap(base.slice(0, darkAt));
+const dark = { ...light, ...tokenMap(base.slice(darkAt, base.indexOf('\n}\n', darkAt))) };
 const nav = (landing.match(/<nav class="top[\s\S]*?<\/nav>/)?.[0] ?? '').replace('href="#top"', 'href="/"').replaceAll('href="#', 'href="/#');
-const meta = landing.match(/<div class="meta">[\s\S]*?<\/div>/)?.[0];
+const colo = landing.match(/<div class="wrap colo">[\s\S]*?<\/div>/)?.[0]?.replace('href="#top"', 'href="/"');
 const headline = landing.match(/<h1>[\s\S]*?<\/h1>/)?.[0];
-if (!nav || !meta || !headline) throw new Error('index.html: the nav, the footer meta or the h1 is missing');
+if (!nav || !colo || !headline) throw new Error('index.html: the nav, the footer line or the h1 is missing');
 const docsCss = await Bun.file(join(site, 'docs.css')).text();
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -146,69 +153,75 @@ async function render(doc: Doc): Promise<Rendered> {
 	return { doc, title, description, toc, body };
 }
 
-// Mermaid renders in Chromium with the docs' tokens and fonts. Its inline style attributes become
-// classes in the diagram's own <style>, so the CSP never has to allow style attributes.
-async function renderDiagrams(browser: Browser) {
+// Mermaid renders in Chromium with the docs' tokens and fonts, once for each theme: the page shows the
+// one that matches prefers-color-scheme. Its inline style attributes become classes in the diagram's own
+// <style>, so the CSP never has to allow style attributes.
+const THEMES = { light, dark } as const;
+type Svgs = { light: string; dark: string };
+async function renderDiagrams(browser: Browser): Promise<Svgs[]> {
 	if (!diagrams.length) return [];
 	const page = await browser.newPage();
-	const geist = Buffer.from(await Bun.file(join(site, 'fonts/geist.woff2')).arrayBuffer()).toString('base64');
-	await page.setContent(`<style>@font-face { font-family: "Geist"; src: url(data:font/woff2;base64,${geist}); font-weight: 400 600; }</style>`);
+	const face = Buffer.from(await Bun.file(join(site, 'fonts/instrument-sans.woff2')).arrayBuffer()).toString('base64');
+	await page.setContent(`<style>@font-face { font-family: "Instrument Sans"; src: url(data:font/woff2;base64,${face}); font-weight: 400 600; }</style>`);
 	await page.addScriptTag({ path: join(site, 'node_modules/mermaid/dist/mermaid.min.js') });
-	await page.evaluate(() => document.fonts.load('14px Geist'));
-	const t = tokens;
-	const theme = {
-		darkMode: true,
-		fontFamily: '"Geist", "Geist Fallback", system-ui, sans-serif',
+	await page.evaluate(() => document.fonts.load('14px "Instrument Sans"'));
+	const themeFor = (t: Record<string, string>, darkMode: boolean) => ({
+		darkMode,
+		fontFamily: '"Instrument Sans", "Instrument Fallback", system-ui, sans-serif',
 		fontSize: '14px',
-		background: t.deep,
-		mainBkg: t.panel,
-		primaryColor: t.panel,
+		background: t.paper,
+		mainBkg: t.slip,
+		primaryColor: t.slip,
 		primaryTextColor: t.ink,
-		primaryBorderColor: t.faint,
-		nodeBorder: t.faint,
-		secondaryColor: t.panel,
-		tertiaryColor: t.deep,
-		lineColor: t.dim,
+		primaryBorderColor: t['ink-2'],
+		nodeBorder: t['ink-2'],
+		secondaryColor: t.plate,
+		tertiaryColor: t.paper,
+		lineColor: t['ink-2'],
 		textColor: t.ink,
-		clusterBkg: t.night,
-		clusterBorder: t.rule,
+		clusterBkg: t.plate,
+		clusterBorder: t.dim,
 		titleColor: t.dim,
-		edgeLabelBackground: t.deep,
-	};
-	const svgs = await page.evaluate(
-		async ({ sources, theme }) => {
-			const mermaid = (window as unknown as { mermaid: any }).mermaid;
-			mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: theme, htmlLabels: false, flowchart: { htmlLabels: false } });
-			const out: string[] = [];
-			for (const [i, source] of sources.entries()) {
-				const { svg } = await mermaid.render(`diagram-${i}`, source);
-				const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
-				const root = doc.documentElement as unknown as SVGSVGElement;
-				const classes = new Map<string, string>();
-				for (const el of [root, ...root.querySelectorAll<SVGElement>('[style]')]) {
-					const css = el.style.cssText;
-					el.removeAttribute('style');
-					if (!css) continue;
-					if (!classes.has(css)) classes.set(css, `d${i}s${classes.size}`);
-					el.classList.add(classes.get(css)!);
+		edgeLabelBackground: t.paper,
+	});
+	const out: Svgs[] = diagrams.map(() => ({ light: '', dark: '' }));
+	for (const name of ['light', 'dark'] as const) {
+		const svgs = await page.evaluate(
+			async ({ sources, theme, name }) => {
+				const mermaid = (window as unknown as { mermaid: any }).mermaid;
+				mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: theme, htmlLabels: false, flowchart: { htmlLabels: false } });
+				const out: string[] = [];
+				for (const [i, source] of sources.entries()) {
+					const { svg } = await mermaid.render(`diagram-${i}-${name}`, source);
+					const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+					const root = doc.documentElement as unknown as SVGSVGElement;
+					const classes = new Map<string, string>();
+					for (const el of [root, ...root.querySelectorAll<SVGElement>('[style]')]) {
+						const css = el.style.cssText;
+						el.removeAttribute('style');
+						if (!css) continue;
+						if (!classes.has(css)) classes.set(css, `d${i}${name[0]}s${classes.size}`);
+						el.classList.add(classes.get(css)!);
+					}
+					const style = root.querySelector('style')!;
+					style.textContent += [...classes].map(([css, cls]) => `.${cls}{${css.replace(/;/g, ' !important;')}}`).join('');
+					out.push(new XMLSerializer().serializeToString(root));
 				}
-				const style = root.querySelector('style')!;
-				style.textContent += [...classes].map(([css, cls]) => `.${cls}{${css.replace(/;/g, ' !important;')}}`).join('');
-				out.push(new XMLSerializer().serializeToString(root));
-			}
-			return out;
-		},
-		{ sources: diagrams, theme },
-	);
+				return out;
+			},
+			{ sources: diagrams, theme: themeFor(THEMES[name], name === 'dark'), name },
+		);
+		svgs.forEach((svg, i) => {
+			// Inside inline SVG the parser decodes entities in <style>, and the CSP hashes what it decoded.
+			out[i]![name] = svg.replace(/<style>([\s\S]*?)<\/style>/, (_, css: string) => {
+				const raw = css.replace(/&gt;/g, '>');
+				if (/[&<]/.test(raw)) throw new Error('a Mermaid stylesheet contains & or <, which would change its CSP hash');
+				return `<style>${raw}</style>`;
+			});
+		});
+	}
 	await page.close();
-	// Inside inline SVG the parser decodes entities in <style>, and the CSP hashes what it decoded.
-	return svgs.map((svg) =>
-		svg.replace(/<style>([\s\S]*?)<\/style>/, (_, css: string) => {
-			const raw = css.replace(/&gt;/g, '>');
-			if (/[&<]/.test(raw)) throw new Error('a Mermaid stylesheet contains & or <, which would change its CSP hash');
-			return `<style>${raw}</style>`;
-		}),
-	);
+	return out;
 }
 
 function head(o: { title: string; description: string; path: string | null }) {
@@ -228,20 +241,22 @@ ${url ? `<meta property="og:url" content="${url}">\n` : ''}<meta property="og:im
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="${tokens.night}">
+<meta name="theme-color" content="${light.paper}" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="${dark.paper}" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/castoro.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/instrument-sans.woff2" as="font" type="font/woff2" crossorigin>
 <style>${base}${docsCss}</style>
 `;
 }
 
-const footer = `<footer class="gutter"><div class="measure">${meta}</div></footer>\n`;
-const docsNav = nav.replace('<a href="/docs/">', '<a href="/docs/" aria-current="page">');
+const footer = `<footer class="plain">${colo}</footer>\n`;
+const topNav = (html: string) => `<div class="wrap wide">${html}</div>`;
+const docsNav = topNav(nav.replace('<a href="/docs/">', '<a href="/docs/" aria-current="page">'));
 
-function docPage(r: Rendered, all: Rendered[], svgs: string[]): Page {
+function docPage(r: Rendered, all: Rendered[], svgs: Svgs[]): Page {
 	const side = all
 		.map((o) => {
 			const current = o === r;
@@ -249,13 +264,13 @@ function docPage(r: Rendered, all: Rendered[], svgs: string[]): Page {
 			return `<li><a href="${docPath(o.doc)}"${current ? ' aria-current="page"' : ''}>${escape(o.title)}</a>${toc}</li>`;
 		})
 		.join('\n');
-	const body = r.body.replace(/<!--diagram:(\d+)-->/g, (_, i: string) => `<div class="diagram" tabindex="0" role="region" aria-label="Diagram">${svgs[Number(i)]}</div>`);
+	const body = r.body.replace(/<!--diagram:(\d+)-->/g, (_, i: string) => `<div class="diagram" tabindex="0" role="region" aria-label="Diagram"><div class="lt">${svgs[Number(i)]!.light}</div><div class="dk">${svgs[Number(i)]!.dark}</div></div>`);
 	const path = docPath(r.doc);
 	return {
 		path,
 		html: `${head({ title: `${r.title} · boxrunner docs`, description: r.description, path })}<a class="skip" href="#content">Skip to content</a>
 ${docsNav}
-<div class="docs gutter"><div class="measure">
+<div class="docs wrap"><div class="docs-grid">
 <nav class="side" aria-label="Docs"><p class="kicker">Docs</p><ul>
 ${side}
 </ul></nav>
@@ -269,35 +284,37 @@ ${footer}`,
 
 const notFound: Page = {
 	path: '/404.html',
-	html: `${head({ title: 'Page not found · boxrunner', description: 'There is no page at this address.', path: null })}${nav}
-<main class="lost gutter"><div class="measure">
+	html: `${head({ title: 'Page not found · boxrunner', description: 'There is no page at this address.', path: null })}${topNav(nav)}
+<main class="lost wrap"><div class="lost-in">
 <p class="kicker">404</p>
 <h1>No page at this address.</h1>
 <p>It may have moved, or the link has a typo.</p>
-<p class="links"><a class="ghost" href="/">Back to the start</a><a class="ghost" href="/docs/">Read the docs</a></p>
+<p class="links"><a class="act" href="/">Back to the start</a><a class="act quiet" href="/docs/">Read the docs</a></p>
 </div></main>
 ${footer}`,
 };
 
 async function ogImage(browser: Browser, fonts: (html: string) => string) {
 	const server = serve(dist);
-	const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, reducedMotion: 'reduce' });
+	const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, reducedMotion: 'reduce', colorScheme: 'light' });
 	const page = await context.newPage();
 	await page.goto(server.url.href);
-	const box = await page.locator('.hero .stage canvas').evaluate((c: HTMLCanvasElement) => c.toDataURL('image/png'));
-	const eyebrow = landing.match(/<div class="eyebrow">[\s\S]*?<\/div>/)?.[0] ?? '';
+	await page.evaluate(() => document.fonts.ready);
+	await page.waitForTimeout(500);
+	// The plate's canvas holds the engraving and the dots, with every container formed; the plate's color comes from CSS.
+	const art = await page.locator('.hero canvas.art').evaluate((c: HTMLCanvasElement) => c.toDataURL('image/png'));
 	const card = `<!doctype html><meta charset="utf-8"><style>${fonts(base)}
-body { margin: 0; background: var(--night); color: var(--ink); }
-.card { position: relative; width: 1200px; height: 630px; overflow: hidden; padding: 64px 72px; box-sizing: border-box; display: grid; grid-template-rows: auto 1fr auto; }
-.box { position: absolute; right: -10px; top: 30px; width: 540px; height: 600px; object-fit: contain; }
-.mark { font-size: 22px; gap: 14px; } .mark svg { width: 24px; height: 24px; }
-.eyebrow { font: 500 17px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 12px; }
-.eyebrow .live { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
-h1 { position: relative; font: 800 100px/.92 var(--f-display); letter-spacing: -0.035em; margin: 0; max-width: 680px; align-self: center; }
-h1 .w { display: inline-block; }
-h1 em { font-style: normal; color: transparent; -webkit-text-stroke: 2px var(--ink); }
+body { margin: 0; background: var(--paper); }
+.card { position: relative; width: 1200px; height: 630px; overflow: hidden; padding: 28px; box-sizing: border-box; }
+.plate { position: relative; width: 100%; height: 100%; background: var(--plate); border-radius: 3px; overflow: hidden; box-shadow: 0 1px 0 var(--emboss), 0 2px 6px -3px rgba(36, 28, 20, .35); }
+.plate::before { content: ""; position: absolute; inset: 14px; border: 1px solid var(--rule-2); border-radius: 2px; box-shadow: 1px 1px 0 var(--emboss); z-index: 2; }
+.art { position: absolute; right: -25px; top: -40px; width: 1023px; height: auto; }
+.copy { position: absolute; left: 62px; top: 58px; z-index: 3; display: grid; gap: 22px; }
+.brand { font-size: 24px; gap: 12px; } .brand svg { width: 28px; height: 28px; }
+h1 { font-size: 66px; line-height: 1.04; letter-spacing: -.015em; margin-top: 170px; }
+h1 span { display: block; white-space: nowrap; }
 </style>
-<div class="card"><span class="mark">${mark}boxrunner</span>${headline}${eyebrow}<img class="box" src="${box}" alt=""></div>`;
+<div class="card"><div class="plate"><img class="art" src="${art}" alt=""><div class="copy"><span class="brand">${mark}boxrunner</span>${headline}</div></div></div>`;
 	await page.route('**/og-card', (route) => route.fulfill({ contentType: 'text/html', body: card }));
 	await page.setViewportSize({ width: 1200, height: 630 });
 	await page.goto(new URL('/og-card', server.url).href);
@@ -319,7 +336,7 @@ for (const name of readdirSync(join(site, 'fonts'))) {
 	fontNames.set(`/fonts/${name}`, `/fonts/${hashed}`);
 }
 const withFonts = (html: string) => [...fontNames].reduce((out, [from, to]) => out.replaceAll(from, to), html);
-for (const icon of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png']) cpSync(join(site, icon), join(dist, icon));
+for (const icon of ['favicon.svg', 'paper.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png']) cpSync(join(site, icon), join(dist, icon));
 cpSync(join(site, 'deploy-to-cloudflare.svg'), join(dist, 'deploy-to-cloudflare.svg'));
 
 const browser = await chromium.launch();
@@ -376,6 +393,8 @@ try {
   Cache-Control: ${html}
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
+/paper.svg
+  Cache-Control: public, max-age=86400
 /install.sh
   Content-Type: text/plain; charset=utf-8
   Cache-Control: public, max-age=300
@@ -399,8 +418,8 @@ ${listed.map((p) => `  <url><loc>${ORIGIN}${p.path}</loc></url>`).join('\n')}
 		JSON.stringify({
 			name: 'boxrunner',
 			icons: [192, 512].map((size) => ({ src: `/icon-${size}.png`, sizes: `${size}x${size}`, type: 'image/png' })),
-			theme_color: tokens.night,
-			background_color: tokens.night,
+			theme_color: light.paper,
+			background_color: light.paper,
 			display: 'browser',
 		}),
 	);

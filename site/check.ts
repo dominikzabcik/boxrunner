@@ -1,10 +1,10 @@
 // Builds the site, serves dist/ with its _headers and checks every page in Chromium.
-import { chromium, type Page } from 'playwright-core';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { join } from 'node:path';
 import { serve } from './serve.ts';
 
-// Landing page bytes on the wire: the HTML gzipped, the three fonts and the response headers.
-// Measured 153,561 in October 2026: 14,633 of HTML, 133,816 of fonts and about 5,100 of headers,
+// Landing page bytes on the wire: the HTML gzipped, the four fonts and the response headers.
+// Measured 140,871 in October 2026: 21,146 of HTML, 113,020 of fonts and about 6,700 of headers,
 // most of them the CSP sent with each response. Cloudflare's brotli makes the HTML a little smaller.
 const LANDING_BUDGET = 160_000;
 
@@ -101,7 +101,7 @@ async function landing(page: Page) {
 	});
 	await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
 	await page.waitForTimeout(2000);
-	const lit = await page.locator('.hero .stage canvas').evaluate((c: HTMLCanvasElement) => {
+	const lit = await page.locator('.hero canvas.art').evaluate((c: HTMLCanvasElement) => {
 		const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
 		let n = 0;
 		for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n++;
@@ -111,7 +111,7 @@ async function landing(page: Page) {
 	else ok(`hero canvas drew ${lit} non-blank pixels after 2 s`);
 	const total = Object.values(sizes).reduce((a, b) => a + b, 0);
 	const fonts = Object.keys(sizes).filter((u) => u.endsWith('.woff2')).length;
-	if (fonts !== 3) fail(`the landing page loaded ${fonts} fonts, expected 3`);
+	if (fonts !== 4) fail(`the landing page loaded ${fonts} fonts, expected 4`);
 	if (total > LANDING_BUDGET) fail(`the landing page transferred ${total} bytes, over the ${LANDING_BUDGET} budget`);
 	else ok(`landing page transferred ${total.toLocaleString('en-US')} bytes (HTML and ${fonts} fonts), budget ${LANDING_BUDGET.toLocaleString('en-US')}`);
 	const canary = await page.evaluate(() => {
@@ -124,12 +124,34 @@ async function landing(page: Page) {
 	else ok('an injected inline script was blocked by the CSP');
 }
 
+// Headlines are written to fit two lines on a phone; a third line means the type or the words grew.
+async function headlines(browser: Browser) {
+	const wide: string[] = [];
+	for (const width of [390, 360]) {
+		const context = await browser.newContext({ viewport: { width, height: 800 } });
+		const page = await context.newPage();
+		await page.goto(`${origin}/`, { waitUntil: 'load' });
+		await page.evaluate(() => document.fonts.ready);
+		const found = await page.evaluate(() =>
+			[...document.querySelectorAll<HTMLElement>('h1, h2, .say')].map((el) => {
+				const style = getComputedStyle(el);
+				const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+				return { text: el.textContent!.trim().replace(/\s+/g, ' '), lines: Math.round(el.getBoundingClientRect().height / lineHeight) };
+			}),
+		);
+		for (const h of found) if (h.lines > 2) wide.push(`"${h.text}" runs to ${h.lines} lines at ${width}px`);
+		await context.close();
+	}
+	for (const w of wide) fail(`headline: ${w}`);
+	if (!wide.length) ok('every headline fits two lines at 390 and 360px');
+}
+
 const browser = await chromium.launch();
 try {
 	await headers();
 	const hrefs = new Set<string>();
-	for (const width of [1280, 390]) {
-		const context = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 800 } });
+	for (const [width, colorScheme] of [[1280, 'light'], [1280, 'dark'], [390, 'light'], [390, 'dark']] as const) {
+		const context = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 800 }, colorScheme });
 		await context.addInitScript(() => {
 			const w = window as unknown as { violations: string[] };
 			w.violations = [];
@@ -138,10 +160,11 @@ try {
 		const page = await context.newPage();
 		const before = failures.length;
 		for (const path of [...paths, missing]) for (const href of await visit(page, path, width)) hrefs.add(href);
-		if (failures.length === before) ok(`${paths.length + 1} pages at ${width}px: no console errors or warnings, no CSP violations${width < 600 ? ', nothing wider than the viewport' : ''}`);
+		if (failures.length === before) ok(`${paths.length + 1} pages at ${width}px, ${colorScheme}: no console errors or warnings, no CSP violations${width < 600 ? ', nothing wider than the viewport' : ''}`);
 		await context.close();
 	}
 	await links(hrefs);
+	await headlines(browser);
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 	await landing(await context.newPage());
 	await context.close();
