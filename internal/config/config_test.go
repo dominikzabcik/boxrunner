@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -431,6 +433,41 @@ func TestParseCache(t *testing.T) {
 		_, err := Parse([]byte(file(c.top, c.class)), "")
 		if want := "config:\n" + c.want; err == nil || err.Error() != want {
 			t.Errorf("Parse(%s, %s) error = %v\nwant %s", c.top, c.class, err, want)
+		}
+	}
+}
+
+func TestParseEgress(t *testing.T) {
+	file := func(class string) string {
+		return "worker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"agent\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n" + class +
+			"[[class]]\nname = \"light\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	}
+	got, err := Parse([]byte(file(`egress = ["github", "api.example.com", "10.20.0.0/16:5432"]`+"\n")), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Classes[1].Egress != nil {
+		t.Error("a class without egress has a policy")
+	}
+	policy := got.Classes[0].Egress
+	if policy == nil {
+		t.Fatal("the class lists egress but has no policy")
+	}
+	if want := []string{"github", "api.example.com", "10.20.0.0/16:5432"}; !reflect.DeepEqual(policy.Entries, want) {
+		t.Errorf("Entries = %q, want %q", policy.Entries, want)
+	}
+	if !policy.AllowsName("api.example.com", 443) || policy.AllowsName("example.com", 443) || !policy.AllowsAddr(netip.MustParseAddr("10.20.1.1"), 5432) {
+		t.Error("the policy does not allow what the entries list")
+	}
+	for _, c := range []struct{ class, want string }{
+		{"egress = []\n", `class "agent": egress: empty: a class with no destinations cannot reach GitHub; start the list with "github", or leave egress out to open the class`},
+		{`egress = ["registry.example.net"]` + "\n", `class "agent": egress: github.com:443 is not allowed, so its runners could not take a job; start the list with "github"`},
+		{`egress = ["github", "169.254.169.254"]` + "\n", `class "agent": egress: "169.254.169.254": 169.254.0.0/16 is never reachable`},
+		{"egress = [\"github\", \"db\"]\n", `class "agent": egress: "db": not an address`},
+	} {
+		_, err := Parse([]byte(file(c.class)), "")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("Parse(%s) error = %v\nwant one with %s", c.class, err, c.want)
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,7 +72,7 @@ func (r *recorder) reported() []Event {
 	return slices.Clone(r.events)
 }
 
-func newServer(t *testing.T, entries []string, up *fakeUpstream) (*Server, *recorder) {
+func newServer(t *testing.T, entries []string, up Upstream) (*Server, *recorder) {
 	t.Helper()
 	policy, err := egress.Parse(append([]string{"github"}, entries...))
 	if err != nil {
@@ -101,7 +102,6 @@ func TestHandleOpensTheAddressesOfAnAllowedNameBeforeAnswering(t *testing.T) {
 	}
 	wantGrants := []egress.Grant{
 		{Addr: netip.MustParseAddr("203.0.113.5"), Ports: egress.Ports{List: []uint16{8443}}, TTL: MinOpen},
-		{Addr: netip.MustParseAddr("2001:db8::5"), Ports: egress.Ports{List: []uint16{8443}}, TTL: MinOpen},
 	}
 	if !reflect.DeepEqual(rec.opened(), wantGrants) {
 		t.Errorf("opened %+v, want %+v", rec.opened(), wantGrants)
@@ -369,4 +369,134 @@ func TestParseResolvConf(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseResolvConf = %v, want %v", got, want)
 	}
+}
+
+func TestHandleAnswersAAAAWithoutAddressesAndWithoutAskingUpstream(t *testing.T) {
+	up := &fakeUpstream{answers: map[string][]rr{"github.com": {a(60, "2001:db8::5")}}}
+	s, rec := newServer(t, nil, up)
+	q := query(8, "github.com", TypeAAAA)
+	if got := s.Handle(context.Background(), q, job, false); !reflect.DeepEqual(got, Reply(q, RcodeSuccess)) {
+		t.Errorf("Handle = % x, want an empty answer", got)
+	}
+	if len(up.asked) != 0 || len(rec.opened()) != 0 {
+		t.Errorf("asked %v, opened %v", up.asked, rec.opened())
+	}
+	refused := query(9, "evil.example", TypeAAAA)
+	if got := s.Handle(context.Background(), refused, job, false); !reflect.DeepEqual(got, Reply(refused, RcodeRefused)) {
+		t.Errorf("Handle(AAAA of a refused name) = % x, want REFUSED", got)
+	}
+}
+
+func TestHandleOpensOnlyWhatTheQuestionResolvesTo(t *testing.T) {
+	up := &fakeUpstream{answers: map[string][]rr{"api.example.com": {
+		a(60, "203.0.113.66").from("attacker.example"),
+		cname(60, "edge.example.net"),
+		a(60, "203.0.113.5").from("edge.example.net"),
+	}}}
+	s, rec := newServer(t, []string{"api.example.com"}, up)
+	s.Handle(context.Background(), query(1, "api.example.com", TypeA), job, false)
+	if got := rec.opened(); len(got) != 1 || got[0].Addr.String() != "203.0.113.5" {
+		t.Errorf("opened %+v, want only the address of the alias", got)
+	}
+}
+
+func TestHandleKeepsPrivateAddressesOfAliasesAwayFromTheHostNamedInFull(t *testing.T) {
+	up := &fakeUpstream{answers: map[string][]rr{"db.internal.example": {
+		cname(60, "db.cluster.vendor.example"),
+		a(60, "10.20.1.5").from("db.cluster.vendor.example"),
+	}}}
+	s, rec := newServer(t, []string{"db.internal.example"}, up)
+	s.Handle(context.Background(), query(1, "db.internal.example", TypeA), job, false)
+	if got := rec.opened(); len(got) != 0 {
+		t.Errorf("opened %+v: a private address that an alias to a host nobody named resolves to", got)
+	}
+	if ev := rec.reported(); len(ev) != 1 || ev[0].Kind != Withheld || ev[0].Addr.String() != "10.20.1.5" {
+		t.Errorf("events = %+v", ev)
+	}
+}
+
+func TestHandleRefusesAnAnswerToAnotherQuestion(t *testing.T) {
+	q := query(1, "github.com", TypeA)
+	other := response(query(1, "evil.example", TypeA), 0, a(60, "203.0.113.66"))
+	s, rec := newServer(t, nil, answerWith(other))
+	if got := s.Handle(context.Background(), q, job, false); !reflect.DeepEqual(got, Reply(q, RcodeServFail)) {
+		t.Errorf("Handle = % x, want SERVFAIL", got)
+	}
+	if len(rec.opened()) != 0 {
+		t.Errorf("opened %+v", rec.opened())
+	}
+}
+
+// answerWith is an upstream that answers every query with the same bytes.
+type answerWith []byte
+
+func (a answerWith) Exchange(context.Context, []byte, bool) ([]byte, error) { return a, nil }
+
+func TestResolverRejectsAnswersThatAreNotToItsQuery(t *testing.T) {
+	forger, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer forger.Close()
+	var wrongQuestion atomic.Bool
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := forger.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := buf[:n]
+			if wrongQuestion.Load() {
+				// The right ID, the answer to a name nobody asked about.
+				forged := response(query(binary.BigEndian.Uint16(q), "evil.example", TypeA), 0, a(60, "203.0.113.66"))
+				forger.WriteTo(forged, addr)
+				continue
+			}
+			forger.WriteTo(response(q, 0, a(60, "203.0.113.1")), addr)
+		}
+	}()
+	r := &Resolver{Timeout: time.Second, Servers: func() []netip.AddrPort { return []netip.AddrPort{forger.LocalAddr().(*net.UDPAddr).AddrPort()} }}
+	q := query(0x0102, "github.com", TypeA)
+	got, err := r.Exchange(context.Background(), q, false)
+	if err != nil || binary.BigEndian.Uint16(got) != 0x0102 {
+		t.Fatalf("Exchange = % x, %v; want an answer with the client's own ID back", got, err)
+	}
+	wrongQuestion.Store(true)
+	if got, err := r.Exchange(context.Background(), q, false); err == nil {
+		t.Errorf("Exchange accepted a forged answer: % x", got)
+	}
+}
+
+func TestServeTCPCapsConnectionsPerSource(t *testing.T) {
+	s, _ := newServer(t, nil, &fakeUpstream{})
+	s.Clients = netip.MustParsePrefix("127.0.0.0/8")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- s.ServeTCP(ctx, l) }()
+	var held []net.Conn
+	for range maxPerSource {
+		c, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, c)
+	}
+	over, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	over.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := over.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("a ninth connection from one address read %v, want it closed", err)
+	}
+	for _, c := range append(held, over) {
+		c.Close()
+	}
+	cancel()
+	<-done
 }

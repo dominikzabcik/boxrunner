@@ -10,7 +10,7 @@ import (
 func TestParseReadsEveryKindOfEntry(t *testing.T) {
 	p, err := Parse([]string{
 		"github", "api.example.com", "*.example.org:8443", "registry.example.net:*",
-		"10.20.0.0/16:5432", "203.0.113.7", "[2001:db8::1]:443", "2001:db8:1::/48",
+		"10.20.0.0/16:5432", "203.0.113.7",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,16 +49,13 @@ func TestParseReadsEveryKindOfEntry(t *testing.T) {
 		{"10.21.0.1", 5432, false},
 		{"203.0.113.7", 443, true},
 		{"203.0.113.8", 443, false},
-		{"2001:db8::1", 443, true},
-		{"2001:db8::2", 443, false},
-		{"2001:db8:1:ffff::1", 80, true},
 	}
 	for _, c := range nets {
 		if got := p.AllowsAddr(netip.MustParseAddr(c.addr), c.port); got != c.want {
 			t.Errorf("AllowsAddr(%s, %d) = %v, want %v", c.addr, c.port, got, c.want)
 		}
 	}
-	wantEntries := []string{"github", "api.example.com", "*.example.org:8443", "registry.example.net:*", "10.20.0.0/16:5432", "203.0.113.7", "[2001:db8::1]:443", "2001:db8:1::/48"}
+	wantEntries := []string{"github", "api.example.com", "*.example.org:8443", "registry.example.net:*", "10.20.0.0/16:5432", "203.0.113.7"}
 	if !reflect.DeepEqual(p.Entries, wantEntries) {
 		t.Errorf("Entries = %q, want %q", p.Entries, wantEntries)
 	}
@@ -91,14 +88,15 @@ func TestParseRefusesWhatItCannotAllow(t *testing.T) {
 		{"10.20.0.1/16", "host bits set; did you mean 10.20.0.0/16"},
 		{"10.20.0.0/33", "not an address range"},
 		{"0.0.0.0/0", "every address"},
-		{"::/0", "every address"},
 		{"169.254.169.254", "never reachable"},
 		{"169.254.0.0/16:80", "never reachable"},
 		{"127.0.0.1:8080", "never reachable"},
 		{"168.63.129.16", "never reachable"},
 		{"224.0.0.251:5353", "never reachable"},
-		{"fe80::1", "never reachable"},
-		{"[fd00:ec2::254]:80", "never reachable"},
+		{"2001:db8::1", "IPv6 is not supported"},
+		{"[2001:db8::1]:443", "IPv6 is not supported"},
+		{"2001:db8::/32", "IPv6 is not supported"},
+		{"::/0", "IPv6 is not supported"},
 		{"0.0.0.0/1", "never reachable"},
 	} {
 		_, err := Parse([]string{"github", c.entry})
@@ -166,11 +164,9 @@ func TestPrivateAndNeverRanges(t *testing.T) {
 		{"172.32.0.1", false, false},
 		{"192.168.1.1", true, false},
 		{"100.64.0.1", true, false},
-		{"fd12::1", true, false},
 		{"8.8.8.8", false, false},
 		{"169.254.169.254", false, true},
 		{"127.0.0.1", false, true},
-		{"::1", false, true},
 		{"::ffff:169.254.169.254", false, true},
 		{"168.63.129.16", false, true},
 	} {

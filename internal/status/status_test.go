@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 )
 
 var t0 = time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC)
@@ -286,5 +288,44 @@ func TestCount(t *testing.T) {
 	if want := []Tally{{Repo: "octo/site", Class: "boxrunner", Result: "succeeded", Jobs: 1,
 		Took: Histogram{Counts: [14]uint64{4: 1}, Sum: 60}, Wait: Histogram{Counts: [14]uint64{2: 1}, Sum: 8}}}; !reflect.DeepEqual(first, want) {
 		t.Errorf("Count changed the tallies it was given: %+v", first)
+	}
+}
+
+func TestPrintEgress(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", DiskFloor: 10_000_000_000,
+		Classes: []Class{{Name: "agent", Priority: "normal", Max: 1}, {Name: "web", Priority: "normal", Max: 1}},
+		Egress: []Egress{
+			{
+				Class: "agent", Entries: []string{"github", "api.example.com", "10.20.0.0/16:5432"}, Packets: 12, Lookups: 1,
+				Recent: []egress.Block{
+					{Time: t0.Add(time.Second), Kind: egress.Packet, Runner: "box-1-agent-ab12cd", Repo: "octo/site", Dest: "203.0.113.9:443", Name: "api.example.com"},
+					{Time: t0, Kind: egress.Lookup, Runner: "box-1-agent-ab12cd", Repo: "octo/site", Dest: "data.evil.example"},
+					{Time: t0.Add(2 * time.Second), Kind: egress.Packet, Dest: "198.51.100.1:22"},
+				},
+			},
+			{Class: "coder", Entries: []string{"github"}, Problem: "nft is not installed; run sudo boxrunner install"},
+		},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	at := func(d time.Duration) string { return t0.Add(d).Local().Format("15:04:05") }
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB\n\n" +
+		"Class coder has an egress allowlist and is not served: nft is not installed; run sudo boxrunner install\n\n" +
+		"CLASS  PRIORITY  RUNNERS  MAX\n" +
+		"agent  normal    0        1\n" +
+		"web    normal    0        1\n\n" +
+		"EGRESS CLASS  ENTRIES  PACKETS DROPPED  LOOKUPS REFUSED\n" +
+		"agent         3        12               1\n" +
+		"coder         1        0                0\n\n" +
+		"REFUSED AT  CLASS  RUNNER              REPOSITORY  WHAT\n" +
+		at(0) + "    agent  box-1-agent-ab12cd  octo/site   lookup of data.evil.example\n" +
+		at(time.Second) + "    agent  box-1-agent-ab12cd  octo/site   packet to 203.0.113.9:443 (api.example.com)\n" +
+		at(2*time.Second) + "    agent  ?                   ?           packet to 198.51.100.1:22\n\n"
+	if got := b.String(); !strings.HasPrefix(got, want) {
+		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
+	}
+	if got, want := snap.Egress[0].Summary(), "12 packets dropped and 1 lookup refused since the agent started"; got != want {
+		t.Errorf("Summary = %q, want %q", got, want)
 	}
 }

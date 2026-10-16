@@ -19,6 +19,8 @@ const (
 
 	TypeA    = 1
 	TypeAAAA = 28
+
+	typeCNAME = 5
 )
 
 const (
@@ -70,12 +72,44 @@ func ParseQuery(msg []byte) (Question, error) {
 	return Question{Name: name, Type: binary.BigEndian.Uint16(msg[off:]), Class: binary.BigEndian.Uint16(msg[off+2:])}, nil
 }
 
-// Answer is what a response says: its code, whether it was cut short, and
-// the addresses in its answer section.
+// Alias says that a name is another name's alias.
+type Alias struct {
+	Owner, Target string
+}
+
+// Answer is what a response says: its code, whether it was cut short, the
+// question it answers, and the addresses and aliases in its answer section.
 type Answer struct {
 	Rcode     int
 	Truncated bool
+	Question  Question
 	Records   []Record
+	Aliases   []Alias
+}
+
+// Reachable are the addresses the question's name resolves to: those whose
+// owner is the name itself or is reached from it through aliases. A response
+// may carry others, such as a forged record for a name nobody asked about.
+func (a Answer) Reachable() []Record {
+	names := map[string]bool{a.Question.Name: true}
+	for range len(a.Aliases) {
+		grew := false
+		for _, al := range a.Aliases {
+			if names[al.Owner] && !names[al.Target] {
+				names[al.Target], grew = true, true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	var out []Record
+	for _, r := range a.Records {
+		if names[r.Name] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ParseAnswer reads a response's address records.
@@ -90,10 +124,13 @@ func ParseAnswer(msg []byte) (Answer, error) {
 	a := Answer{Rcode: int(flags & 0xf), Truncated: flags&0x0200 != 0}
 	questions, answers := int(binary.BigEndian.Uint16(msg[4:6])), int(binary.BigEndian.Uint16(msg[6:8]))
 	off := headerLen
-	for range questions {
-		_, next, err := readName(msg, off)
-		if err != nil {
-			return Answer{}, err
+	for i := range questions {
+		name, next, err := readName(msg, off)
+		if err != nil || next+4 > len(msg) {
+			return Answer{}, errors.Join(err, errShort)
+		}
+		if i == 0 {
+			a.Question = Question{Name: name, Type: binary.BigEndian.Uint16(msg[next:]), Class: binary.BigEndian.Uint16(msg[next+2:])}
 		}
 		off = next + 4
 	}
@@ -114,6 +151,10 @@ func ParseAnswer(msg []byte) (Answer, error) {
 		}
 		rdata := msg[data : data+rdlen]
 		switch {
+		case typ == typeCNAME:
+			if target, _, err := readName(msg, data); err == nil {
+				a.Aliases = append(a.Aliases, Alias{Owner: name, Target: target})
+			}
 		case typ == TypeA && rdlen == 4:
 			a.Records = append(a.Records, Record{Name: name, Addr: netip.AddrFrom4([4]byte(rdata)), TTL: ttl})
 		case typ == TypeAAAA && rdlen == 16:

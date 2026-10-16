@@ -1,7 +1,10 @@
 package dnsfwd
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -155,10 +158,15 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 	if err != nil {
 		return Reply(query, RcodeFormErr)
 	}
-	ports, exact, ok := s.Policy.Match(q.Name)
+	ports, _, ok := s.Policy.Match(q.Name)
 	if !ok {
 		s.event(Event{Kind: Refused, From: from, Name: q.Name, Type: q.Type})
 		return Reply(query, RcodeRefused)
+	}
+	if q.Type == TypeAAAA {
+		// A job's network has no IPv6. An empty answer tells its resolver so at
+		// once, where an address would make it try, wait and fall back.
+		return Reply(query, RcodeSuccess)
 	}
 	if !s.allow() {
 		return Reply(query, RcodeServFail)
@@ -173,15 +181,23 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: err})
 		return Reply(query, RcodeServFail)
 	}
+	if answer.Question != q {
+		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: errors.New("the answer is to another question")})
+		return Reply(query, RcodeServFail)
+	}
 	var grants []egress.Grant
-	for _, r := range answer.Records {
+	for _, r := range answer.Reachable() {
 		addr := r.Addr.Unmap()
+		if !addr.Is4() {
+			continue
+		}
+		_, ownerExact, _ := s.Policy.Match(r.Name)
 		reason := ""
 		switch {
 		case egress.IsNever(addr):
 			reason = "an address no entry can allow"
-		case egress.IsPrivate(addr) && !exact:
-			reason = "a private address, which only a host named in full may resolve to"
+		case egress.IsPrivate(addr) && !ownerExact:
+			reason = "a private address, which only a host named in full may have"
 		}
 		if reason != "" {
 			s.event(Event{Kind: Withheld, From: from, Name: q.Name, Type: q.Type, Addr: addr, Reason: reason})
@@ -242,22 +258,49 @@ func (s *Server) ServeTCP(ctx context.Context, l net.Listener) error {
 	stop := context.AfterFunc(ctx, func() { l.Close() })
 	defer stop()
 	slots := make(chan struct{}, maxInFlight)
+	var mu sync.Mutex
+	open := map[netip.Addr]int{}
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+			if ctx.Err() == nil {
+				return err
 			}
-			return err
+			return nil
+		}
+		from := netip.Addr{}
+		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			from = tcp.AddrPort().Addr()
+		}
+		// A client that opens connections and sends nothing must not take every slot.
+		mu.Lock()
+		over := open[from] >= maxPerSource
+		if !over {
+			open[from]++
+		}
+		mu.Unlock()
+		if over {
+			conn.Close()
+			continue
 		}
 		select {
 		case slots <- struct{}{}:
 		default:
 			conn.Close()
+			mu.Lock()
+			open[from]--
+			mu.Unlock()
 			continue
 		}
 		go func() {
-			defer func() { <-slots }()
+			defer func() {
+				<-slots
+				mu.Lock()
+				if open[from]--; open[from] == 0 {
+					delete(open, from)
+				}
+				mu.Unlock()
+			}()
 			defer conn.Close()
 			s.serveConn(ctx, conn)
 		}()
@@ -267,8 +310,10 @@ func (s *Server) ServeTCP(ctx context.Context, l net.Listener) error {
 const (
 	queryTimeout = 10 * time.Second
 	idleTimeout  = 10 * time.Second
-	// maxQueries is how many queries one connection may send.
-	maxQueries = 64
+	// maxQueries is how many queries one connection may send, and maxPerSource
+	// how many connections one address may hold.
+	maxQueries   = 64
+	maxPerSource = 8
 )
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
@@ -334,6 +379,49 @@ func (r *Resolver) Exchange(ctx context.Context, query []byte, tcp bool) ([]byte
 }
 
 func (r *Resolver) exchange(ctx context.Context, server netip.AddrPort, query []byte, tcp bool) ([]byte, error) {
+	// The job picked the query's ID, and an attacker who knows it needs only
+	// the resolver's address and our port to forge an answer. A fresh ID, and
+	// an answer that must repeat the question, take that away.
+	var id [2]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, err
+	}
+	sent := slices.Clone(query)
+	sent[0], sent[1] = id[0], id[1]
+	question, err := questionSection(sent)
+	if err != nil {
+		return nil, err
+	}
+	response, err := r.send(ctx, server, sent, id, tcp)
+	if err != nil {
+		return nil, err
+	}
+	if len(response) < headerLen || response[0] != id[0] || response[1] != id[1] || response[2]&0x80 == 0 || !bytes.Equal(responseQuestion(response), question) {
+		return nil, errors.New("dns: the answer is not to our query")
+	}
+	response[0], response[1] = query[0], query[1]
+	return response, nil
+}
+
+// questionSection is the bytes of a query's question.
+func questionSection(msg []byte) ([]byte, error) {
+	_, off, err := readName(msg, headerLen)
+	if err != nil || off+4 > len(msg) {
+		return nil, errors.New("dns: cut-off question")
+	}
+	return msg[headerLen : off+4], nil
+}
+
+// responseQuestion is the bytes of a response's first question, nil when it has none.
+func responseQuestion(msg []byte) []byte {
+	if binary.BigEndian.Uint16(msg[4:6]) < 1 {
+		return nil
+	}
+	q, _ := questionSection(msg)
+	return q
+}
+
+func (r *Resolver) send(ctx context.Context, server netip.AddrPort, query []byte, id [2]byte, tcp bool) ([]byte, error) {
 	network := "udp"
 	if tcp {
 		network = "tcp"
@@ -363,7 +451,7 @@ func (r *Resolver) exchange(ctx context.Context, server netip.AddrPort, query []
 				return nil, err
 			}
 			// A datagram that is not the answer to this query is ignored.
-			if n >= 2 && buf[0] == query[0] && buf[1] == query[1] {
+			if n >= 2 && buf[0] == id[0] && buf[1] == id[1] {
 				return slices.Clone(buf[:n]), nil
 			}
 		}

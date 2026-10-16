@@ -150,16 +150,16 @@ func resultsStorage() []string {
 var RunnerHosts = []string{"github.com", "api.github.com", "broker.actions.githubusercontent.com"}
 
 // Never are the destinations no entry can allow: this machine, multicast, the
-// link-local range and the cloud metadata services.
+// link-local range and the cloud metadata services. A job's network has no
+// IPv6, so every range here is IPv4.
 var Never = parsePrefixes(
 	"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
 	"168.63.129.16/32", "100.100.100.200/32", "192.0.0.192/32",
-	"::/128", "::1/128", "fe80::/10", "ff00::/8", "fd00:ec2::254/128",
 )
 
 // Private are the ranges that are not the internet's: they are reachable only
 // by an entry that names them or an exact host that resolves to them.
-var Private = parsePrefixes("10.0.0.0/8", "100.64.0.0/10", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+var Private = parsePrefixes("10.0.0.0/8", "100.64.0.0/10", "172.16.0.0/12", "192.168.0.0/16")
 
 func parsePrefixes(s ...string) []netip.Prefix {
 	out := make([]netip.Prefix, len(s))
@@ -220,6 +220,9 @@ func (p *Policy) add(entry string) error {
 		return err
 	}
 	if isNet {
+		if prefix.Addr().Is6() {
+			return errors.New("IPv6 is not supported: a job's network has no IPv6")
+		}
 		if prefix.Bits() == 0 {
 			return errors.New("every address; leave egress out to open the class")
 		}
@@ -240,8 +243,8 @@ func (p *Policy) add(entry string) error {
 	return nil
 }
 
-// splitPort separates an optional port from an entry. IPv6 addresses with a
-// port are written in brackets, as in "[2001:db8::]:443".
+// splitPort separates an optional port from an entry. An IPv6 address, which
+// the entries refuse, can be written in brackets to carry a port.
 func splitPort(entry string) (target string, ports Ports, err error) {
 	var port string
 	switch {

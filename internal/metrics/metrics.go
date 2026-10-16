@@ -54,6 +54,18 @@ func Write(w io.Writer, s status.Snapshot) error {
 		b.sample("boxrunner_class_held", flag(!c.HeldUntil.IsZero()), "class", c.Name)
 	}
 
+	if len(s.Egress) > 0 {
+		b.family("boxrunner_egress_ready", "gauge", "1 while the agent serves the class with its egress allowlist in force, 0 when it does not.")
+		for _, e := range s.Egress {
+			b.sample("boxrunner_egress_ready", flag(e.Problem == ""), "class", e.Class)
+		}
+		b.family("boxrunner_egress_blocked_total", "counter", "Packets dropped and lookups refused by the class's egress allowlist since the agent started.")
+		for _, e := range s.Egress {
+			b.sample("boxrunner_egress_blocked_total", float64(e.Packets), "class", e.Class, "kind", "packet")
+			b.sample("boxrunner_egress_blocked_total", float64(e.Lookups), "class", e.Class, "kind", "lookup")
+		}
+	}
+
 	b.family("gha_assigned_jobs", "gauge", "Number of jobs assigned to this scale set.")
 	for _, ss := range s.ScaleSets {
 		b.sample("gha_assigned_jobs", float64(ss.Assigned), scaleSet(ss.Repo, ss.Class, "")...)

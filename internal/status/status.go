@@ -21,6 +21,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/release"
 )
 
@@ -53,6 +54,48 @@ type Snapshot struct {
 	Finished []Tally `json:"finished,omitempty"`
 	// Heartbeat is when the Worker last took a heartbeat.
 	Heartbeat time.Time `json:"heartbeat,omitzero"`
+	// Egress is the state of each class that has an allowlist.
+	Egress []Egress `json:"egress,omitempty"`
+}
+
+// Egress is what the agent knows of one class with an egress allowlist.
+type Egress struct {
+	Class string `json:"class"`
+	// Entries is the allowlist as written.
+	Entries []string `json:"entries"`
+	// Problem says why the agent does not serve the class, "" when it does.
+	Problem string `json:"problem,omitempty"`
+	// Packets and Lookups are what the class's jobs were refused since the
+	// agent started: packets dropped, and names refused.
+	Packets uint64 `json:"packets"`
+	Lookups uint64 `json:"lookups"`
+	// Recent are the latest refusals the agent recorded, oldest first.
+	Recent []egress.Block `json:"recent,omitempty"`
+}
+
+// Summary says what the class was refused, such as "12 packets dropped and 1
+// lookup refused since the agent started".
+func (e Egress) Summary() string {
+	return fmt.Sprintf("%s dropped and %s refused since the agent started", plural(e.Packets, "packet"), plural(e.Lookups, "lookup"))
+}
+
+func plural(n uint64, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// blockText says what a block was, such as "packet to 203.0.113.9:443 (api.example.com)".
+func blockText(b egress.Block) string {
+	text := string(b.Kind) + " to " + b.Dest
+	if b.Kind == egress.Lookup {
+		text = "lookup of " + b.Dest
+	}
+	if b.Name != "" {
+		text += " (" + b.Name + ")"
+	}
+	return text
 }
 
 // Drained is true once a draining agent has closed every session and no job
@@ -415,12 +458,44 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			fmt.Fprintf(w, "Runners of class %s exit before taking a job; %s. See `journalctl -u boxrunner` for their output.\n\n", c.Name, next)
 		}
 	}
+	for _, e := range s.Egress {
+		if e.Problem != "" {
+			fmt.Fprintf(w, "Class %s has an egress allowlist and is not served: %s\n\n", e.Class, e.Problem)
+		}
+	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
 	for _, c := range s.Classes {
 		fmt.Fprintf(t, "%s\t%s\t%d\t%d\n", c.Name, c.Priority, c.Active, c.Max)
 	}
 	t.Flush()
+	if len(s.Egress) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(t, "EGRESS CLASS\tENTRIES\tPACKETS DROPPED\tLOOKUPS REFUSED")
+		for _, e := range s.Egress {
+			fmt.Fprintf(t, "%s\t%d\t%d\t%d\n", e.Class, len(e.Entries), e.Packets, e.Lookups)
+		}
+		t.Flush()
+		type refusal struct {
+			class string
+			egress.Block
+		}
+		var recent []refusal
+		for _, e := range s.Egress {
+			for _, b := range e.Recent {
+				recent = append(recent, refusal{e.Class, b})
+			}
+		}
+		if len(recent) > 0 {
+			slices.SortStableFunc(recent, func(a, b refusal) int { return a.Time.Compare(b.Time) })
+			fmt.Fprintln(w)
+			fmt.Fprintln(t, "REFUSED AT\tCLASS\tRUNNER\tREPOSITORY\tWHAT")
+			for _, r := range recent[max(0, len(recent)-20):] {
+				fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", r.Time.Local().Format("15:04:05"), r.class, cmp.Or(r.Runner, "?"), cmp.Or(r.Repo, "?"), blockText(r.Block))
+			}
+			t.Flush()
+		}
+	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(t, "REPOSITORY\tCLASS\tASSIGNED JOBS")

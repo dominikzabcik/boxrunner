@@ -86,6 +86,7 @@ func TestCreateShape(t *testing.T) {
 		CgroupParent: "boxrunner_idle.slice",
 		Network:      "boxrunner",
 		Runtime:      "sysbox-runc",
+		DNS:          []string{"172.19.0.1"},
 	})
 	if err != nil || id != "abc" {
 		t.Fatalf("Create = %q, %v", id, err)
@@ -103,7 +104,8 @@ func TestCreateShape(t *testing.T) {
 			"ShmSize": 1073741824,
 			"CgroupParent": "boxrunner_idle.slice",
 			"NetworkMode": "boxrunner",
-			"Runtime": "sysbox-runc"
+			"Runtime": "sysbox-runc",
+			"Dns": ["172.19.0.1"]
 		}
 	}`), &want)
 	got := (*requests)[0]
@@ -282,5 +284,39 @@ func TestImagesAndEveryContainer(t *testing.T) {
 	}
 	if uri := (*requests)[1].uri; uri != "/v1.47/containers/json?all=1" {
 		t.Errorf("List without a label asked for %s", uri)
+	}
+}
+
+func TestNetworksListsByLabelWithTheirEndpoints(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.47/networks":
+			io.WriteString(w, `[{"Name":"boxrunner-agent"},{"Name":"boxrunner-coder"}]`)
+		case "/v1.47/networks/boxrunner-agent":
+			io.WriteString(w, `{"Name":"boxrunner-agent","Driver":"bridge","Labels":{"boxrunner.egress":"agent"},
+				"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]},
+				"Containers":{"c1":{"Name":"box-1-agent-3f9a2c","IPv4Address":"172.19.0.2/16"}}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"message":"gone"}`)
+		}
+	})
+	got, err := c.Networks(context.Background(), "boxrunner.egress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "boxrunner-agent" || got[0].Labels["boxrunner.egress"] != "agent" {
+		t.Fatalf("Networks = %+v", got)
+	}
+	subnet, ok := got[0].Subnet()
+	if !ok || subnet.String() != "172.19.0.0/16" {
+		t.Errorf("Subnet = %v, %v", subnet, ok)
+	}
+	addr, ok := got[0].Containers["c1"].Addr()
+	if !ok || addr.String() != "172.19.0.2" || got[0].Containers["c1"].Name != "box-1-agent-3f9a2c" {
+		t.Errorf("endpoint = %+v, %v, %v", got[0].Containers["c1"], addr, ok)
+	}
+	if want := `/v1.47/networks?filters=%7B%22label%22%3A%5B%22boxrunner.egress%22%5D%7D`; (*requests)[0].uri != want {
+		t.Errorf("listing request = %s, want %s", (*requests)[0].uri, want)
 	}
 }

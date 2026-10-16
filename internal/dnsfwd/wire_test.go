@@ -30,6 +30,14 @@ type rr struct {
 	typ   uint16
 	ttl   uint32
 	rdata []byte
+	// owner, when set, replaces the pointer to the question's name.
+	owner string
+}
+
+// from gives a record another owner than the question's name.
+func (r rr) from(owner string) rr {
+	r.owner = owner
+	return r
 }
 
 func a(ttl uint32, addr string) rr {
@@ -45,7 +53,11 @@ func response(q []byte, rcode int, records ...rr) []byte {
 	b[2], b[3] = 0x81, byte(0x80|rcode)
 	binary.BigEndian.PutUint16(b[6:], uint16(len(records)))
 	for _, r := range records {
-		b = append(b, 0xc0, 0x0c)
+		if r.owner != "" {
+			b = append(b, name(r.owner)...)
+		} else {
+			b = append(b, 0xc0, 0x0c)
+		}
 		b = binary.BigEndian.AppendUint16(b, r.typ)
 		b = binary.BigEndian.AppendUint16(b, 1)
 		b = binary.BigEndian.AppendUint32(b, r.ttl)
@@ -96,7 +108,7 @@ func TestParseAnswerReadsAddressesThroughAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Answer{Records: []Record{
+	want := Answer{Question: Question{Name: "www.example.com", Type: TypeA, Class: 1}, Aliases: []Alias{{Owner: "www.example.com", Target: "edge.example.net"}}, Records: []Record{
 		{Name: "www.example.com", Addr: netip.MustParseAddr("203.0.113.5"), TTL: 30},
 		{Name: "www.example.com", Addr: netip.MustParseAddr("203.0.113.6"), TTL: 30},
 		{Name: "www.example.com", Addr: netip.MustParseAddr("2001:db8::5"), TTL: 30},
@@ -139,5 +151,27 @@ func TestReplyEchoesTheQuestion(t *testing.T) {
 	cut := Reply(q[:14], RcodeFormErr)
 	if len(cut) != 12 || cut[3] != 0x81 || cut[5] != 0 {
 		t.Errorf("Reply to a cut question = % x, want a bare header with code 1", cut)
+	}
+}
+
+func TestReachableFollowsAliasesFromTheQuestionOnly(t *testing.T) {
+	q := query(9, "www.example.com", TypeA)
+	got, err := ParseAnswer(response(q, 0,
+		a(30, "203.0.113.9").from("other.example.com"),
+		a(30, "203.0.113.5").from("edge.example.net"),
+		cname(60, "edge.example.net"),
+		cname(60, "deep.example.org").from("edge.example.net"),
+		a(30, "203.0.113.6").from("deep.example.org"),
+		a(30, "203.0.113.7").from("edge.example.org"),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addrs []string
+	for _, r := range got.Reachable() {
+		addrs = append(addrs, r.Addr.String())
+	}
+	if want := []string{"203.0.113.5", "203.0.113.6"}; !reflect.DeepEqual(addrs, want) {
+		t.Errorf("Reachable = %v, want %v: records of unrelated owners are not the question's answer", addrs, want)
 	}
 }

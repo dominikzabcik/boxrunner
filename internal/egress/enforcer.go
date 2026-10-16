@@ -21,7 +21,11 @@ type Enforcer struct {
 	Run firewall.Run
 	Now func() time.Time
 
-	mu sync.Mutex
+	// exec orders what changes the table, and mu guards open. An address is
+	// open in the table before Open returns, so a lookup's answer never
+	// outruns it.
+	exec sync.Mutex
+	mu   sync.Mutex
 	// open is when each address that was opened ends, by class and address
 	// with its ports.
 	open map[string]map[string]time.Time
@@ -34,17 +38,16 @@ func (e *Enforcer) now() time.Time {
 	return time.Now()
 }
 
-// Apply makes the table what r says. When the table holds a set of another
-// shape, such as one an older release made, it replaces the table, and the
-// addresses open in it close.
+// Apply makes the table what r says. When the table has a set of another
+// shape, such as one an older release made, it replaces the table in one
+// transaction: the addresses open in it close, and no packet sees it empty.
 func (e *Enforcer) Apply(ctx context.Context, r Ruleset) error {
-	listing, _ := e.Run(ctx, "", "nft", "list", "table", "inet", Table)
+	e.exec.Lock()
+	defer e.exec.Unlock()
+	listing := e.listing(ctx)
 	out, err := e.Run(ctx, r.Script(listing), "nft", "-f", "-")
 	if err != nil && listing != "" {
-		if out, derr := e.Run(ctx, "", "nft", "delete", "table", "inet", Table); derr != nil {
-			return fmt.Errorf("nft delete table: %w: %s", derr, out)
-		}
-		out, err = e.Run(ctx, r.Script(""), "nft", "-f", "-")
+		out, err = e.Run(ctx, r.Replace(), "nft", "-f", "-")
 	}
 	if err != nil {
 		return fmt.Errorf("nft: %w: %s", err, strings.TrimSpace(out))
@@ -55,52 +58,93 @@ func (e *Enforcer) Apply(ctx context.Context, r Ruleset) error {
 	return nil
 }
 
+// Verify applies r again when the table is not what the last Apply left, such
+// as after someone flushed the ruleset. It reports whether the table was
+// whole before.
+func (e *Enforcer) Verify(ctx context.Context, r Ruleset) (bool, error) {
+	if r.Intact(e.listing(ctx)) {
+		return true, nil
+	}
+	return false, e.Apply(ctx, r)
+}
+
+// listing is what nft prints of the table, "" when there is none.
+func (e *Enforcer) listing(ctx context.Context) string {
+	out, err := e.Run(ctx, "", "nft", "list", "table", "inet", Table)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
 // Open opens addresses for a class. An address that has most of its time left
 // is not touched, so a job that resolves a name again and again costs nothing.
-func (e *Enforcer) Open(ctx context.Context, n Net, grants []Grant) error {
+func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
+	e.exec.Lock()
+	defer e.exec.Unlock()
 	now := e.now()
+	type change struct {
+		key   string
+		grant Grant
+		renew bool
+	}
+	var todo []change
+	fresh := 0
 	e.mu.Lock()
 	if e.open == nil {
 		e.open = map[string]map[string]time.Time{}
 	}
-	live := e.open[n.Class]
+	live := e.open[c.Net.Class]
 	if live == nil {
 		live = map[string]time.Time{}
-		e.open[n.Class] = live
+		e.open[c.Net.Class] = live
 	}
 	for k, end := range live {
 		if !now.Before(end) {
 			delete(live, k)
 		}
 	}
-	var todo []Grant
-	var keys []string
-	fresh := 0
 	for _, g := range grants {
-		key := g.Addr.String() + " " + g.Ports.String()
-		if end, ok := live[key]; ok && end.Sub(now) > g.TTL/2 {
+		if !g.Addr.Is4() {
 			continue
-		} else if !ok {
+		}
+		key := g.Addr.String() + " " + g.Ports.String()
+		end, open := live[key]
+		switch {
+		case open && end.Sub(now) > g.TTL/2:
+		case open:
+			todo = append(todo, change{key, g, true})
+		default:
+			todo = append(todo, change{key, g, false})
 			fresh++
 		}
-		todo = append(todo, g)
-		keys = append(keys, key)
 	}
-	if len(live)+fresh > MaxLive {
-		e.mu.Unlock()
+	full := len(live)+fresh > MaxLive
+	e.mu.Unlock()
+	if full {
 		return ErrFull
 	}
-	e.mu.Unlock()
 	if len(todo) == 0 {
 		return nil
 	}
-	if out, err := e.Run(ctx, ElementScript(n, todo), "nft", "-f", "-"); err != nil {
+	var renew, all []Grant
+	for _, ch := range todo {
+		all = append(all, ch.grant)
+		if ch.renew {
+			renew = append(renew, ch.grant)
+		}
+	}
+	if len(renew) > 0 {
+		// An address that expired meanwhile is not there to remove, which does not matter.
+		e.Run(ctx, ElementScript(c, renew, true), "nft", "-f", "-")
+	}
+	if out, err := e.Run(ctx, ElementScript(c, all, false), "nft", "-f", "-"); err != nil {
 		return fmt.Errorf("nft add element: %w: %s", err, strings.TrimSpace(out))
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for i, g := range todo {
-		e.open[n.Class][keys[i]] = now.Add(g.TTL)
+	for _, ch := range todo {
+		live[ch.key] = now.Add(ch.grant.TTL)
 	}
 	return nil
 }
