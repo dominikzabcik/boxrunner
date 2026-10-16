@@ -219,6 +219,29 @@ CLASS`
 	}
 }
 
+func TestPrintBuildingImage(t *testing.T) {
+	cases := []struct {
+		name string
+		img  ImageStatus
+		want string
+	}{
+		{"the first image", ImageStatus{Building: "2.338.0+e3cd41ebfb31"}, "image building 2.338.0+e3cd41ebfb31 (latest none)"},
+		{"class images after a restart", ImageStatus{Building: "2.338.0+e3cd41ebfb31", Latest: "2.338.0+e3cd41ebfb31"}, "image building 2.338.0+e3cd41ebfb31 (latest 2.338.0+e3cd41ebfb31)"},
+		{
+			"a newer image", ImageStatus{Built: "2.337.0+e3cd41ebfb31", Building: "2.338.0+e3cd41ebfb31", Latest: "2.338.0+e3cd41ebfb31"},
+			"image 2.337.0+e3cd41ebfb31, building 2.338.0+e3cd41ebfb31 (latest 2.338.0+e3cd41ebfb31)",
+		},
+	}
+	for _, c := range cases {
+		var b strings.Builder
+		Print(&b, Snapshot{Box: "box-1", Version: "0.7.0", DiskFloor: 10e9, Image: c.img}, t0)
+		want := "box-1  boxrunner 0.7.0  worker unknown  " + c.want + "  disk 0.0 GB free, floor 10.0 GB\n"
+		if got, _, _ := strings.Cut(b.String(), "\n"); got+"\n" != want {
+			t.Errorf("%s: Print starts with\n%s\nwant\n%s", c.name, got, want)
+		}
+	}
+}
+
 func TestPrintHeldClass(t *testing.T) {
 	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,

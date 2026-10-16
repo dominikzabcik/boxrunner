@@ -22,7 +22,7 @@ The Worker uses `GITHUB_CLIENT_SECRET` only when setup did not keep a secret. It
 
 ## What it shows
 
-- **Each box.** Its name, the agent's and the Worker's release, each with the newer release when one is out, job image and free disk against the floor. "Online, last seen 12 seconds ago" while heartbeats arrive. "Offline, last seen 5 minutes ago" in red once the last one is more than two minutes old.
+- **Each box.** Its name, the agent's and the Worker's release, each with the newer release when one is out, job image, or the one the agent is building, and free disk against the floor. "Online, last seen 12 seconds ago" while heartbeats arrive. "Offline, last seen 5 minutes ago" in red once the last one is more than two minutes old.
 - **Its classes.** Priority, how many runners are running and how many are starting (requested or starting), against `max`.
 - **Its runners.** Name, repository, class, state and for how long it has been in that state.
 - **Jobs waiting for a runner.** Only while there are some: each repository and class with jobs assigned and no runner requested, starting or running, the box that reported it, how long it has waited (in red once it has waited long enough for an [alert](alerts.md#when-jobs-wait)) and the likely cause.

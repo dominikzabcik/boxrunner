@@ -169,11 +169,27 @@ type ImageStatus struct {
 	// Unlisted is the runner's latest release while boxrunner's CI has not
 	// verified its image; Latest is then an older release.
 	Unlisted string `json:"unlisted,omitempty"`
+	// Building is the job image the agent is building, or whose class images
+	// it is building, until it is done. Runners start from it only then.
+	Building string `json:"building,omitempty"`
 	// Refused says why the agent last refused to build a runner image, until
 	// a build succeeds.
 	Refused string `json:"refused,omitempty"`
 	// Disk is what the job, class and runner images take, 0 when unknown.
 	Disk int64 `json:"disk,omitempty"`
+}
+
+// String is the job image as status shows it: its identity, "none" before
+// the first build, and the build in progress.
+func (i ImageStatus) String() string {
+	switch {
+	case i.Building == "":
+		return orNone(i.Built)
+	case i.Built == "" || i.Built == i.Building:
+		return "building " + i.Building
+	default:
+		return i.Built + ", building " + i.Building
+	}
 }
 
 // Job is one line of the job log.
@@ -418,7 +434,7 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 		images = "  images " + gigabytes(s.Image.Disk)
 	}
 	fmt.Fprintf(w, "%s  boxrunner %s  worker %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
-		s.Box, s.Version, cmp.Or(s.Worker, "unknown"), orNone(s.Image.Built), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+		s.Box, s.Version, cmp.Or(s.Worker, "unknown"), s.Image.String(), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
 	if release.Newer(s.Latest, s.Version) {
 		fmt.Fprintf(w, "boxrunner %s is out. Upgrade this agent with: sudo boxrunner upgrade\n\n", s.Latest)
 	}

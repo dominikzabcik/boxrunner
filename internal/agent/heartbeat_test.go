@@ -28,6 +28,33 @@ func TestHeartbeatBody(t *testing.T) {
 	}
 }
 
+func TestHeartbeatBodyImage(t *testing.T) {
+	digest := "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807"
+	cases := []struct {
+		name string
+		img  status.ImageStatus
+		want string
+	}{
+		{"none", status.ImageStatus{}, "not built"},
+		{"the first image building", status.ImageStatus{Building: "2.338.0+e3cd41ebfb31"}, "building 2.338.0+e3cd41ebfb31"},
+		{"class images building", status.ImageStatus{Built: "2.338.0+e3cd41ebfb31", Digest: digest, Building: "2.338.0+e3cd41ebfb31"}, "building 2.338.0+e3cd41ebfb31"},
+		{
+			"a newer image building", status.ImageStatus{Built: "2.337.0+e3cd41ebfb31", Digest: digest, Building: "2.338.0+e3cd41ebfb31"},
+			"2.337.0+e3cd41ebfb31 from " + digest + ", building 2.338.0+e3cd41ebfb31",
+		},
+		{
+			"too long with the digest", status.ImageStatus{Built: "2.1337.10+e3cd41ebfb31", Digest: digest, Building: "2.1338.10+e3cd41ebfb31"},
+			"2.1337.10+e3cd41ebfb31, building 2.1338.10+e3cd41ebfb31",
+		},
+	}
+	for _, c := range cases {
+		got := heartbeatBody(status.Snapshot{Box: "box-1", Version: "0.7.0", Image: c.img}, nil).Image
+		if got != c.want || len(got) > 128 {
+			t.Errorf("%s: image = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestHeartbeatBodyTellsWhyJobsMayWait(t *testing.T) {
 	held := time.Date(2026, 10, 14, 9, 5, 0, 0, time.UTC)
 	snap := status.Snapshot{
