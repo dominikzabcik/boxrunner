@@ -1,6 +1,7 @@
 import type { Box } from './box';
 import { appKeyFromPem, boxTokenHash, hmac, randomBytes, hex, randomToken, sameSecret } from './crypto';
 import { convertManifest, GitHubError } from './github';
+import type { Login } from './model';
 import { alert, escape, messagePage as message, page as htmlPage, readCookie, seeOther, tokenShownPage, type Page } from './page';
 import type { SetupRoute } from './routes';
 
@@ -22,16 +23,31 @@ export async function handleSetup(box: Box, request: Request, route: SetupRoute)
 		return messagePage(503, 'Setup is locked', 'Set the SETUP_SECRET secret to at least 32 characters, then reload this page.');
 	}
 	const org = box.orgConfig();
-	if (!org.ok) return messagePage(503, 'Setup is locked', `The Worker’s ${org.problem}. Fix the variable, then reload this page.`);
+	if (!org.ok) return locked(org.problem);
+	const owner = box.appOwner();
+	if (!owner.ok) return locked(owner.problem);
+	if (owner.owner !== null && box.admins().length === 0) {
+		return locked(`ADMINS is empty, and the App will belong to the organization ${owner.owner}, which cannot sign in to the dashboard. List the GitHub logins that may open it`);
+	}
+	const who: Who = { org: org.org?.login ?? null, owner: owner.owner };
 	switch (route.name) {
 		case 'setup.form':
-			return formPage(200, defaultAppName(), org.org?.login ?? null);
+			return formPage(200, defaultAppName(), who);
 		case 'setup.start':
-			return start(request, secret, origin, org.org?.login ?? null);
+			return start(request, secret, origin, who);
 		case 'setup.callback':
 			return callback(box, request, secret, origin);
 	}
 }
+
+const locked = (problem: string) => messagePage(503, 'Setup is locked', `The Worker’s ${problem}. Fix the variable, then reload this page.`);
+
+/**
+ * `org` is the organization the Worker serves through organization scale
+ * sets; `owner` is the organization the App belongs to, which is `org` when
+ * that is set. Null owner means the account that runs setup.
+ */
+type Who = { org: Login | null; owner: Login | null };
 
 const defaultAppName = () => `boxrunner-${hex(randomBytes(3))}`;
 
@@ -44,16 +60,17 @@ const formText = (data: FormData | undefined, name: string) => {
 	return typeof value === 'string' ? value : '';
 };
 
-/** With `org`, the App belongs to the organization and registers its runners there, with no permission on its repositories' settings. */
-async function start(request: Request, secret: string, origin: string, org: string | null) {
+/** With `org`, the App registers its runners in the organization, with no permission on its repositories' settings. */
+async function start(request: Request, secret: string, origin: string, who: Who) {
+	const { org, owner } = who;
 	const data = await form(request);
 	const name = formText(data, 'name').trim();
 	const unserved = formText(data, 'unserved') === 'on';
 	if (!(await sameSecret(formText(data, 'secret'), secret))) {
-		return formPage(401, name || defaultAppName(), org, 'That is not the setup secret.', unserved);
+		return formPage(401, name || defaultAppName(), who, 'That is not the setup secret.', unserved);
 	}
 	if (!appNamePattern.test(name)) {
-		return formPage(400, name, org, 'The App name must be 1 to 34 letters, digits, spaces, dots, dashes or underscores.', unserved);
+		return formPage(400, name, who, 'The App name must be 1 to 34 letters, digits, spaces, dots, dashes or underscores.', unserved);
 	}
 	const nonce = `${Date.now()}.${randomToken()}`;
 	const state = await hmac(secret, nonce);
@@ -79,7 +96,7 @@ async function start(request: Request, secret: string, origin: string, org: stri
 		headers: { 'set-cookie': `${cookie}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600` },
 		body: `<h1>Sending you to GitHub</h1>
 <p>GitHub will ask you to confirm the App <strong>${escape(name)}</strong>, then send you back here.</p>
-<form id="manifest" method="post" action="https://github.com/${org === null ? '' : `organizations/${encodeURIComponent(org)}/`}settings/apps/new?state=${encodeURIComponent(state)}">
+<form id="manifest" method="post" action="https://github.com/${owner === null ? '' : `organizations/${encodeURIComponent(owner)}/`}settings/apps/new?state=${encodeURIComponent(state)}">
 <input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest))}">
 <button type="submit">Continue to GitHub</button>
 </form>`,
@@ -169,16 +186,20 @@ const secretField = `<label for="secret">Setup secret</label>
 <input id="secret" name="secret" type="password" required autocomplete="current-password" aria-describedby="secret-hint">
 <p class="hint" id="secret-hint">The SETUP_SECRET you set when you deployed this Worker.</p>`;
 
-function formPage(status: number, name: string, org: string | null, error?: string, unserved = false) {
-	const owner =
-		org === null
+function formPage(status: number, name: string, { org, owner }: Who, error?: string, unserved = false) {
+	const under =
+		owner === null
 			? 'under your account'
-			: `under the organization <strong>${escape(org)}</strong>, which registers runners for the whole organization and gets no permission on its repositories’ settings. You need to be an owner of ${escape(org)}`;
+			: org !== null
+				? `under the organization <strong>${escape(org)}</strong>, which registers runners for the whole organization and gets no permission on its repositories’ settings. You need to be an owner of ${escape(org)}`
+				: `under the organization <strong>${escape(owner)}</strong>, with the permission Administration on the repositories you install it on. Only ${escape(owner)} can install it. You need to be an owner of ${escape(owner)}`;
+	const signIn = owner === null ? '' : '<p>An organization cannot sign in, so only the accounts in the Worker’s ADMINS variable can open the dashboard.</p>';
 	return page({
 		status,
 		title: 'Set up boxrunner',
 		body: `<h1>Set up boxrunner</h1>
-<p>This creates a private GitHub App ${owner}. GitHub sends its key straight to this Worker; it never reaches your browser or your box.</p>
+<p>This creates a private GitHub App ${under}. GitHub sends its key straight to this Worker; it never reaches your browser or your box.</p>
+${signIn}
 ${alert(error)}
 <form method="post" action="/setup">
 ${secretField}

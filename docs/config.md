@@ -114,6 +114,18 @@ The boxes share the box token's request budget of about 1,800 requests an hour (
 
 A class paused on the [dashboard](dashboard.md#pausing-a-class) is paused on every box. With [fallback](fallback.md) on, the Worker sends jobs to GitHub's runners only when no box has reported for `FALLBACK_MINUTES`, so while one box reports, the jobs of a box that is down wait for it.
 
+## Repositories of an organization
+
+Setup creates the App under the account that runs it, and GitHub lets a private App be installed only on the account that owns it. So an App created under your account cannot reach an organization's repositories. To serve them one by one, with **Administration** on only the repositories you install the App on, let the organization own the App: set the Worker variable `APP_OWNER` to its login before you run setup.
+
+| Variable | Meaning |
+|---|---|
+| `APP_OWNER` | An organization's login. Setup creates the App under it, so you must be one of its owners. Empty, the default, creates it under your account. With `ORG` set, the App belongs to `ORG`, and `APP_OWNER` must be empty or the same login. |
+
+The App keeps the repository permissions: **Administration** (read and write), **Metadata** (read) and, for [unserved jobs](unserved-jobs.md), **Actions** (read). That reaches less than [organization scale sets](#organizations), whose permission covers every repository of the organization. Install the App on the organization and choose **Only select repositories**.
+
+An organization cannot sign in, so only the accounts in `ADMINS` can open the [dashboard](dashboard.md#who-can-sign-in) of a Worker whose App an organization owns. Set `ADMINS` with `APP_OWNER`. Setup is locked, and names the variable, while an organization would own the App and `ADMINS` lists nobody, while `APP_OWNER` is not a GitHub login and while it names another organization than `ORG`. The agent does not read `APP_OWNER`, so a Worker that is already set up keeps serving whatever it says.
+
 ## Organizations
 
 By default the Worker makes one scale set per repository and class. That needs the App's repository permission **Administration** (read and write), which also lets the App change a repository's settings and delete it. For an organization, the Worker can instead make one scale set per class for the whole organization. The App then needs the organization permission **Self-hosted runners** (read and write) and **Metadata** (read), and nothing on its repositories.
@@ -145,7 +157,7 @@ The served repositories are the group's selected repositories that are private a
 ### Setting it up
 
 1. **Make the runner group.** In the organization's settings, under **Actions**, **Runner groups**, create a group, such as `boxrunner`. Set **Repository access** to **Selected repositories**, add the private repositories whose jobs should run on the box and leave **Allow public repositories** off. GitHub lets only Team and Enterprise organizations create groups; see [what is not checked yet](#not-checked-against-github-yet) for the Free plan.
-2. **Set the variables** `ORG` and `RUNNER_GROUP` and deploy the Worker.
+2. **Set the variables** `ORG`, `RUNNER_GROUP` and `ADMINS` and deploy the Worker. The organization owns the App and cannot sign in, so only the accounts in `ADMINS` can open the dashboard, and setup is locked while it is empty.
 3. **Run setup.** With `ORG` set, the setup page creates the App under the organization, so you must be one of its owners, with **Self-hosted runners** (read and write) and **Metadata** (read) instead of **Administration**. Install it on the organization. For the runners it does not matter which repositories you pick; [fallback](fallback.md) and [unserved jobs](unserved-jobs.md) still work per repository, so pick the group's repositories for them.
 4. **Install the agent** as usual. Workflows use `runs-on: boxrunner` as before.
 

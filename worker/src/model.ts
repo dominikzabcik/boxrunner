@@ -173,6 +173,20 @@ export function parseOrg(org: string | undefined, group: string | undefined): Or
 	return { ok: true, org: { login: parsed, group: name } };
 }
 
+/** The organization that setup makes the App under, or null for the account that runs setup. */
+export type AppOwnerConfig = { ok: true; owner: Login | null } | { ok: false; problem: string };
+
+/** Reads the optional `APP_OWNER` variable. With `ORG` set, the App belongs to that organization, so `APP_OWNER` may only repeat it. */
+export function parseAppOwner(value: string | undefined, org: Login | null): AppOwnerConfig {
+	const login = (value ?? '').trim();
+	const parsed = parse.login(login);
+	if (login !== '' && !parsed) return { ok: false, problem: `APP_OWNER is "${login}", which is not a GitHub login` };
+	if (org !== null && parsed && parsed.toLowerCase() !== org.toLowerCase()) {
+		return { ok: false, problem: `APP_OWNER is "${login}", but the App of a Worker that serves an organization belongs to that organization, ORG "${org}"` };
+	}
+	return { ok: true, owner: org ?? parsed ?? null };
+}
+
 /** A runner group as GitHub's REST API describes it. */
 export type RunnerGroup = { id: number; name: string; visibility: string; allowsPublicRepositories: boolean };
 
@@ -240,11 +254,16 @@ export function parseAlerts(webhook: string | undefined, minutes: string | undef
 
 /** Reads the optional `ADMINS` variable: logins besides the App's owner that may sign in, compared case-insensitively. */
 export function mayOpenDashboard(owner: string | null, admins: string | undefined): (login: Login) => boolean {
-	const allowed = new Set(
-		[owner ?? '', ...(admins ?? '').split(',')].map((name) => name.trim().toLowerCase()).filter(Boolean),
-	);
+	const allowed = new Set([owner ?? '', ...adminLogins(admins)].map((name) => name.trim().toLowerCase()).filter(Boolean));
 	return (login) => allowed.has(login.toLowerCase());
 }
+
+/** The names in `ADMINS`, trimmed, without empty ones. */
+export const adminLogins = (admins: string | undefined) =>
+	(admins ?? '')
+		.split(',')
+		.map((name) => name.trim())
+		.filter(Boolean);
 
 // ---- Heartbeat: what the agent reports about its box ----
 

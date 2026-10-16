@@ -21,6 +21,11 @@
 		// runners instead of repository Administration (docs/config.md).
 		"ORG": "",
 		"RUNNER_GROUP": "",
+		// Optional, without ORG: an organization that owns the App setup creates,
+		// so the App can be installed on that organization's repositories. It
+		// keeps repository Administration. With ORG set, the App belongs to ORG.
+		// An organization cannot sign in, so set ADMINS too (docs/config.md).
+		"APP_OWNER": "",
 		// Optional: GitHub logins (comma-separated) that may open the dashboard
 		// besides the App's owner.
 		"ADMINS": "",
