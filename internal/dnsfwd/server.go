@@ -33,13 +33,6 @@ const (
 	nameBookSize = 4096
 )
 
-// Grant opens an address of a name for the class.
-type Grant struct {
-	Addr  netip.Addr
-	Ports egress.Ports
-	TTL   time.Duration
-}
-
 // Upstream is the resolver that answers the names the policy allows.
 type Upstream interface {
 	// Exchange sends a query and returns the response's bytes.
@@ -79,7 +72,7 @@ type Server struct {
 	Upstream Upstream
 	// Open makes the grants reachable. The answer goes back only when it
 	// succeeds, so a name never resolves to an address the job cannot use.
-	Open  func(ctx context.Context, grants []Grant) error
+	Open  func(ctx context.Context, grants []egress.Grant) error
 	Event func(Event)
 	Now   func() time.Time
 
@@ -180,7 +173,7 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 		s.event(Event{Kind: Failed, From: from, Name: q.Name, Type: q.Type, Err: err})
 		return Reply(query, RcodeServFail)
 	}
-	var grants []Grant
+	var grants []egress.Grant
 	for _, r := range answer.Records {
 		addr := r.Addr.Unmap()
 		reason := ""
@@ -195,7 +188,7 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 			continue
 		}
 		ttl := min(max(time.Duration(r.TTL)*time.Second, MinOpen), MaxOpen)
-		grants = append(grants, Grant{Addr: addr, Ports: ports, TTL: ttl})
+		grants = append(grants, egress.Grant{Addr: addr, Ports: ports, TTL: ttl})
 	}
 	if len(grants) > 0 && s.Open != nil {
 		if err := s.Open(ctx, grants); err != nil {

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Ports are the TCP ports an entry allows.
@@ -328,4 +329,12 @@ func validLabel(l string) bool {
 		}
 	}
 	return true
+}
+
+// Grant opens an address for a class's jobs on the ports an entry allows,
+// for as long as the TTL.
+type Grant struct {
+	Addr  netip.Addr
+	Ports Ports
+	TTL   time.Duration
 }

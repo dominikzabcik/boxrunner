@@ -42,11 +42,11 @@ var classNet = netip.MustParsePrefix("172.30.0.0/24")
 // recorder keeps what a server opened and reported.
 type recorder struct {
 	mu     sync.Mutex
-	grants []Grant
+	grants []egress.Grant
 	events []Event
 }
 
-func (r *recorder) open(_ context.Context, g []Grant) error {
+func (r *recorder) open(_ context.Context, g []egress.Grant) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.grants = append(r.grants, g...)
@@ -59,7 +59,7 @@ func (r *recorder) event(e Event) {
 	r.events = append(r.events, e)
 }
 
-func (r *recorder) opened() []Grant {
+func (r *recorder) opened() []egress.Grant {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.grants)
@@ -87,7 +87,7 @@ func TestHandleOpensTheAddressesOfAnAllowedNameBeforeAnswering(t *testing.T) {
 	up := &fakeUpstream{answers: map[string][]rr{"api.example.com": {cname(60, "edge.example.net"), a(120, "203.0.113.5"), a(120, "2001:db8::5")}}}
 	s, rec := newServer(t, []string{"api.example.com:8443"}, up)
 	var order []string
-	s.Open = func(ctx context.Context, g []Grant) error {
+	s.Open = func(ctx context.Context, g []egress.Grant) error {
 		order = append(order, "open")
 		return rec.open(ctx, g)
 	}
@@ -99,7 +99,7 @@ func TestHandleOpensTheAddressesOfAnAllowedNameBeforeAnswering(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Handle = % x, want the upstream's answer % x", got, want)
 	}
-	wantGrants := []Grant{
+	wantGrants := []egress.Grant{
 		{Addr: netip.MustParseAddr("203.0.113.5"), Ports: egress.Ports{List: []uint16{8443}}, TTL: MinOpen},
 		{Addr: netip.MustParseAddr("2001:db8::5"), Ports: egress.Ports{List: []uint16{8443}}, TTL: MinOpen},
 	}
@@ -193,7 +193,7 @@ func TestHandleKeepsPrivateAddressesForHostsNamedInFull(t *testing.T) {
 func TestHandleFailsClosedWhenTheAddressesCannotBeOpened(t *testing.T) {
 	up := &fakeUpstream{answers: map[string][]rr{"github.com": {a(60, "140.82.112.3")}}}
 	s, rec := newServer(t, nil, up)
-	s.Open = func(context.Context, []Grant) error { return errors.New("nft: exit status 1") }
+	s.Open = func(context.Context, []egress.Grant) error { return errors.New("nft: exit status 1") }
 	q := query(3, "github.com", TypeA)
 	if got := s.Handle(context.Background(), q, job, false); !reflect.DeepEqual(got, Reply(q, RcodeServFail)) {
 		t.Errorf("Handle = % x, want SERVFAIL", got)
