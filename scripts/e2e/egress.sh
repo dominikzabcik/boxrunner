@@ -77,7 +77,7 @@ denied_ip=$(getent ahostsv4 example.net | awk 'NR == 1 { print $1 }')
 example_ips=$(getent ahostsv4 example.com | awk '{ print $1 }' | sort -u | tr '\n' ' ')
 vm_ip=$(hostname -I | awk '{ print $1 }')
 resolver=$(awk '/^nameserver/ && $2 !~ /^127\./ { print $2; exit }' /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null || true)
-[ -n "$denied_ip" ] && [ -n "$example_ips" ] || fail "the box cannot resolve example.net and example.com"
+if [ -z "$denied_ip" ] || [ -z "$example_ips" ]; then fail "the box cannot resolve example.net and example.com"; fi
 
 step "a job of the class reaches what it lists and is refused the rest"
 job bash -s <<'SCRIPT' | tee "$work/egress-job.txt"
@@ -110,7 +110,10 @@ expect "$work/egress-job.txt" '^allowed-name 200$' '^wildcard-name 200$' '^apex-
 grep -q '^by-number-before-resolving open$' "$work/egress-job.txt" && fail "a job reached an address by number before it resolved the name"
 grep -q '^by-number-after-resolving closed$' "$work/egress-job.txt" && fail "an address of a name the job resolved is closed"
 grep -qE '^resolver-(tcp|udp) open$' "$work/egress-job.txt" && fail "a job reached the box's resolver"
-if [ "$mode" = runc ]; then
+# The registry mirror is open to a class with docker = true, and nothing else of the host is.
+if [ "$mode" = docker ]; then
+	expect "$work/egress-job.txt" '^mirror open$'
+else
 	expect "$work/egress-job.txt" '^mirror closed$'
 fi
 
