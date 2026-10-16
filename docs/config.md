@@ -172,7 +172,7 @@ What it does not cover:
 
 ## Egress allowlist
 
-A job reaches the whole internet by default. The firewall keeps it off the host, private ranges and the metadata service, but it can still send anything anywhere. A class with `egress` is closed the other way round: its jobs reach only the destinations its list names. Use it for a class that runs code you do not fully trust, such as a coding agent that reads issues and pull requests, which a prompt in one of them could tell to send your code elsewhere.
+A job reaches the whole internet by default. The firewall keeps it off the host, private ranges and the metadata service, but it can still send anything anywhere. A class with `egress` is closed the other way round. Its jobs reach only the destinations its list names. Use it for a class that runs code you do not fully trust, such as a coding agent that reads issues and pull requests, which a prompt in one of them could tell to send your code elsewhere.
 
 ```toml
 [[class]]
@@ -209,7 +209,7 @@ How it works, and what follows from it:
 - **TCP only, and IPv4 only.** A job's network has no IPv6, and an entry cannot allow UDP or ICMP. Other DNS servers, DNS over HTTPS to a resolver that is not on the list, and anything else that is not a TCP connection to an opened address, are dropped.
 - **Private addresses need to be named.** A name's private addresses open only for a host written out in full (`db.internal.example`), never for a wildcard, and only when the host itself, not an alias it points to, is on the list. Otherwise list the address or range. Loopback, link-local addresses, multicast and the cloud metadata services (`169.254.0.0/16`, `168.63.129.16`, `100.100.100.200`, `192.0.0.192`) can never be allowed, and a list that names one fails the config check. Neither can the box's own networks: a range that covers them, such as `172.16.0.0/12`, is allowed, and the box's networks stay out of it.
 - **The runner must reach GitHub.** The config check fails unless the list allows `github.com`, `api.github.com` and `broker.actions.githubusercontent.com` on port 443. Start the list with `github`.
-- **Each class has its own Docker network.** The agent creates `boxrunner-<class>` with its own bridge, labelled `boxrunner.egress`, and takes a subnet from Docker's address pools. The bridge identifies the class: a job can change its own address, and under Sysbox its root can, but it cannot send a packet that arrives on another bridge.
+- **Each class has its own Docker network.** The agent creates `boxrunner-<class>` with its own bridge, labelled `boxrunner.egress`, and takes a subnet from Docker's address pools. The bridge identifies the class. A job can change its own address, and under Sysbox its root can, but it cannot send a packet that arrives on another bridge.
 - **On the host a job reaches** only the forwarder on its bridge's gateway, and the registry mirror and Actions cache when the class has `docker = true` or `cache = true`. Everything else the host receives from the bridge is dropped.
 - **Docker in jobs obeys the same list.** The job's own Docker uses the forwarder too, and its containers' traffic leaves through the job's address.
 - **It needs `nft`.** `sudo boxrunner install` installs the `nftables` package on Debian and Ubuntu. Without it the agent does not serve the class, and `status` and `doctor` say why.
@@ -224,7 +224,7 @@ It differs from GitHub's list in one place. GitHub lists `*.blob.core.windows.ne
 
 Edit the file and restart the agent. Jobs that run take the new list at once. A class whose entries changed loses the addresses its old entries opened. A class that loses its `egress` key, or leaves the config, keeps its network while jobs run on it, closed to new connections; its next jobs use the job network. The agent removes the empty network.
 
-While the agent is stopped the class has no DNS, and the rules stay: jobs keep their connections, the addresses already opened stay open until their time ends, and nothing else opens. Drain the box first when jobs need to open connections ([upgrading](upgrading.md#rebooting-the-box)). If someone deletes the nftables table, the class stays closed, because the host drops what leaves an egress bridge without the table's mark, and the agent puts the table back within ten seconds. It also checks the rules before it starts each runner of an egress class, and starts none while it cannot.
+While the agent is stopped the class has no DNS, and the rules stay. Jobs keep their connections, the addresses already opened stay open until their time ends, and nothing else opens. Drain the box first when jobs need to open connections ([upgrading](upgrading.md#rebooting-the-box)). If someone deletes the nftables table, the class stays closed, because the host drops what leaves an egress bridge without the table's mark, and the agent puts the table back within ten seconds. It also checks the rules before it starts each runner of an egress class, and starts none while it cannot.
 
 ### What it does not stop
 
