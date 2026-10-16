@@ -334,6 +334,16 @@ func (e *egressHarness) snapshot(t *testing.T) status.Snapshot {
 	return status.Snapshot{}
 }
 
+// class is what status shows of the class with an allowlist.
+func (e *egressHarness) class(t *testing.T) status.Egress {
+	t.Helper()
+	snap := e.snapshot(t)
+	if len(snap.Egress) != 1 {
+		t.Fatalf("status shows %d classes with an allowlist, want 1: %+v", len(snap.Egress), snap.Egress)
+	}
+	return snap.Egress[0]
+}
+
 // A unix socket path stays under 104 bytes on macOS, so these tests have short names.
 
 // TestEgressServed: the class runs on its own network and answers its own lookups.
@@ -417,8 +427,8 @@ func TestEgressNoNft(t *testing.T) {
 	defer e.stop(t)
 	e.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501,"queueTime":"2026-10-13T21:00:00Z"}`)
 	e.waitLog(t, `msg="class has an egress allowlist that is not in force; not serving it" class=boxrunner`)
-	if want := "nft is not installed; run sudo boxrunner install"; e.snapshot(t).Egress[0].Problem != want {
-		t.Errorf("problem = %q, want %q", e.snapshot(t).Egress[0].Problem, want)
+	if want := "nft is not installed; run sudo boxrunner install"; e.class(t).Problem != want {
+		t.Errorf("problem = %q, want %q", e.class(t).Problem, want)
 	}
 	if n := len(e.github.queue); n != 1 {
 		t.Errorf("%d messages left in the queue, want the job's: nobody may listen for the class", n)
@@ -443,7 +453,7 @@ func TestEgressFlushed(t *testing.T) {
 	host.flushed = true
 	host.mu.Unlock()
 	waitFor(t, "the ruleset again", func() bool { return len(host.applied()) >= 2 })
-	if got := e.snapshot(t).Egress[0].Problem; got != "" {
+	if got := e.class(t).Problem; got != "" {
 		t.Errorf("the class is not served after the rules came back: %q", got)
 	}
 }
@@ -470,7 +480,7 @@ func TestEgressGone(t *testing.T) {
 			t.Errorf("a runner config was minted with the egress rules gone: %s", call)
 		}
 	}
-	if got, want := e.snapshot(t).Egress[0].Problem, "the egress rules are gone and could not be put back: nft: exit status 1: Error: could not process rule"; got != want {
+	if got, want := e.class(t).Problem, "the egress rules are gone and could not be put back: nft: exit status 1: Error: could not process rule"; got != want {
 		t.Errorf("problem = %q, want %q", got, want)
 	}
 }
@@ -486,12 +496,12 @@ func TestEgressBroken(t *testing.T) {
 	host.flushed, host.failApply = true, true
 	host.mu.Unlock()
 	want := "the egress rules are gone and could not be put back: nft: exit status 1: Error: could not process rule"
-	waitFor(t, "the class's problem", func() bool { return e.snapshot(t).Egress[0].Problem == want })
+	waitFor(t, "the class's problem", func() bool { return e.class(t).Problem == want })
 	e.waitLog(t, `msg="class has an egress allowlist that is not in force; not serving it" class=boxrunner`)
 	host.mu.Lock()
 	host.failApply = false
 	host.mu.Unlock()
-	waitFor(t, "the class served again", func() bool { return e.snapshot(t).Egress[0].Problem == "" })
+	waitFor(t, "the class served again", func() bool { return e.class(t).Problem == "" })
 }
 
 // egressJob is a running job container of a class on the class's network.
@@ -538,6 +548,44 @@ func TestEgressFlushRemovesJobs(t *testing.T) {
 	}) {
 		t.Error("the table is not back")
 	}
+}
+
+// TestJobRulesFlushed: on a box without egress classes, the guard puts the
+// job network's rules back after `nft flush ruleset` took them.
+func TestJobRulesFlushed(t *testing.T) {
+	host := &fakeHost{}
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.run = host.run })
+	defer h.stop(t)
+	drop := "-A BOXRUNNER-FORWARD -d 10.0.0.0/8 -j DROP"
+	waitFor(t, "the job network's rules", func() bool { return slices.Contains(host.iptablesRules("BOXRUNNER-FORWARD"), drop) })
+	host.flushRuleset()
+	h.waitLog(t, `level=WARN msg="the job network's firewall rules were incomplete; put them back"`)
+	if !slices.Contains(host.iptablesRules("BOXRUNNER-FORWARD"), drop) {
+		t.Errorf("BOXRUNNER-FORWARD = %q, want the private ranges dropped", host.iptablesRules("BOXRUNNER-FORWARD"))
+	}
+	if got, want := host.iptablesRules("FORWARD"), []string{"-A FORWARD -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD"}; !slices.Equal(got, want) {
+		t.Errorf("FORWARD = %q, want %q", got, want)
+	}
+	if got, want := host.iptablesRules("INPUT"), []string{"-A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT"}; !slices.Equal(got, want) {
+		t.Errorf("INPUT = %q, want %q", got, want)
+	}
+}
+
+// TestEgressFlushJobRules: on a box with egress classes, the guard puts the
+// job network's rules back with the table after `nft flush ruleset`, and the
+// egress chain's jump stays ahead of theirs in INPUT.
+func TestEgressFlushJobRules(t *testing.T) {
+	host := &fakeHost{}
+	e := startEgress(t, host, map[string]*container{})
+	defer e.stop(t)
+	waitFor(t, "the first ruleset", func() bool { return len(host.applied()) == 1 })
+	host.flushRuleset()
+	e.waitLog(t, `level=WARN msg="the job network's firewall rules were incomplete; put them back"`)
+	if got := host.iptablesRules("BOXRUNNER-FORWARD"); !slices.Contains(got, "-A BOXRUNNER-FORWARD -d 192.168.0.0/16 -j DROP") {
+		t.Errorf("BOXRUNNER-FORWARD = %q, want the private ranges dropped", got)
+	}
+	want := []string{"-A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS", "-A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT"}
+	waitFor(t, "the egress chain's jump first in INPUT", func() bool { return slices.Equal(host.iptablesRules("INPUT"), want) })
 }
 
 // TestEgressBackstop: the guard puts back the host's backstop when only it is
@@ -617,13 +665,13 @@ func TestEgressNetRemoved(t *testing.T) {
 	delete(e.docker.nets, n.Name)
 	e.docker.mu.Unlock()
 	want := "its Docker network boxrunner-boxrunner was removed and could not be made again on 127.0.0.0/8: docker: 403 Pool overlaps with other one on this address space; restart boxrunner"
-	waitFor(t, "the class's problem", func() bool { return e.snapshot(t).Egress[0].Problem == want })
+	waitFor(t, "the class's problem", func() bool { return e.class(t).Problem == want })
 	e.docker.mu.Lock()
 	e.docker.failNetwork = false
 	e.docker.mu.Unlock()
 	e.waitLog(t, `msg="the class's Docker network was removed; made it again" class=boxrunner network=boxrunner-boxrunner subnet=127.0.0.0/8`)
 	<-e.dns
-	waitFor(t, "the class served again", func() bool { return e.snapshot(t).Egress[0].Problem == "" })
+	waitFor(t, "the class served again", func() bool { return e.class(t).Problem == "" })
 	e.docker.mu.Lock()
 	defer e.docker.mu.Unlock()
 	if got := e.docker.nets[n.Name]; got == nil || got.Subnet != "127.0.0.0/8" || got.Gateway != "127.0.0.1" || got.Bridge != n.Bridge {
@@ -643,7 +691,7 @@ func TestEgressForwarderStops(t *testing.T) {
 	e.mu.Unlock()
 	e.waitLog(t, `msg="not serving the class until its DNS forwarder listens again" class=boxrunner`)
 	dns := <-e.dns
-	waitFor(t, "the class served again", func() bool { return e.snapshot(t).Egress[0].Problem == "" })
+	waitFor(t, "the class served again", func() bool { return e.class(t).Problem == "" })
 	if got := askDNS(t, dns, "api.example.com"); got != 0 {
 		t.Errorf("the forwarder answered an allowed name with code %d after it came back", got)
 	}
@@ -672,7 +720,7 @@ func TestEgressLogReopens(t *testing.T) {
 	e.waitLog(t, `msg="cannot read the egress rules' log; refused packets are counted, and described again once it opens" err=closed`)
 	e.packets.ch <- []nflog.Packet{{Prefix: n.ID(), Src: netip.MustParseAddr("172.30.0.7"), Dst: netip.MustParseAddr("198.51.100.9"), Proto: 6, DstPort: 443}}
 	waitFor(t, "the packet in status", func() bool {
-		recent := e.snapshot(t).Egress[0].Recent
+		recent := e.class(t).Recent
 		return len(recent) == 1 && recent[0].Dest == "198.51.100.9:443"
 	})
 }
@@ -727,7 +775,7 @@ func TestEgressNewNet(t *testing.T) {
 	if c, ok := e.docker.snapshot()[name]; !ok || c.State != "running" {
 		t.Errorf("the job %s was stopped though the table stayed", name)
 	}
-	if got := e.snapshot(t).Egress[0].Problem; got != "" {
+	if got := e.class(t).Problem; got != "" {
 		t.Errorf("the class is not served: %q", got)
 	}
 }
@@ -881,7 +929,7 @@ func TestEgressCounts(t *testing.T) {
 		host.packets = n
 		host.mu.Unlock()
 	}
-	packets := func() uint64 { return e.snapshot(t).Egress[0].Packets }
+	packets := func() uint64 { return e.class(t).Packets }
 	for _, step := range []struct{ read, want uint64 }{{10, 10}, {3, 13}, {5, 15}} {
 		set(step.read)
 		waitFor(t, fmt.Sprintf("%d packets", step.want), func() bool { return packets() == step.want })

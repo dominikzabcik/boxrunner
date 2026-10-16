@@ -321,13 +321,16 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		// The Worker names itself in every answer, the heartbeat's included.
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			w.Header().Set("Boxrunner-Protocol", "1")
+			w.Header().Set("Boxrunner-Worker-Version", "0.1.0")
+		}
 		// Heartbeats run on their own clock, so the call lists below leave them out.
 		if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/heartbeat" {
 			g.mu.Lock()
 			g.calls = append(g.calls, strings.TrimSpace(fmt.Sprintf("%s %s %s", r.Method, r.URL.RequestURI(), body)))
 			g.mu.Unlock()
-			w.Header().Set("Boxrunner-Protocol", "1")
-			w.Header().Set("Boxrunner-Worker-Version", "0.1.0")
 		}
 		session := fmt.Sprintf(`{"sessionId":"s1","queueUrl":"%s/queue/7","queueToken":"q1","acquireJobsUrl":"%s/acquire","statistics":{"totalAssignedJobs":0}}`, srv.URL, srv.URL)
 		switch {
@@ -414,7 +417,8 @@ type harness struct {
 	done   chan error
 	// cgroup holds the idle slice's cpu.idle, 0 at first.
 	cgroup string
-	// run, when set, answers the commands the agent runs, except systemctl.
+	// run answers the commands the agent runs, except systemctl; a fakeHost
+	// of its own when nil.
 	run func(stdin, name string, args ...string) (string, error)
 	// egressListen, openPackets and upstream stand in for the egress classes' sockets, log and resolver.
 	egressListen func(egress.Net) (net.PacketConn, net.Listener, error)
@@ -456,6 +460,9 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	for _, f := range change {
 		f(&cfg.Classes[0], h)
 	}
+	if h.run == nil {
+		h.run = (&fakeHost{}).run
+	}
 	cfg.Metrics, cfg.Cache = h.metrics, h.cache
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
@@ -480,10 +487,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 					h.mu.Unlock()
 					return "", nil
 				}
-				if h.run != nil {
-					return h.run(stdin, name, args...)
-				}
-				return "", nil
+				return h.run(stdin, name, args...)
 			},
 			EgressListen:         h.egressListen,
 			OpenPackets:          h.openPackets,

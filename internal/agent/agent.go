@@ -106,6 +106,8 @@ type Agent struct {
 	// cache is the Actions cache's URL for classes with cache = true, "" when
 	// it does not serve.
 	cache string
+	// jobRules are the job network's firewall rules, which the guard keeps.
+	jobRules firewall.Rules
 	// egress is what the agent keeps for the classes with an allowlist.
 	egress *egressState
 	queue  *queue.Client
@@ -191,6 +193,10 @@ func Run(ctx context.Context, o Options) error {
 	a.draining.Store(err == nil)
 	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String(), "draining", a.draining.Load())
 
+	// Status answers from the first snapshot on, not an empty one before the
+	// scheduler's first turn.
+	state := scheduler.Apply(scheduler.New(a.Config), scheduler.Drain{On: a.draining.Load()}, time.Now())
+	a.publish(state)
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
@@ -221,7 +227,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 
-	err = a.schedule(ctx)
+	err = a.schedule(ctx, state)
 	cancel()
 	<-supervised
 	<-served
@@ -277,6 +283,7 @@ func (a *Agent) converge(ctx context.Context) error {
 	if err := firewall.Apply(ctx, a.Run, rules); err != nil {
 		return fmt.Errorf("firewall: %w", err)
 	}
+	a.jobRules = rules
 	a.convergeEgress(ctx, services, gateway)
 	return nil
 }
@@ -388,9 +395,8 @@ func (a *Agent) drain(on bool) error {
 	return nil
 }
 
-func (a *Agent) schedule(ctx context.Context) error {
+func (a *Agent) schedule(ctx context.Context, state scheduler.State) error {
 	defer close(a.stopped)
-	state := scheduler.Apply(scheduler.New(a.Config), scheduler.Drain{On: a.draining.Load()}, time.Now())
 	tick := time.NewTicker(a.Tick)
 	defer tick.Stop()
 	logged := map[string]bool{}
@@ -620,8 +626,13 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 	defer cancel()
 	a.Log.Info("building the job image", "runner", version, "digest", digest)
 	a.building.Store(&version)
-	defer a.building.Store(nil)
 	err := runnerimage.Build(ctx, a.Docker, a.Runner, version, digest)
+	if err == nil {
+		a.ensureClasses(ctx)
+	}
+	// Cleared before the scheduler hears the outcome, so that no snapshot
+	// shows the outcome and the build at once.
+	a.building.Store(nil)
 	var mismatch *runnerdigests.Mismatch
 	switch {
 	case errors.As(err, &mismatch):
@@ -633,8 +644,6 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 		a.post(scheduler.BuildFailed{})
 		return
 	}
-	a.ensureClasses(ctx)
-	a.building.Store(nil)
 	a.post(scheduler.ImageBuilt{Version: version, Digest: digest})
 }
 

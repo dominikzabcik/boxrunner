@@ -437,8 +437,8 @@ func (a *Agent) serveEgress(ctx context.Context) func() {
 	if len(a.egress.classes) > 0 || len(a.egress.ruleset.Classes) > 0 {
 		wg.Go(func() { a.countBlocked(ctx) })
 		wg.Go(func() { a.logBlocked(ctx) })
-		wg.Go(func() { a.guardEgress(ctx) })
 	}
+	wg.Go(func() { a.guard(ctx) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -706,10 +706,10 @@ func (a *Agent) egressView() []status.Egress {
 	return out
 }
 
-// guardEgress puts the rules back when someone deleted them, and the
-// classes' networks, and denies the classes the box's networks as they come
-// and go.
-func (a *Agent) guardEgress(ctx context.Context) {
+// guard puts the firewall rules back when someone deleted them, and the
+// egress classes' networks, and denies the classes the box's networks as
+// they come and go.
+func (a *Agent) guard(ctx context.Context) {
 	interval := cmpDuration(a.EgressGuardEvery, 10*time.Second)
 	for tick := 1; ; tick++ {
 		select {
@@ -726,9 +726,15 @@ func (a *Agent) guardEgress(ctx context.Context) {
 			a.Log.Warn("listing Docker's networks to deny new ones to the egress classes", "err", err)
 		}
 		// The table is one command to check and the host's rules take dozens,
-		// so they are checked less often. They matter only without the table:
-		// its drops are final whatever iptables says.
-		if err := a.verifyEgress(ctx, tick%6 == 0); err != nil && ctx.Err() == nil {
+		// so they are checked less often. The egress bridges' rules matter
+		// only without the table: its drops are final whatever iptables says.
+		host := tick%6 == 0
+		if host {
+			a.egress.verify.Lock()
+			a.verifyJobRules(ctx)
+			a.egress.verify.Unlock()
+		}
+		if err := a.verifyEgress(ctx, host); err != nil && ctx.Err() == nil {
 			a.Log.Error("the egress rules are gone and could not be put back; not serving the classes with an allowlist", "err", err)
 		}
 		a.checkEgressNets(ctx)
@@ -756,6 +762,9 @@ func (a *Agent) verifyEgress(ctx context.Context, host bool) error {
 	whole, err := a.egress.enforcer.Verify(ctx, rules)
 	if !whole {
 		a.egress.purge, host = true, true
+		// What took the table, such as `nft flush ruleset`, may have taken
+		// the job network's rules too.
+		a.verifyJobRules(ctx)
 	}
 	why := "the egress rules are gone and could not be put back: "
 	if err == nil && !slices.Equal(boxNets, rules.Deny) {
@@ -799,6 +808,24 @@ func diff(a, b []netip.Prefix) []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// verifyJobRules puts the job network's firewall rules back when they are
+// not what the agent applied when it started, as after `nft flush ruleset`.
+// Without them the jobs of classes without an allowlist reach private
+// addresses. They go before the egress bridges' rules, so the egress chain's
+// jump lands ahead of theirs. The caller holds the verify lock.
+func (a *Agent) verifyJobRules(ctx context.Context) {
+	if a.jobRules.Bridge == "" || firewall.Check(ctx, a.Run, a.jobRules) == firewall.Current {
+		return
+	}
+	if err := firewall.Apply(ctx, a.Run, a.jobRules); err != nil {
+		if ctx.Err() == nil {
+			a.Log.Error("the job network's firewall rules are incomplete and could not be put back", "err", err)
+		}
+		return
+	}
+	a.Log.Warn("the job network's firewall rules were incomplete; put them back")
 }
 
 // hostNets are the host's input rules for the bridges the table holds.
