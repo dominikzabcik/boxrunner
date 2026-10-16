@@ -8,6 +8,9 @@ ARG RUNNER_VERSION
 LABEL boxrunner.runner-version=${RUNNER_VERSION}
 
 USER root
+# Ubuntu's archive over HTTPS, so a box whose network allows only port 443
+# out can build the image, and jobs install packages the same way.
+RUN sed -i -E 's#http://(archive|security|ports)\.ubuntu\.com#https://\1.ubuntu.com#g' /etc/apt/sources.list.d/ubuntu.sources
 # gh, as on GitHub's Ubuntu image, from GitHub's own package repository.
 RUN install -d -m 755 /etc/apt/keyrings \
 	&& curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
