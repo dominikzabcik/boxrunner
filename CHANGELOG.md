@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.8.0
+
+**Organization scale sets (not yet checked against a real organization)**
+- Opt-in: with the Worker variables `ORG` and `RUNNER_GROUP`, the Worker makes one scale set per class for the whole organization, inside a runner group, and the App needs the organization permission Self-hosted runners instead of repository Administration. Repository scale sets stay the default and are unchanged (#102, docs/config.md).
+- The runner group is the fence: the Worker serves it only while it admits selected private repositories and no public ones, re-reads it at GitHub before every session and runner, checks each scale set's own group, and deletes scale sets in any other group. A mint names its jobs' repositories and the Worker refuses one it does not serve; the agent re-reads waiting jobs when its list changes.
+- That permission reaches the whole organization: a leaked App key can register runners in any group. SECURITY.md and docs/decisions.md weigh it against repository Administration. Issue #28 stays open until the probe in docs/config.md passes on a real organization.
+
+**Egress**
+- Docker networks made after the agent started are denied to egress classes within ten seconds, without a restart (#95).
+- After `nft flush ruleset`, the agent puts back the job network's rules too, on every box, egress classes or not (#96).
+
+**Seeing what happens**
+- `status`, the dashboard, `doctor` and the metrics show the job image or class image the agent is building, instead of `image none` (#99).
+
+**Fixes**
+- The status socket answers only after the agent published its first state, so an early `status` no longer shows an empty box.
+
 ## v0.7.0
 
 **Egress allowlist**
