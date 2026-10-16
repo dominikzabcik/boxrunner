@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
+	"github.com/dominikzabcik/boxrunner/internal/layout"
 )
 
 // Table is the nftables table, in the inet family, that holds every class's
@@ -309,4 +310,18 @@ func ElementScript(c Class, grants []Grant, remove bool) string {
 		}
 	}
 	return b.String()
+}
+
+// HostNet is what the host's rules let a class's jobs reach on the host: its
+// DNS forwarder at the bridge's gateway, and the registry mirror and Actions
+// cache that the box serves at mirrorGateway when the class uses them.
+func HostNet(n Net, docker, cache bool, services firewall.Services, mirrorGateway netip.Addr) firewall.EgressNet {
+	h := firewall.EgressNet{Bridge: n.Bridge, Gateway: n.Gateway}
+	if services.Mirror && docker && mirrorGateway.IsValid() {
+		h.Open = append(h.Open, netip.AddrPortFrom(mirrorGateway, layout.MirrorPort))
+	}
+	if services.Cache && cache && mirrorGateway.IsValid() {
+		h.Open = append(h.Open, netip.AddrPortFrom(mirrorGateway, layout.CachePort))
+	}
+	return h
 }

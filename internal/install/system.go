@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/docker"
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
@@ -70,6 +71,9 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	}
 
 	o.Firewall = firewall.Check(ctx, run, firewall.Rules{Bridge: layout.Bridge})
+	_, errNft := exec.LookPath("nft")
+	o.Nft = errNft == nil
+	o.EgressTable = o.Nft && egress.Present(ctx, run)
 	_, err = run(ctx, "", "systemctl", "is-enabled", "--quiet", layout.UnitName)
 	o.UnitEnabled = err == nil
 	_, err = run(ctx, "", "systemctl", "is-active", "--quiet", layout.UnitName)
@@ -102,6 +106,11 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 		if n.Driver != "bridge" || n.Options["com.docker.network.bridge.name"] != layout.Bridge || n.Options["com.docker.network.bridge.enable_icc"] != "false" {
 			o.Network.Problem = fmt.Sprintf("a Docker network named %s exists but is not boxrunner's (driver %q, bridge %q, icc %q); remove it with `docker network rm %s` and run install again",
 				layout.Network, n.Driver, n.Options["com.docker.network.bridge.name"], n.Options["com.docker.network.bridge.enable_icc"], layout.Network)
+		}
+	}
+	if egress, err := d.Networks(ctx, layout.LabelEgress); err == nil {
+		for _, n := range egress {
+			o.EgressNetworks = append(o.EgressNetworks, n.Name)
 		}
 	}
 	o.Mirror, _ = mirror.Observe(ctx, d)
@@ -202,6 +211,11 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 			return d, err
 		}
 		return waitForDocker(ctx, layout.SysboxRuntime)
+	case InstallNftables:
+		if err := command("apt-get", "update", "-qq"); err != nil {
+			return d, err
+		}
+		return d, command("env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "nftables")
 	case WriteFile:
 		return d, writeFile(s)
 	case DaemonReload:
@@ -275,6 +289,18 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 			return d, err
 		}
 		return d, d.RemoveNetwork(ctx, layout.Network)
+	case RemoveEgress:
+		if len(s.Networks) > 0 {
+			if err := needDocker(); err != nil {
+				return d, err
+			}
+		}
+		for _, name := range s.Networks {
+			if err := d.RemoveNetwork(ctx, name); err != nil {
+				return d, err
+			}
+		}
+		return d, egress.Remove(ctx, run)
 	case RemoveImage:
 		if err := needDocker(); err != nil {
 			return d, err

@@ -86,18 +86,6 @@ func plural(n uint64, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-// blockText says what a block was, such as "packet to 203.0.113.9:443 (api.example.com)".
-func blockText(b egress.Block) string {
-	text := string(b.Kind) + " to " + b.Dest
-	if b.Kind == egress.Lookup {
-		text = "lookup of " + b.Dest
-	}
-	if b.Name != "" {
-		text += " (" + b.Name + ")"
-	}
-	return text
-}
-
 // Drained is true once a draining agent has closed every session and no job
 // container runs or is about to.
 func (s Snapshot) Drained() bool {
@@ -491,7 +479,7 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			fmt.Fprintln(w)
 			fmt.Fprintln(t, "REFUSED AT\tCLASS\tRUNNER\tREPOSITORY\tWHAT")
 			for _, r := range recent[max(0, len(recent)-20):] {
-				fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", r.Time.Local().Format("15:04:05"), r.class, cmp.Or(r.Runner, "?"), cmp.Or(r.Repo, "?"), blockText(r.Block))
+				fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", r.Time.Local().Format("15:04:05"), r.class, cmp.Or(r.Runner, "?"), cmp.Or(r.Repo, "?"), r.Block.String())
 			}
 			t.Flush()
 		}

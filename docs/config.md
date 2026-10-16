@@ -61,6 +61,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `isolation` | `sysbox` when Docker has Sysbox's runtime, else `runc` | How the class's jobs are kept from the box; see below. |
 | `docker` | `false` | Gives each job its own Docker daemon; see below. Needs `isolation = "sysbox"`, which it implies. |
 | `cache` | `false` | Keeps the class's [Actions cache](#actions-cache) entries on the box. Needs `cache` at the top. |
+| `egress` | none | Closes the class's network to everything its entries do not allow; see [Egress allowlist](#egress-allowlist). Without it the class reaches the internet as before. |
 
 Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
 
@@ -169,6 +170,74 @@ What it does not cover:
 
 `sudo boxrunner doctor` runs the wrapper in a job container and says whether actions there reach the cache. `uninstall` deletes the cache with the rest of `/var/lib/boxrunner`.
 
+## Egress allowlist
+
+A job reaches the whole internet by default. The firewall keeps it off the host, private ranges and the metadata service, but it can still send anything anywhere. A class with `egress` is closed the other way round: its jobs reach only the destinations its list names. Use it for a class that runs code you do not fully trust, such as a coding agent that reads issues and pull requests, which a prompt in one of them could tell to send your code elsewhere.
+
+```toml
+[[class]]
+name = "agent"
+cpus = 4
+memory = "8GiB"
+max = 2
+repos = ["octo/site"]
+docker = true
+egress = [
+  "github",                     # what a runner and its actions need
+  "api.llm.example",            # your LLM provider's API
+  "registry.packages.example",  # package registries
+  "*.mirror.example",           # any host under a domain
+  "10.20.0.0/16:5432",          # a database on a private address, one port
+]
+```
+
+Each entry is one of these, and each may end in `:port`:
+
+| Entry | Allows |
+|---|---|
+| `github` | The hosts GitHub lists for self-hosted runners, on port 443. See below. |
+| `api.llm.example` | The addresses that name resolves to. |
+| `*.mirror.example` | The addresses of any host under the domain, at any depth, but not of `mirror.example` itself. List that too if the class needs it. |
+| `203.0.113.7`, `10.20.0.0/16` | That address or range. |
+| `:443`, `:5432` | Only that TCP port. Without a port an entry allows 80 and 443. |
+| `:*` | Every TCP port. |
+
+How it works, and what follows from it:
+
+- **Names are checked when a job looks them up.** The class's jobs resolve names through a DNS forwarder in the agent. It answers a name an entry allows with the box's own resolver's answer, and refuses every other name without asking anyone. A job can look up only what the class allows, so it cannot even leak data in a name.
+- **An address opens when its name resolves.** The forwarder opens the addresses in an answer, for the answer's TTL but at least five minutes and at most an hour, before the answer goes back to the job. A job that connects to an address it never looked up, such as one it was given as a number, is refused, whether or not the address belongs to an allowed name. Connections already open stay open.
+- **TCP only, and IPv4 only.** A job's network has no IPv6, and an entry cannot allow UDP or ICMP. Other DNS servers, DNS over HTTPS to a resolver that is not on the list, and anything else that is not a TCP connection to an opened address, are dropped.
+- **Private addresses need to be named.** A name's private addresses open only for a host written out in full (`db.internal.example`), never for a wildcard, and only when the host itself, not an alias it points to, is on the list. Otherwise list the address or range. The host, the other classes' networks, loopback, link-local addresses, multicast and the cloud metadata services (`169.254.0.0/16`, `168.63.129.16`, `100.100.100.200`, `192.0.0.192`) can never be allowed. A list that names one fails the config check.
+- **The runner must reach GitHub.** The config check fails unless the list allows `github.com`, `api.github.com` and `broker.actions.githubusercontent.com` on port 443. Start the list with `github`.
+- **Each class has its own Docker network.** The agent creates `boxrunner-<class>` with its own bridge, labelled `boxrunner.egress`, and takes a subnet from Docker's address pools. The bridge identifies the class: a job can change its own address, and under Sysbox its root can, but it cannot send a packet that arrives on another bridge.
+- **On the host a job reaches** only the forwarder on its bridge's gateway, and the registry mirror and Actions cache when the class has `docker = true` or `cache = true`. Everything else the host receives from the bridge is dropped.
+- **Docker in jobs obeys the same list.** The job's own Docker uses the forwarder too, and its containers' traffic leaves through the job's address.
+- **It needs `nft`.** `sudo boxrunner install` installs the `nftables` package on Debian and Ubuntu. Without it the agent does not serve the class, and `status` and `doctor` say why.
+
+### The `github` preset
+
+`github` stands for the hosts GitHub lists under [Accessible domains by function](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#accessible-domains-by-function) for self-hosted runners, on port 443: `github.com`, `api.github.com`, `*.actions.githubusercontent.com` (the runner's broker and scale set services, the results service, OIDC tokens), `codeload.github.com`, `results-receiver.actions.githubusercontent.com`, `objects.githubusercontent.com`, `objects-origin.githubusercontent.com`, `github-releases.githubusercontent.com`, `github-registry-files.githubusercontent.com`, `release-assets.githubusercontent.com`, `*.pkg.github.com`, `pkg-containers.githubusercontent.com`, `ghcr.io`, `github-cloud.githubusercontent.com` and `github-cloud.s3.amazonaws.com`.
+
+It differs from GitHub's list in one place. GitHub lists `*.blob.core.windows.net` for the results service's blob storage, which would let a job send data to any Azure storage account its owner opens. The preset names the twenty storage accounts that GitHub's [meta API](https://docs.github.com/en/rest/meta/meta) lists under `domains.actions`, `productionresultssa0` to `productionresultssa19`, instead. If GitHub adds accounts, add them to the list yourself until a release does.
+
+### Changing a list
+
+Edit the file and restart the agent. Jobs that run take the new list at once. A class whose entries changed loses the addresses its old entries opened. A class that loses its `egress` key, or leaves the config, keeps its network while jobs run on it, closed to new connections; its next jobs use the job network. The agent removes the empty network.
+
+While the agent is stopped the class has no DNS, and the rules stay: jobs keep their connections, the addresses already opened stay open until their time ends, and nothing else opens. Drain the box first when jobs need to open connections ([upgrading](upgrading.md#rebooting-the-box)). If someone deletes the nftables table, the class stays closed, because the host drops what leaves an egress bridge without the table's mark, and the agent puts the table back within ten seconds. It also checks the rules before it starts each runner of an egress class, and starts none while it cannot.
+
+### What it does not stop
+
+- **A destination that is allowed.** A job can send anything to an address the list opens, `github.com` included. Allow only what the class needs.
+- **Shared addresses.** The rules judge addresses, not names inside TLS. A name whose address also serves other names, as CDNs do, opens the address for all of them, and a job that knows the address can send a request for any of them. A tunnel over an allowed host works.
+- **A wildcard over a domain that others can register under**, such as `*.github.io`, lets a job resolve and reach any such name, and its lookups reach that domain's name server.
+- **Jobs of one class share a bridge**, so they are no better separated from each other than jobs on the job network are.
+- **The registry mirror.** With `docker = true` the mirror serves a job all of Docker Hub, whether or not the list names it.
+
+### Seeing what was refused
+
+`sudo boxrunner status` has a table per class with the packets dropped and the lookups refused since the agent started, and the latest refusals with the job that made each, the address or name and, when the address was opened for a name, that name. The agent logs each distinct refusal at most once a minute, and no more than thirty a minute per class; the counters count them all. The metrics have `boxrunner_egress_blocked_total` by class and kind (`packet` or `lookup`) and `boxrunner_egress_ready`. `sudo boxrunner doctor` shows the same summary and proves the policy from a container on each class's network: an allowed host answers, a name outside the list does not resolve, an address of one is unreachable by number, and the host, the metadata service and the box's resolver are unreachable.
+
 ## Extending the job image
 
 The job image is GitHub's official runner image plus common build tools. A class that needs more, such as browsers for end-to-end tests, gets its own Dockerfile:
@@ -222,6 +291,8 @@ Jobs cannot reach the port, whatever the address. boxrunner's firewall drops eve
 | `boxrunner_class_runners` | gauge | `class`, `phase` | Runners of the class in each phase: `requested`, `starting`, `running`, `removing` or `exited`. |
 | `boxrunner_class_max_runners` | gauge | `class` | The class's `max`. |
 | `boxrunner_class_held` | gauge | `class` | 1 while the class holds its starts because its runners exit before taking a job, else 0. |
+| `boxrunner_egress_ready` | gauge | `class` | 1 while the agent serves the class with its [egress allowlist](#egress-allowlist) in force, else 0. Only for classes with `egress`. |
+| `boxrunner_egress_blocked_total` | counter | `class`, `kind` | What the class's allowlist refused since the agent started: `packet`s dropped and `lookup`s refused. |
 | `gha_assigned_jobs` | gauge | `name`, `organization`, `repository` | Jobs GitHub assigned to the scale set. |
 | `gha_completed_jobs_total` | counter | `name`, `organization`, `repository`, `job_result` | Jobs that finished since the agent started. |
 | `gha_job_execution_duration_seconds` | histogram | `name`, `organization`, `repository`, `job_result` | From when a runner took the job to when it finished. |

@@ -91,7 +91,7 @@ For `services:`, `container:` jobs and `docker build`, add `--docker` to the ins
     <td width="33%" valign="top">
       <img src="docs/art/icon-shield.svg" width="28" height="28" alt=""><br>
       <b>Hardened by default</b><br>
-      Jobs run on their own bridge, cut off from the host, private ranges, tailnets and the metadata service, under CPU, memory and process limits. The Worker refuses public repositories.
+      Jobs run on their own bridge, cut off from the host, private ranges, tailnets and the metadata service, under CPU, memory and process limits. A class can close its network to everything but a list of hosts. The Worker refuses public repositories.
     </td>
   </tr>
 </table>

@@ -511,3 +511,57 @@ func TestPlanCache(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanEgress(t *testing.T) {
+	withEgress := func(o *Observed) {
+		cfg := config.Default(desired.Worker, desired.Box, desired.Host, false)
+		cfg = strings.Replace(cfg, "[[class]]\nname = \"boxrunner\"\n", "[[class]]\nname = \"boxrunner\"\negress = [\"github\"]\n", 1)
+		o.Paths[layout.ConfigPath] = File{[]byte(cfg), 0o644}
+	}
+	cases := []struct {
+		name    string
+		observe func(*Observed)
+		want    []string
+	}{
+		{"a class with an allowlist and no nft", func(o *Observed) { withEgress(o) }, []string{
+			"install nftables, for the egress allowlists of classes",
+		}},
+		{"a class with an allowlist and nft", func(o *Observed) { withEgress(o); o.Nft = true }, nil},
+		{"no allowlist and no nft", func(o *Observed) {}, nil},
+		{"a class with an allowlist and no nft outside Debian", func(o *Observed) {
+			withEgress(o)
+			o.Debian, o.Distro = false, "fedora"
+		}, []string{"cannot continue: a class has an egress allowlist, which needs the nft command, and this is not Debian or Ubuntu; install nftables and run install again"}},
+	}
+	for _, c := range cases {
+		o := installed()
+		c.observe(&o)
+		if got := names(Plan(desired, o)); !slices.Equal(got, c.want) {
+			t.Errorf("%s: Plan =\n%s\nwant\n%s", c.name, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+		}
+	}
+}
+
+func TestPlanUninstallRemovesTheEgressRulesAndNetworks(t *testing.T) {
+	o := installed()
+	o.EgressNetworks, o.EgressTable = []string{"boxrunner-d4f0b"}, true
+	got := names(PlanUninstall(o))
+	want := []string{"stop and disable boxrunner.service (closes sessions)", "remove the egress allowlists' rules and networks", "remove the Docker network boxrunner"}
+	if !slices.Equal(got[:3], want) {
+		t.Errorf("PlanUninstall starts with\n%q\nwant\n%q", got[:3], want)
+	}
+	if steps := PlanUninstall(o); steps[1].(RemoveEgress).Networks[0] != "boxrunner-d4f0b" {
+		t.Errorf("the step removes %v", steps[1])
+	}
+
+	o = installed()
+	o.DockerUp, o.EgressTable = false, true
+	if got := names(PlanUninstall(o)); !slices.Contains(got, "remove the egress allowlists' rules and networks") {
+		t.Errorf("with Docker down and a table left, PlanUninstall = %q", got)
+	}
+	o = installed()
+	o.EgressTable = true
+	if got := names(PlanUninstall(o)); !slices.Contains(got, "remove the egress allowlists' rules and networks") {
+		t.Errorf("with a table and no networks, PlanUninstall = %q", got)
+	}
+}

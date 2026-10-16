@@ -77,10 +77,17 @@ type Observed struct {
 	Firewall     firewall.State
 	FirewallOpen map[firewall.Services]firewall.State
 	Mirror       mirror.State
-	Image        bool
-	Containers   int
-	UnitEnabled  bool
-	UnitActive   bool
+	// Nft is true when the nft command is there, which classes with an egress
+	// allowlist need.
+	Nft bool
+	// EgressNetworks are the Docker networks of egress classes, and EgressTable
+	// is whether the nftables table of their rules exists.
+	EgressNetworks []string
+	EgressTable    bool
+	Image          bool
+	Containers     int
+	UnitEnabled    bool
+	UnitActive     bool
 	// AgentReplaced means the running agent's binary was replaced after it
 	// started, as install.sh does before it runs install.
 	AgentReplaced bool
@@ -97,7 +104,10 @@ type (
 	// InstallSysbox installs the Sysbox package, which registers its runtime
 	// with Docker.
 	InstallSysbox struct{ Package SysboxPackage }
-	WriteFile     struct {
+	// InstallNftables installs the nftables package, which holds the nft
+	// command that the egress allowlists need.
+	InstallNftables struct{}
+	WriteFile       struct {
 		Path    string
 		Mode    fs.FileMode
 		Content []byte
@@ -117,9 +127,11 @@ type (
 	StopSlice        struct{}
 	RemoveContainers struct{}
 	RemoveNetwork    struct{}
-	RemoveFirewall   struct{}
-	RemoveImage      struct{}
-	RemovePath       struct{ Path string }
+	// RemoveEgress removes the networks of egress classes and the table of their rules.
+	RemoveEgress   struct{ Networks []string }
+	RemoveFirewall struct{}
+	RemoveImage    struct{}
+	RemovePath     struct{ Path string }
 )
 
 func (s Blocked) String() string { return "cannot continue: " + s.Reason }
@@ -131,6 +143,12 @@ func (s InstallDocker) String() string {
 }
 func (s InstallSysbox) String() string {
 	return "install Sysbox " + s.Package.Version + "; Docker reloads its configuration and running containers keep running"
+}
+func (InstallNftables) String() string {
+	return "install nftables, for the egress allowlists of classes"
+}
+func (s RemoveEgress) String() string {
+	return "remove the egress allowlists' rules and networks"
 }
 func (s WriteFile) String() string  { return fmt.Sprintf("write %s (%04o)", s.Path, s.Mode) }
 func (DaemonReload) String() string { return "reload systemd" }
@@ -269,6 +287,10 @@ func Plan(d Desired, o Observed) []Step {
 	// mirror.
 	wantMirror := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker })
 	needSysbox := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Isolation == config.Sysbox })
+	needNft := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Egress != nil }) && !o.Nft
+	if needNft && !o.Debian {
+		block("a class has an egress allowlist, which needs the nft command, and this is not Debian or Ubuntu; install nftables and run install again")
+	}
 	sysbox := !o.Sysbox && (d.Docker || d.Sysbox || needSysbox)
 	if problem := sysboxProblem(o); sysbox && problem != "" {
 		block("%s", problem)
@@ -286,6 +308,9 @@ func Plan(d Desired, o Observed) []Step {
 	}
 	if sysbox {
 		steps = append(steps, InstallSysbox{sysboxPackages[o.Arch]})
+	}
+	if needNft {
+		steps = append(steps, InstallNftables{})
 	}
 	files := []WriteFile{
 		{layout.Binary, 0o755, d.Binary},
@@ -383,12 +408,20 @@ func PlanUninstall(o Observed) []Step {
 		if o.Mirror != (mirror.State{}) {
 			steps = append(steps, RemoveMirror{})
 		}
+		if len(o.EgressNetworks) > 0 {
+			steps = append(steps, RemoveEgress{Networks: o.EgressNetworks})
+		} else if o.EgressTable {
+			steps = append(steps, RemoveEgress{})
+		}
 		if o.Network.Exists && o.Network.Problem == "" {
 			steps = append(steps, RemoveNetwork{})
 		}
 		if o.Image {
 			steps = append(steps, RemoveImage{})
 		}
+	}
+	if !o.DockerUp && o.EgressTable {
+		steps = append(steps, RemoveEgress{})
 	}
 	if o.Firewall != firewall.Absent {
 		steps = append(steps, RemoveFirewall{})

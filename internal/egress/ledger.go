@@ -30,6 +30,19 @@ type Block struct {
 	Name string `json:"name,omitempty"`
 }
 
+// String says what was refused, such as "packet to 203.0.113.9:443
+// (api.example.com)" or "lookup of data.evil.example".
+func (b Block) String() string {
+	text := "packet to " + b.Dest
+	if b.Kind == Lookup {
+		text = "lookup of " + b.Dest
+	}
+	if b.Name != "" {
+		text += " (" + b.Name + ")"
+	}
+	return text
+}
+
 const (
 	// recent is how many blocks a class's ledger keeps.
 	recent = 20

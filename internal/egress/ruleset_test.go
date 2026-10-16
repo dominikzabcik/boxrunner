@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dominikzabcik/boxrunner/internal/firewall"
 )
 
 func mustPolicy(t *testing.T, entries ...string) Policy {
@@ -424,5 +426,28 @@ func TestRemoveDeletesTheTableOnlyWhenThereIsOne(t *testing.T) {
 	f.listing = listingOf(Ruleset{}, leftBehind)
 	if err := Remove(context.Background(), f.run); err != nil || !reflect.DeepEqual(f.scripts, []string{"delete table"}) {
 		t.Errorf("Remove = %v, scripts %q", err, f.scripts)
+	}
+}
+
+func TestHostNetOpensWhatTheClassUses(t *testing.T) {
+	n := agentNet()
+	mirror := netip.MustParseAddr("172.18.0.1")
+	both := firewall.Services{Mirror: true, Cache: true}
+	for _, c := range []struct {
+		name          string
+		docker, cache bool
+		services      firewall.Services
+		want          []netip.AddrPort
+	}{
+		{"a class with Docker and the cache", true, true, both, []netip.AddrPort{netip.MustParseAddrPort("172.18.0.1:5000"), netip.MustParseAddrPort("172.18.0.1:5001")}},
+		{"a class with Docker only", true, false, both, []netip.AddrPort{netip.MustParseAddrPort("172.18.0.1:5000")}},
+		{"a class with the cache only", false, true, both, []netip.AddrPort{netip.MustParseAddrPort("172.18.0.1:5001")}},
+		{"a class that uses neither", false, false, both, nil},
+		{"a box that serves neither", true, true, firewall.Services{}, nil},
+	} {
+		got := HostNet(n, c.docker, c.cache, c.services, mirror)
+		if got.Bridge != n.Bridge || got.Gateway != n.Gateway || !reflect.DeepEqual(got.Open, c.want) {
+			t.Errorf("%s: HostNet = %+v, want open %v", c.name, got, c.want)
+		}
 	}
 }

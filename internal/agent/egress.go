@@ -112,7 +112,7 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 			continue
 		}
 		deny = append(deny, n.Subnet)
-		host := a.hostRules(e, services, mirrorGateway)
+		host := egress.HostNet(n, c.Docker, c.Cache, services, mirrorGateway)
 		e.rules = egress.Class{Net: n, Policy: *c.Egress, Open: host.Open}
 		classes = append(classes, e.rules)
 		nets = append(nets, host)
@@ -201,19 +201,6 @@ func (a *Agent) ensureEgressNet(ctx context.Context, class string) (egress.Net, 
 		return n, fmt.Sprintf("the Docker network %s has no IPv4 gateway", n.Name)
 	}
 	return n, ""
-}
-
-// hostRules are what a class's jobs may reach on the host: its forwarder, and
-// the mirror and the cache when the class uses them.
-func (a *Agent) hostRules(e *egressClass, services firewall.Services, gateway netip.Addr) firewall.EgressNet {
-	n := firewall.EgressNet{Bridge: e.net.Bridge, Gateway: e.net.Gateway}
-	if services.Mirror && e.class.Docker && gateway.IsValid() {
-		n.Open = append(n.Open, netip.AddrPortFrom(gateway, layout.MirrorPort))
-	}
-	if services.Cache && e.class.Cache && gateway.IsValid() {
-		n.Open = append(n.Open, netip.AddrPortFrom(gateway, layout.CachePort))
-	}
-	return n
 }
 
 // PacketSource is where the egress rules' logged packets come from.
