@@ -40,6 +40,8 @@ You need a Linux box with systemd and Linux 5.15 or newer (Ubuntu 22.04 or newer
    ```
    Keep the printed secret: the setup page asks for it.
 2. **Create the GitHub App.** Open `https://<your worker>/setup`, enter the setup secret and confirm on GitHub. Install the App on the private repositories whose jobs should run on your box.
+
+   The App gets the repository permission Administration (read and write), which registering runners for a repository needs, and Metadata (read). For an organization, set the Worker's `ORG` and `RUNNER_GROUP` first: the App then belongs to the organization and gets the organization permission Self-hosted runners (read and write) instead, and a runner group limited to selected private repositories decides which repositories reach the box ([organizations](docs/config.md#organizations), not yet tried on a real organization).
 3. **Install the agent.** The setup page shows the command, which looks like this:
    ```sh
    curl -fsSL https://boxrunner.zabcik.me/install.sh \

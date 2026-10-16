@@ -3,11 +3,15 @@ import { variable, type Alarms, type Watch } from './fallback';
 import * as github from './github';
 import { ApiError } from './http';
 import {
+	groupProblem,
 	mayOpenDashboard,
 	parseAlerts,
 	parseClasses,
 	parseFallback,
+	parseOrg,
 	repoFilter,
+	scopeId,
+	scopeName,
 	type AlertConfig,
 	type App,
 	type ClassName,
@@ -15,9 +19,13 @@ import {
 	type FallbackConfig,
 	type ForkPullRequests,
 	type Login,
+	type Org,
+	type OrgConfig,
 	type Repo,
 	type RepoName,
+	type RunnerGroup,
 	type ScaleSetId,
+	type Scope,
 } from './model';
 import type { Store } from './store';
 import type { Served } from './unserved';
@@ -72,6 +80,19 @@ export class Box {
 		return parseClasses(this.env.CLASSES);
 	}
 
+	orgConfig(): OrgConfig {
+		return parseOrg(this.env.ORG, this.env.RUNNER_GROUP);
+	}
+
+	/** The organization the Worker serves, as its last listing found it; null while it serves repositories one by one or before the first listing. */
+	org(): Org | null {
+		const config = this.orgConfig();
+		const stored = this.store.lastCached(orgKey);
+		if (!config.ok || config.org === null || stored === undefined) return null;
+		const org = JSON.parse(stored) as Org;
+		return org.login.toLowerCase() === config.org.login.toLowerCase() && org.group === config.org.group ? org : null;
+	}
+
 	fallback(): FallbackConfig {
 		return parseFallback(this.env.FALLBACK_MINUTES);
 	}
@@ -100,7 +121,12 @@ export class Box {
 		const classes = this.classes();
 		const all = classes.ok ? classes.classes : [];
 		const paused = new Set(this.store.pauses().map((pause) => pause.className));
-		return { classes: all, paused: all.filter((name) => paused.has(name)), listed: repoFilter(this.env.REPOS) };
+		const config = this.orgConfig();
+		if (!config.ok || config.org === null) return { classes: all, paused: all.filter((name) => paused.has(name)), listed: repoFilter(this.env.REPOS) };
+		// For an organization, the runner group decides: a repository it does not admit is not served.
+		const cached = this.store.lastCached('repos');
+		const served = new Set((cached === undefined ? [] : (JSON.parse(cached) as Repo[])).map((repo) => repo.name.toLowerCase()));
+		return { classes: all, paused: all.filter((name) => paused.has(name)), listed: (repo) => served.has(repo.toLowerCase()) };
 	}
 
 	/** The `WEBHOOK_SECRET` secret when it is set, else the secret GitHub made when setup created the App. */
@@ -197,48 +223,124 @@ export class Box {
 		return this.memo('jwt', tokenLifetime, () => signAppJwt(app.id, app.key, Math.floor(Date.now() / 1000)));
 	}
 
-	/** Private, unarchived repositories across the App's installations, narrowed by `REPOS` when it is set. */
+	/**
+	 * Private, unarchived repositories across the App's installations, narrowed
+	 * by `REPOS` when it is set. With `ORG` set, the private, unarchived
+	 * repositories its runner group admits instead, narrowed the same way.
+	 */
 	repos(app: App): Promise<Repo[]> {
 		return this.memo('repos', repoListLifetime, async () => {
 			const jwt = await this.jwt(app);
 			const listed = repoFilter(this.env.REPOS);
-			const installed: Repo[] = [];
-			const served: Repo[] = [];
-			for (const installationId of await github.installationIds(jwt)) {
-				// Listing needs a token for the whole installation, so it gets metadata and nothing else.
-				const token = await github.installationToken(jwt, installationId, { metadata: 'read' });
-				for (const repo of await github.installationRepos(token)) {
-					const found = { name: repo.name, id: repo.id, installationId };
-					installed.push(found);
-					if (repo.private && !repo.archived && listed(repo.name)) served.push(found);
-				}
+			const config = this.orgConfig();
+			const all = await github.installations(jwt);
+			if (config.ok && config.org !== null) {
+				const { org, served } = await this.orgRepos(app, jwt, all, config.org, listed);
+				this.store.cache(orgKey, JSON.stringify(org), Date.now() + repoListLifetime);
+				// The installation's own list matters only for deleting repository scale sets made before the switch.
+				const repoScopes = this.store.scaleSetRepos().some((id) => id > 0);
+				const installed = repoScopes ? await this.installedRepos(jwt, all) : [];
+				await this.dropUnserved(app, installed, [], org);
+				return served;
 			}
-			await this.dropUnserved(app, installed, served);
+			const installed = await this.installedRepos(jwt, all);
+			const served = installed.filter((repo) => repo.private && !repo.archived && listed(repo.name)).map(({ name, id, installationId }) => ({ name, id, installationId }));
+			await this.dropUnserved(app, installed, served, null);
 			return served;
 		});
+	}
+
+	private async installedRepos(jwt: string, installations: github.Installation[]) {
+		const installed: (Repo & { private: boolean; archived: boolean })[] = [];
+		for (const installation of installations) {
+			// Listing needs a token for the whole installation, so it gets metadata and nothing else.
+			const token = await github.installationToken(jwt, installation.id, { metadata: 'read' });
+			for (const repo of await github.installationRepos(token)) installed.push({ ...repo, installationId: installation.id });
+		}
+		return installed;
+	}
+
+	/**
+	 * Finds the organization's installation and runner group, and the repositories
+	 * the group admits. A group that admits public repositories, or every
+	 * repository rather than selected ones, serves nothing; one that admits
+	 * public repositories also loses its scale sets, which disconnects their runners.
+	 */
+	private async orgRepos(app: App, jwt: string, installations: github.Installation[], wanted: { login: Login; group: string }, listed: (name: string) => boolean) {
+		const org: Org = { login: wanted.login, id: null, installationId: null, group: wanted.group, groupId: null, problem: null };
+		const none = (problem: string) => ({ org: { ...org, problem }, served: [] as Repo[] });
+		const installation = installations.find((candidate) => candidate.organization && candidate.login.toLowerCase() === wanted.login.toLowerCase());
+		if (installation === undefined) return none(`The App is not installed on the organization ${wanted.login}.`);
+		org.id = installation.accountId;
+		org.installationId = installation.id;
+		let token: string;
+		try {
+			token = await github.installationToken(jwt, installation.id, { organization_self_hosted_runners: 'read' });
+		} catch (error) {
+			if (!(error instanceof github.GitHubError && error.status === 422)) throw error;
+			return none(`The App lacks the organization permission Self-hosted runners (read and write), or ${wanted.login} has not approved it.`);
+		}
+		const group = await github.findRunnerGroup(token, wanted.login, wanted.group);
+		const scope: Scope = { kind: 'org', org: { ...org, id: installation.accountId, installationId: installation.id } };
+		// A scale set made in another group, one since renamed or deleted, or before RUNNER_GROUP changed, is in a group the Worker no longer checks.
+		await this.dropOtherGroups(app, scope, group?.id ?? null);
+		if (group === undefined) return none(`${wanted.login} has no runner group named “${wanted.group}”.`);
+		org.groupId = group.id;
+		const problem = groupProblem(wanted.login, group);
+		if (problem !== null) {
+			if (group.allowsPublicRepositories) await this.deleteScaleSets(app, scope);
+			return none(problem);
+		}
+		const served = (await github.runnerGroupRepos(token, wanted.login, group.id))
+			.filter((repo) => repo.private && !repo.archived && listed(repo.name))
+			.map(({ name, id }) => ({ name, id, installationId: installation.id }));
+		return { org, served };
 	}
 
 	/**
 	 * Deletes the scale sets of repositories the Worker no longer serves (public,
 	 * archived or left out of `REPOS`), so they leave the repository's runner
-	 * settings. Where the App is gone there is nothing to delete with, and a
-	 * failure waits for the next listing.
+	 * settings. With `ORG` set, every repository scale set goes, and the scale
+	 * sets of any organization but `org`. Where the App is gone, or lacks the
+	 * permission, there is nothing to delete with, and a failure waits for the
+	 * next listing.
 	 */
-	private async dropUnserved(app: App, installed: Repo[], served: Repo[]) {
+	private async dropUnserved(app: App, installed: Repo[], served: Repo[], org: Org | null) {
 		const servedIds = new Set(served.map((repo) => repo.id));
-		for (const repoId of this.store.scaleSetRepos()) {
-			if (servedIds.has(repoId)) continue;
-			const repo = installed.find((candidate) => candidate.id === repoId);
-			for (const id of this.store.scaleSetsOf(repoId)) {
+		const keptOrg = org?.id === null || org?.id === undefined ? undefined : -org.id;
+		for (const scope of this.store.scaleSetRepos()) {
+			if (servedIds.has(scope) || scope === keptOrg) continue;
+			const repo = installed.find((candidate) => candidate.id === scope);
+			for (const id of this.store.scaleSetsOf(scope)) {
 				if (repo) {
 					try {
-						await this.actions(app, repo, (connection) => github.deleteScaleSet(connection, id));
+						await this.actions(app, { kind: 'repo', repo }, (connection) => github.deleteScaleSet(connection, id));
 					} catch (error) {
 						if (!(error instanceof github.GitHubError && [403, 404, 422].includes(error.status))) continue;
 					}
 				}
-				this.store.forgetScaleSet(repoId, id);
+				this.store.forgetScaleSet(scope, id);
 			}
+		}
+	}
+
+	/**
+	 * Deletes the organization's scale sets that the Worker did not make in the
+	 * group `groupId`, or all of them when it is null. A failure leaves the
+	 * scale set for the next listing; until then the group check before every
+	 * session and runner refuses it.
+	 */
+	private async dropOtherGroups(app: App, scope: Scope, groupId: number | null) {
+		const key = scopeId(scope);
+		for (const id of this.store.scaleSetsOf(key)) {
+			if (groupId !== null && this.store.scaleSetGroup(key, id) === groupId) continue;
+			try {
+				await this.actions(app, scope, (connection) => github.deleteScaleSet(connection, id));
+			} catch (error) {
+				if (!(error instanceof github.GitHubError)) throw error;
+				if (![403, 404, 422].includes(error.status)) continue;
+			}
+			this.store.forgetScaleSet(key, id);
 		}
 	}
 
@@ -249,6 +351,9 @@ export class Box {
 	 * succeeded. A failed read never fails the listing that asked.
 	 */
 	async forkPullRequests(app: App, repos: Repo[]): Promise<(ForkPullRequests | null)[]> {
+		// An App that serves an organization has no repository Administration permission to read them with.
+		const config = this.orgConfig();
+		if (config.ok && config.org !== null) return repos.map(() => null);
 		await this.once('forks', async () => {
 			const now = Date.now();
 			const due = repos.filter((repo) => this.store.cached(forkKey(repo.id), now) === undefined).slice(0, forkReadsPerListing);
@@ -273,6 +378,18 @@ export class Box {
 		return JSON.parse(this.store.lastCached(forkKey(repoId)) ?? 'null') as ForkPullRequests | null;
 	}
 
+	/**
+	 * Refuses a runner for an organization scale set while any job the agent
+	 * acquired for it is of a repository the Worker does not serve, as the
+	 * listing narrowed by `REPOS` says, at most a minute old. A runner takes any
+	 * job its scale set holds, so one such job is enough.
+	 */
+	async assertJobRepos(app: App, names: readonly RepoName[]): Promise<void> {
+		const served = new Set((await this.repos(app)).map((repo) => repo.name.toLowerCase()));
+		const unserved = names.find((name) => !served.has(name.toLowerCase()));
+		if (unserved !== undefined) throw new ApiError('repo_ineligible', `${unserved} is not a repository this Worker serves, so it mints no runner for its job.`);
+	}
+
 	async servedRepo(app: App, name: RepoName): Promise<Repo> {
 		const wanted = name.toLowerCase();
 		const repo = (await this.repos(app)).find((candidate) => candidate.name.toLowerCase() === wanted);
@@ -280,22 +397,48 @@ export class Box {
 		return repo;
 	}
 
+	/** What a request's scale set serves: the repository it names, or with `ORG` set, the organization. */
+	async servedScope(app: App, asked: { repo: RepoName } | { org: Login }): Promise<Scope> {
+		const config = this.orgConfig();
+		const org = config.ok ? config.org : null;
+		if (org === null) {
+			if ('org' in asked) throw new ApiError('repo_ineligible', `This Worker serves repositories one by one, not the organization ${asked.org}.`);
+			return { kind: 'repo', repo: await this.servedRepo(app, asked.repo) };
+		}
+		if ('repo' in asked) {
+			throw new ApiError(
+				'repo_ineligible',
+				`This Worker serves ${org.login} through organization scale sets, so it makes none for ${asked.repo} alone. Upgrade the agent to one that knows organization scale sets.`,
+			);
+		}
+		if (asked.org.toLowerCase() !== org.login.toLowerCase()) throw new ApiError('repo_ineligible', `This Worker serves the organization ${org.login}, not ${asked.org}.`);
+		await this.repos(app);
+		const found = this.org();
+		if (found === null || found.id === null || found.installationId === null || found.problem !== null) {
+			throw new ApiError('group_ineligible', found?.problem ?? `The Worker has not found the organization ${org.login} yet.`);
+		}
+		return { kind: 'org', org: { ...found, id: found.id, installationId: found.installationId } };
+	}
+
 	private async narrowToken(app: App, repo: Repo, permissions: github.Permissions) {
 		return github.installationToken(await this.jwt(app), repo.installationId, permissions, repo.id);
 	}
 
-	private connection(app: App, repo: Repo): Promise<github.AdminConnection> {
-		return this.memo(`admin:${repo.id}`, tokenLifetime, async () =>
-			github.adminConnection(await this.narrowToken(app, repo, { administration: 'write' }), repo.name),
-		);
+	private async scopeToken(app: App, scope: Scope, level: 'read' | 'write') {
+		if (scope.kind === 'repo') return this.narrowToken(app, scope.repo, { administration: level });
+		return github.installationToken(await this.jwt(app), scope.org.installationId, { organization_self_hosted_runners: level });
 	}
 
-	/** Runs an Actions service call with the repository's admin connection, dropping the connection if GitHub no longer accepts it. */
-	async actions<T>(app: App, repo: Repo, call: (connection: github.AdminConnection) => Promise<T>): Promise<T> {
+	private connection(app: App, scope: Scope): Promise<github.AdminConnection> {
+		return this.memo(`admin:${scopeId(scope)}`, tokenLifetime, async () => github.adminConnection(await this.scopeToken(app, scope, 'write'), scopeName(scope)));
+	}
+
+	/** Runs an Actions service call with the scope's admin connection, dropping the connection if GitHub no longer accepts it. */
+	async actions<T>(app: App, scope: Scope, call: (connection: github.AdminConnection) => Promise<T>): Promise<T> {
 		try {
-			return await call(await this.connection(app, repo));
+			return await call(await this.connection(app, scope));
 		} catch (error) {
-			if (error instanceof github.GitHubError && error.status === 401) this.store.forget(`admin:${repo.id}`);
+			if (error instanceof github.GitHubError && error.status === 401) this.store.forget(`admin:${scopeId(scope)}`);
 			throw error;
 		}
 	}
@@ -331,27 +474,50 @@ export class Box {
 		return problems.size === 0 ? null : [...problems].join('; ');
 	}
 
-	ensureScaleSet(app: App, repo: Repo, className: ClassName): Promise<ScaleSetId> {
-		const known = this.store.scaleSet(repo.id, className);
-		if (known !== undefined) return Promise.resolve(known);
-		return this.once(`scaleset:${repo.id}:${className}`, async () => {
-			const id = await this.actions(
-				app,
-				repo,
-				async (connection) =>
-					(await github.findScaleSet(connection, className)) ?? (await github.createScaleSet(connection, className)),
-			);
-			this.store.saveScaleSet(repo.id, className, id);
+	/**
+	 * Finds or creates the class's scale set. An organization's goes in the
+	 * runner group the listing checked, by the id GitHub's REST API gave it: the
+	 * Actions service must find the same id under the group's name, or a group
+	 * renamed since could take the scale set. A recorded scale set made in
+	 * another group is deleted first.
+	 */
+	ensureScaleSet(app: App, scope: Scope, className: ClassName): Promise<ScaleSetId> {
+		const key = scopeId(scope);
+		const checked = scope.kind === 'org' ? scope.org.groupId : null;
+		const known = this.store.scaleSet(key, className);
+		if (known !== undefined && this.store.scaleSetGroup(key, known) === checked) return Promise.resolve(known);
+		return this.once(`scaleset:${key}:${className}`, async () => {
+			const id = await this.actions(app, scope, async (connection) => {
+				if (known !== undefined) await github.deleteScaleSet(connection, known);
+				let group = github.defaultRunnerGroup;
+				if (scope.kind === 'org') {
+					const found = await github.actionsRunnerGroupId(connection, scope.org.group);
+					if (found === undefined) throw new ApiError('group_ineligible', `${scope.org.login} has no runner group named “${scope.org.group}”.`);
+					if (found !== checked) {
+						throw new ApiError(
+							'group_ineligible',
+							`GitHub's Actions service names runner group ${found} “${scope.org.group}”, but the Worker checked group ${checked}; it makes no scale set until they agree.`,
+						);
+					}
+					group = found;
+				}
+				return (await github.findScaleSet(connection, className, group)) ?? (await github.createScaleSet(connection, className, group));
+			});
+			if (known !== undefined) this.store.forgetScaleSet(key, known);
+			this.store.saveScaleSet(key, className, id, checked);
 			return id;
 		});
 	}
 
 	/**
-	 * Reads the repository's visibility from GitHub, never from a cache, right
-	 * before a session opens or a runner is minted. A public repository loses
-	 * every scale set the Worker made for it, which disconnects its runners.
+	 * Reads the repository's visibility, or the organization's runner group, from
+	 * GitHub, never from a cache, right before a session opens or a runner is
+	 * minted. A public repository, or a group that allows public repositories,
+	 * loses every scale set the Worker made for it, which disconnects its runners.
 	 */
-	async assertEligible(app: App, repo: Repo): Promise<void> {
+	async assertEligible(app: App, scope: Scope, scaleSetId: ScaleSetId): Promise<void> {
+		if (scope.kind === 'org') return this.assertGroup(app, scope, scaleSetId);
+		const { repo } = scope;
 		let seen: github.Visibility;
 		try {
 			seen = await github.visibility(await this.narrowToken(app, repo, { metadata: 'read' }), repo.name);
@@ -361,13 +527,54 @@ export class Box {
 		}
 		if (seen === 'private') return;
 		this.store.forget('repos');
-		if (seen === 'public') {
-			for (const id of this.store.scaleSetsOf(repo.id)) {
-				await this.actions(app, repo, (connection) => github.deleteScaleSet(connection, id));
-				this.store.forgetScaleSet(repo.id, id);
-			}
-		}
+		if (seen === 'public') await this.deleteScaleSets(app, scope);
 		const why = { public: 'is public', archived: 'is archived', gone: 'no longer has the App installed' }[seen];
 		throw new ApiError('repo_ineligible', `${repo.name} ${why}, so this Worker no longer serves it.`);
 	}
+
+	/**
+	 * Reads the group by the id the listing found it under, then the scale
+	 * set's group at GitHub. A group that is gone (GitHub moves its runners to
+	 * the Default group), renamed or open to public repositories loses the
+	 * organization's scale sets; a scale set in any other group than the one
+	 * read, by the Worker's record or GitHub's, is deleted.
+	 */
+	private async assertGroup(app: App, scope: Scope & { kind: 'org' }, scaleSetId: ScaleSetId): Promise<void> {
+		const { org } = scope;
+		let group: RunnerGroup | undefined;
+		let deleted = false;
+		try {
+			group = org.groupId === null ? undefined : await github.runnerGroup(await this.scopeToken(app, scope, 'read'), org.login, org.groupId);
+			deleted = org.groupId !== null && group === undefined;
+		} catch (error) {
+			if (!(error instanceof github.GitHubError && [401, 403, 404, 422].includes(error.status))) throw error;
+			group = undefined;
+		}
+		const renamed = group !== undefined && group.name.toLowerCase() !== org.group.toLowerCase();
+		let problem: string | null;
+		if (deleted) problem = `The runner group “${org.group}” of ${org.login} was deleted, which moves its runners to the Default group, so the Worker deleted its scale sets.`;
+		else if (group === undefined) problem = `The runner group “${org.group}” of ${org.login} is gone, or the App can no longer read it.`;
+		else if (renamed) problem = `The runner group “${org.group}” of ${org.login} is now named “${group.name}”, so the Worker deleted its scale sets.`;
+		else problem = groupProblem(org.login, group);
+		if (problem !== null || group === undefined) {
+			this.store.forget('repos');
+			if (deleted || renamed || group?.allowsPublicRepositories) await this.deleteScaleSets(app, scope);
+			throw new ApiError('group_ineligible', problem ?? '');
+		}
+		const recorded = this.store.scaleSetGroup(scopeId(scope), scaleSetId);
+		const actual = await this.actions(app, scope, (connection) => github.scaleSetGroup(connection, scaleSetId));
+		if (recorded === group.id && actual === group.id) return;
+		if (actual !== undefined) await this.actions(app, scope, (connection) => github.deleteScaleSet(connection, scaleSetId));
+		this.store.forgetScaleSet(scopeId(scope), scaleSetId);
+		throw new ApiError('not_found', `Scale set ${scaleSetId} is not in the runner group “${org.group}”, so the Worker deleted it; find or create it again.`);
+	}
+
+	private async deleteScaleSets(app: App, scope: Scope) {
+		for (const id of this.store.scaleSetsOf(scopeId(scope))) {
+			await this.actions(app, scope, (connection) => github.deleteScaleSet(connection, id));
+			this.store.forgetScaleSet(scopeId(scope), id);
+		}
+	}
 }
+
+const orgKey = 'organization';

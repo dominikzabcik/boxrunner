@@ -108,6 +108,8 @@ export class Store {
 		for (const column of ['client_id', 'client_secret', 'owner_login']) {
 			if (!columns.has(column)) sql.exec(`ALTER TABLE app ADD COLUMN ${column} TEXT`);
 		}
+		const scaleSetColumns = new Set(sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('repo_scale_sets')").toArray().map((c) => c.name));
+		if (!scaleSetColumns.has('runner_group_id')) sql.exec('ALTER TABLE repo_scale_sets ADD COLUMN runner_group_id INTEGER');
 	}
 
 	app(): { app: App; boxTokenSha256: string } | undefined {
@@ -220,8 +222,15 @@ export class Store {
 			.map((row) => row.id as ScaleSetId);
 	}
 
-	saveScaleSet(repoId: number, className: ClassName, id: ScaleSetId) {
-		this.sql.exec('INSERT OR REPLACE INTO repo_scale_sets (repo_id, class, id) VALUES (?, ?, ?)', repoId, className, id);
+	/** `runnerGroupId` is the Actions service's id of the group the scale set was made in; null for a repository's, which has only the default group. */
+	saveScaleSet(repoId: number, className: ClassName, id: ScaleSetId, runnerGroupId: number | null = null) {
+		this.sql.exec('INSERT OR REPLACE INTO repo_scale_sets (repo_id, class, id, runner_group_id) VALUES (?, ?, ?, ?)', repoId, className, id, runnerGroupId);
+	}
+
+	/** The runner group the scale set was made in, null when none was recorded, or undefined when the Worker holds no such scale set. */
+	scaleSetGroup(repoId: number, id: ScaleSetId): number | null | undefined {
+		const row = this.sql.exec<{ runner_group_id: number | null }>('SELECT runner_group_id FROM repo_scale_sets WHERE repo_id = ? AND id = ?', repoId, id).toArray()[0];
+		return row === undefined ? undefined : row.runner_group_id;
 	}
 
 	forgetScaleSet(repoId: number, id: ScaleSetId) {

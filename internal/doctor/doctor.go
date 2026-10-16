@@ -143,6 +143,9 @@ func (c Checks) All(ctx context.Context) []Result {
 			add("worker", false, "%v", err)
 		} else {
 			add("worker", true, "%s accepts the token; %d repositories, classes %s", c.Config.Worker, len(repos.Repos), strings.Join(repos.Classes, ", "))
+			if org := repos.Organization; org != nil {
+				results = append(results, Organization(*org, len(repos.Repos)))
+			}
 			for _, class := range c.Config.Classes {
 				served := false
 				for _, name := range repos.Classes {
@@ -161,6 +164,27 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, RunnerImage(snap.Image)...)
 	}
 	return results
+}
+
+// Organization says whether the Worker serves its organization: it refuses a
+// runner group that admits public repositories or every repository.
+func Organization(org worker.Organization, repos int) Result {
+	if org.Problem != "" {
+		return Result{"organization", false, org.Problem}
+	}
+	served := fmt.Sprintf("%d private repositories", repos)
+	if repos == 1 {
+		served = "1 private repository"
+	}
+	return Result{"organization", true, fmt.Sprintf("the Worker serves %s of %s through one scale set per class in the runner group %q, which admits only selected repositories and no public one", served, org.Name, org.Group)}
+}
+
+// OrgForks says that doctor cannot check the fork pull request settings of an
+// organization the Worker serves: GitHub shows them only with the organization
+// permission Administration, or Administration on each repository, and the App
+// has neither.
+func OrgForks(org string) Result {
+	return Result{"fork PRs", true, fmt.Sprintf(`cannot check them: reading the fork pull request settings takes the permission Administration, which the App serving an organization does not have. Check "Fork pull request workflows in private repositories" at https://github.com/organizations/%s/settings/actions and in each served repository's Settings, Actions, General`, org)}
 }
 
 // LiveRestore says what restarting Docker does to running jobs. It never
@@ -239,6 +263,9 @@ func (c Checks) Forks(ctx context.Context) []Result {
 	repos, err := c.Worker.Repos(ctx)
 	if err != nil {
 		return nil
+	}
+	if repos.Organization != nil {
+		return []Result{OrgForks(repos.Organization.Name)}
 	}
 	return Forks(repos.Repos, c.Config.Classes)
 }

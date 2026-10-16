@@ -67,6 +67,8 @@ export type Dashboard = {
 	repos: string[] | null;
 	/** Each served repository's fork pull request settings as last read; null before a read succeeded. */
 	forkPullRequests: Record<string, ForkPullRequests | null>;
+	/** With `ORG` set, the organization, its runner group and why the Worker serves none of it, as the last listing found them; `problem` is the variables' own while they are unreadable. Null while the Worker serves repositories one by one. */
+	organization: { name: string; group: string; problem: string | null } | null;
 	classes: string[];
 	classesProblem: string | null;
 	/** The Worker's classes paused on the dashboard: who paused each and when. */
@@ -195,6 +197,7 @@ export function dashboardData(box: Box, now: number): Dashboard {
 		dollarsPerMinute,
 		repos: repos === undefined ? null : servedRepos.map((repo) => repo.name),
 		forkPullRequests: Object.fromEntries(servedRepos.map((repo) => [repo.name, box.lastForkPullRequests(repo.id)])),
+		organization: organization(box),
 		classes: [...served],
 		classesProblem: classes.ok ? null : classes.problem,
 		paused: pauses.map((pause) => ({ class: pause.className, by: pause.by, since: iso(pause.since), seconds: secondsBetween(pause.since, now) })),
@@ -215,6 +218,14 @@ export function dashboardData(box: Box, now: number): Dashboard {
 			problem: watch.alert.problem,
 		},
 	};
+}
+
+function organization(box: Box): Dashboard['organization'] {
+	const config = box.orgConfig();
+	if (!config.ok) return { name: '', group: '', problem: `The Worker’s ${config.problem}.` };
+	if (config.org === null) return null;
+	const found = box.org();
+	return { name: config.org.login, group: config.org.group, problem: found?.problem ?? null };
 }
 
 // ---- Rendering ----
@@ -447,8 +458,17 @@ function renderRepo(repo: string, problems: ReturnType<typeof forkProblems>) {
 	return `<li>${escape(repo)}: <span class="alert">runs workflows from fork pull requests ${what}.</span> In its settings, under Actions, General, Fork pull request workflows, ${fixes}, or turn off “Run workflows from fork pull requests”.</li>`;
 }
 
-function renderRepos({ repos, forkPullRequests }: Dashboard) {
+function renderOrganization({ organization }: Dashboard) {
+	if (organization === null) return '';
+	if (organization.name === '') return `<h3>Organization</h3>\n<p class="alert">${escape(organization.problem ?? '')}</p>`;
+	const what = `${escape(organization.name)}, through one scale set per class in the runner group “${escape(organization.group)}”.`;
+	const state = organization.problem === null ? '' : ` <span class="alert">${escape(organization.problem)}</span> Until then the box serves none of its repositories.`;
+	return `<h3>Organization</h3>\n<p>${what}${state}</p>`;
+}
+
+function renderRepos({ repos, forkPullRequests, organization }: Dashboard) {
 	if (repos === null) return '<p>The box has not asked for its repositories yet.</p>';
+	if (repos.length === 0 && organization !== null) return `<p>None: add a private repository to the runner group “${escape(organization.group)}”.</p>`;
 	if (repos.length === 0) return '<p>None: install the App on a private repository.</p>';
 	const problems = repos.map((repo) => {
 		const settings = forkPullRequests[repo];
@@ -463,6 +483,7 @@ function renderRepos({ repos, forkPullRequests }: Dashboard) {
 function renderServed(data: Dashboard, csrf: string) {
 	return `<section aria-labelledby="served">
 <h2 id="served">What this Worker serves</h2>
+${renderOrganization(data)}
 <h3>Repositories</h3>
 ${renderRepos(data)}
 <h3 id="classes">Classes</h3>

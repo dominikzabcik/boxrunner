@@ -8,6 +8,7 @@ export const errorStatus = {
 	not_found: 404,
 	session_exists: 409,
 	runner_busy: 409,
+	group_ineligible: 409,
 	repo_ineligible: 410,
 	upgrade_required: 426,
 	rate_limited: 429,

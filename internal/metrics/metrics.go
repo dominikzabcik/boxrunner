@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +75,14 @@ func Write(w io.Writer, s status.Snapshot) error {
 	b.family("gha_assigned_jobs", "gauge", "Number of jobs assigned to this scale set.")
 	for _, ss := range s.ScaleSets {
 		b.sample("gha_assigned_jobs", float64(ss.Assigned), scaleSet(ss.Repo, ss.Class, "")...)
+	}
+	if slices.ContainsFunc(s.ScaleSets, func(ss status.ScaleSet) bool { return len(ss.Refused) > 0 }) {
+		b.family("boxrunner_refused_jobs_total", "counter", "Jobs an organization scale set was offered from repositories this box does not serve, by repository, since the agent started. They wait at GitHub.")
+		for _, ss := range s.ScaleSets {
+			for _, repo := range slices.Sorted(maps.Keys(ss.Refused)) {
+				b.sample("boxrunner_refused_jobs_total", float64(ss.Refused[repo]), scaleSet(repo, ss.Class, "")...)
+			}
+		}
 	}
 	b.family("gha_completed_jobs_total", "counter", "Total number of jobs completed since the agent started.")
 	for _, t := range s.Finished {

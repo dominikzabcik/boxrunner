@@ -199,3 +199,28 @@ boxrunner_egress_blocked_total{class="coder",kind="lookup"} 0
 		t.Error("a box without an egress class writes egress metrics")
 	}
 }
+
+func TestWriteRefusedJobs(t *testing.T) {
+	s := snapshot()
+	s.ScaleSets = []status.ScaleSet{{Repo: "octo", Class: "boxrunner", Assigned: 1, Refused: map[string]int{"octo/secret": 1, "octo/docs": 3}}}
+	var got bytes.Buffer
+	if err := Write(&got, s); err != nil {
+		t.Fatal(err)
+	}
+	want := `# HELP boxrunner_refused_jobs_total Jobs an organization scale set was offered from repositories this box does not serve, by repository, since the agent started. They wait at GitHub.
+# TYPE boxrunner_refused_jobs_total counter
+boxrunner_refused_jobs_total{name="boxrunner",organization="octo",repository="docs"} 3
+boxrunner_refused_jobs_total{name="boxrunner",organization="octo",repository="secret"} 1
+`
+	if !bytes.Contains(got.Bytes(), []byte(want)) {
+		t.Errorf("Write =\n%s\nwant it to contain\n%s", got.String(), want)
+	}
+	if line := `gha_assigned_jobs{name="boxrunner",organization="octo",repository=""} 1`; !bytes.Contains(got.Bytes(), []byte(line)) {
+		t.Errorf("Write =\n%s\nwant the organization scale set's assigned jobs as %s", got.String(), line)
+	}
+	var without bytes.Buffer
+	Write(&without, snapshot())
+	if bytes.Contains(without.Bytes(), []byte("refused")) {
+		t.Error("a box without refused jobs writes the refused metric")
+	}
+}

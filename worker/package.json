@@ -27,6 +27,12 @@
 			"REPOS": {
 				"description": "Optional. Only these repositories (`owner/name`, comma-separated) of the private ones the App is installed on. Leave empty to serve them all."
 			},
+			"ORG": {
+				"description": "Optional. An organization to serve with one scale set per class for the whole organization, in the runner group `RUNNER_GROUP`, instead of one per repository. Leave empty to serve repositories one by one; see docs/config.md."
+			},
+			"RUNNER_GROUP": {
+				"description": "Optional, required with `ORG`. The organization's runner group for the scale sets. It must admit only selected repositories and no public one."
+			},
 			"ADMINS": {
 				"description": "Optional. GitHub logins (comma-separated) that may sign in to the dashboard besides the App's owner. Leave empty for the owner alone."
 			},

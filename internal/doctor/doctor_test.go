@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -369,5 +370,26 @@ func TestCache(t *testing.T) {
 		if got := Cache(logs, url); got != want {
 			t.Errorf("Cache(%q) =\n%+v\nwant\n%+v", logs, got, want)
 		}
+	}
+}
+
+func TestOrganization(t *testing.T) {
+	if got := Organization(worker.Organization{Name: "octo", Group: "boxrunner"}, 1).Detail; !strings.HasPrefix(got, "the Worker serves 1 private repository of octo ") {
+		t.Errorf("Organization with one repository = %q", got)
+	}
+	ok := Organization(worker.Organization{Name: "octo", Group: "boxrunner"}, 2)
+	if want := (Result{"organization", true, `the Worker serves 2 private repositories of octo through one scale set per class in the runner group "boxrunner", which admits only selected repositories and no public one`}); ok != want {
+		t.Errorf("Organization = %+v, want %+v", ok, want)
+	}
+	problem := "The runner group “boxrunner” of octo allows public repositories; turn off “Allow public repositories” in its settings."
+	if got, want := Organization(worker.Organization{Name: "octo", Group: "boxrunner", Problem: problem}, 0), (Result{"organization", false, problem}); got != want {
+		t.Errorf("Organization = %+v, want %+v", got, want)
+	}
+}
+
+func TestOrgForks(t *testing.T) {
+	want := Result{"fork PRs", true, `cannot check them: reading the fork pull request settings takes the permission Administration, which the App serving an organization does not have. Check "Fork pull request workflows in private repositories" at https://github.com/organizations/octo/settings/actions and in each served repository's Settings, Actions, General`}
+	if got := OrgForks("octo"); got != want {
+		t.Errorf("OrgForks = %+v, want %+v", got, want)
 	}
 }

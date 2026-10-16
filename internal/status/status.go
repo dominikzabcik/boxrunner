@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -56,6 +57,8 @@ type Snapshot struct {
 	Heartbeat time.Time `json:"heartbeat,omitzero"`
 	// Egress is the state of each class that has an allowlist.
 	Egress []Egress `json:"egress,omitempty"`
+	// Organization is set while the Worker serves an organization.
+	Organization *Organization `json:"organization,omitempty"`
 }
 
 // Egress is what the agent knows of one class with an egress allowlist.
@@ -130,10 +133,45 @@ func (c Class) NextTry(now time.Time) string {
 	}
 }
 
+// ScaleSet is a scale set the box listens to. Repo is owner/name, or the
+// organization's login for an organization scale set.
 type ScaleSet struct {
 	Repo     string `json:"repo"`
 	Class    string `json:"class"`
 	Assigned int    `json:"assigned"`
+	// Refused counts, by repository, the jobs an organization scale set was
+	// offered from repositories this box does not serve. They wait at GitHub.
+	Refused map[string]int `json:"refused,omitempty"`
+}
+
+// Organization is the organization the Worker serves through one scale set
+// per class, and why it serves none of its repositories, if it does not.
+type Organization struct {
+	Name    string `json:"name"`
+	Group   string `json:"group"`
+	Problem string `json:"problem,omitempty"`
+}
+
+// Sentence says what the Worker serves of the organization.
+func (o Organization) Sentence() string {
+	if o.Problem != "" {
+		return fmt.Sprintf("The Worker serves no repository of the organization %s: %s", o.Name, o.Problem)
+	}
+	return fmt.Sprintf("The Worker serves the organization %s through one scale set per class in the runner group %q.", o.Name, o.Group)
+}
+
+// RefusedSentences say, for each repository whose jobs the scale set left
+// queued, why and how to fix it.
+func (ss ScaleSet) RefusedSentences() []string {
+	var out []string
+	for _, repo := range slices.Sorted(maps.Keys(ss.Refused)) {
+		jobs, wait := "1 job", "it waits"
+		if n := ss.Refused[repo]; n != 1 {
+			jobs, wait = fmt.Sprintf("%d jobs", n), "they wait"
+		}
+		out = append(out, fmt.Sprintf("%s %s was offered %s of %s, which this box does not serve, so %s at GitHub. Take the repository out of the runner group, or let class %s serve it.", ss.Repo, ss.Class, jobs, repo, wait, ss.Class))
+	}
+	return out
 }
 
 // Elsewhere is a repository and class this box is configured for that
@@ -502,11 +540,28 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	}
 
 	fmt.Fprintln(w)
+	if s.Organization != nil {
+		fmt.Fprintf(w, "%s\n\n", s.Organization.Sentence())
+	}
 	fmt.Fprintln(t, "REPOSITORY\tCLASS\tASSIGNED JOBS")
 	for _, ss := range s.ScaleSets {
-		fmt.Fprintf(t, "%s\t%s\t%d\n", ss.Repo, ss.Class, ss.Assigned)
+		scope := ss.Repo
+		if !strings.Contains(scope, "/") {
+			scope += " (organization)"
+		}
+		fmt.Fprintf(t, "%s\t%s\t%d\n", scope, ss.Class, ss.Assigned)
 	}
 	t.Flush()
+	var refused []string
+	for _, ss := range s.ScaleSets {
+		refused = append(refused, ss.RefusedSentences()...)
+	}
+	if len(refused) > 0 {
+		fmt.Fprintln(w)
+	}
+	for _, line := range refused {
+		fmt.Fprintln(w, line)
+	}
 	if len(s.Elsewhere) > 0 {
 		fmt.Fprintln(w)
 	}

@@ -702,3 +702,19 @@ func TestResumeStartsAgain(t *testing.T) {
 		t.Errorf("Decide after resuming = %#v, want %#v", got, want)
 	}
 }
+
+// An organization scale set's runners take jobs of every repository its
+// runner group admits, so warming any one of them keeps one runner ready.
+func TestWarmOrganizationScaleSet(t *testing.T) {
+	org := Key{"octo", "boxrunner"}
+	s := state(2, 2, map[Key]ScaleSet{org: {ID: 7}})
+	if got := Decide(warm(s, "octo/site"), at(0)); !reflect.DeepEqual(got, []Action{Start{org}}) {
+		t.Errorf("Decide with octo/site warm = %#v", got)
+	}
+	if got := Decide(warm(s, "hubot/site"), at(0)); got != nil {
+		t.Errorf("Decide with another owner's repository warm = %#v", got)
+	}
+	if got := Decide(warm(s, "octopus/site"), at(0)); got != nil {
+		t.Errorf("Decide with a repository of an owner that starts like the organization warm = %#v", got)
+	}
+}
