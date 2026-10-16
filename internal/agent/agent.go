@@ -193,6 +193,10 @@ func Run(ctx context.Context, o Options) error {
 	a.draining.Store(err == nil)
 	a.Log.Info("boxrunner started", "box", a.Config.Box, "version", a.Version, "worker", a.Config.Worker.String(), "draining", a.draining.Load())
 
+	// Status answers from the first snapshot on, not an empty one before the
+	// scheduler's first turn.
+	state := scheduler.Apply(scheduler.New(a.Config), scheduler.Drain{On: a.draining.Load()}, time.Now())
+	a.publish(state)
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
@@ -223,7 +227,7 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 
-	err = a.schedule(ctx)
+	err = a.schedule(ctx, state)
 	cancel()
 	<-supervised
 	<-served
@@ -391,9 +395,8 @@ func (a *Agent) drain(on bool) error {
 	return nil
 }
 
-func (a *Agent) schedule(ctx context.Context) error {
+func (a *Agent) schedule(ctx context.Context, state scheduler.State) error {
 	defer close(a.stopped)
-	state := scheduler.Apply(scheduler.New(a.Config), scheduler.Drain{On: a.draining.Load()}, time.Now())
 	tick := time.NewTicker(a.Tick)
 	defer tick.Stop()
 	logged := map[string]bool{}
