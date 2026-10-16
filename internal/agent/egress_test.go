@@ -567,6 +567,17 @@ func TestEgressStopRemovesJobs(t *testing.T) {
 	host := &fakeHost{}
 	e := startEgress(t, host, map[string]*container{})
 	name := e.startJob(t)
+	// On stop the agent removes a runner that has not taken a job without
+	// stopping it first, so this one must have taken its job.
+	e.github.queue <- message(2, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q}`, name))
+	waitFor(t, "the runner to take its job", func() bool {
+		for _, r := range e.snapshot(t).Runners {
+			if r.Name == name {
+				return r.Phase == "running"
+			}
+		}
+		return false
+	})
 	e.stop(t)
 	if _, ok := e.docker.snapshot()[name]; ok {
 		t.Errorf("the job %s still runs after the agent stopped", name)
