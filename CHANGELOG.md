@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.2
+
+**Fixes**
+- The job image fetches Ubuntu's packages over HTTPS. A box whose network allows only port 443 out could not build it, because the runner image lists Ubuntu's archive over plain HTTP; jobs' own `apt-get` now needs no port 80 either (#106).
+
 ## v0.8.1
 
 **Setup**
