@@ -626,8 +626,13 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 	defer cancel()
 	a.Log.Info("building the job image", "runner", version, "digest", digest)
 	a.building.Store(&version)
-	defer a.building.Store(nil)
 	err := runnerimage.Build(ctx, a.Docker, a.Runner, version, digest)
+	if err == nil {
+		a.ensureClasses(ctx)
+	}
+	// Cleared before the scheduler hears the outcome, so that no snapshot
+	// shows the outcome and the build at once.
+	a.building.Store(nil)
 	var mismatch *runnerdigests.Mismatch
 	switch {
 	case errors.As(err, &mismatch):
@@ -639,8 +644,6 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 		a.post(scheduler.BuildFailed{})
 		return
 	}
-	a.ensureClasses(ctx)
-	a.building.Store(nil)
 	a.post(scheduler.ImageBuilt{Version: version, Digest: digest})
 }
 
