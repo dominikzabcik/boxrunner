@@ -42,6 +42,9 @@ metrics_wait() {
 
 step "the class $class gets an egress allowlist; the agent builds its network and rules"
 sudo sed -i "/^name = \"$class\"\$/a egress = [\"github\", \"example.com\", \"*.example.org\", \"10.20.0.0/24:5432\"]" /etc/boxrunner/config.toml
+# install adds nft where it is missing; the agent starts the class when it restarts.
+sudo boxrunner install --worker "$worker" --token test "${flags[@]}" | tee "$work/install-egress.txt"
+command -v nft >/dev/null || fail "nft is missing after install"
 sudo systemctl restart boxrunner.service
 metrics_wait
 net=$(sudo docker network ls --filter "label=boxrunner.egress=$class" --format '{{.Name}}')

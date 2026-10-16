@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -137,6 +138,13 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 		nets = append(nets, firewall.EgressNet{Bridge: en.Bridge, Gateway: en.Gateway})
 	}
 
+	if len(classes) == 0 && len(configured) == 0 {
+		// Nothing of the egress rules is left to keep.
+		if err := errors.Join(egress.Remove(ctx, a.Run), firewall.ApplyEgress(ctx, a.Run, nil)); err != nil {
+			a.Log.Warn("removing the rules of egress classes that are gone", "err", err)
+		}
+		return
+	}
 	a.egress.ruleset = egress.Ruleset{Classes: classes, Deny: deny, Group: layout.NFLogGroup}
 	if err := a.egress.enforcer.Apply(ctx, a.egress.ruleset); err != nil {
 		a.failEgress(configured, err.Error())

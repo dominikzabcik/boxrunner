@@ -81,6 +81,8 @@ func (f *fakeHost) run(stdin, name string, args ...string) (string, error) {
 		}
 		b.WriteString("}\n")
 		return b.String(), nil
+	case cmd == "nft delete table inet boxrunner":
+		f.chains, f.sets, f.counters, f.jumps = nil, nil, nil, nil
 	case cmd == "nft list counters table inet boxrunner":
 		return "table inet boxrunner {\n}\n", nil
 	case cmd == "nft -f -":
@@ -421,4 +423,15 @@ func TestSpecEgressClass(t *testing.T) {
 
 func schedulerRunner() scheduler.Runner {
 	return scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
+}
+
+// TestEgressRemoved: a box whose config has no egress class any more loses the table.
+func TestEgressRemoved(t *testing.T) {
+	host := &fakeHost{chains: map[string]bool{"forward": true, "input": true}, sets: map[string]bool{}, counters: map[string]bool{}}
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) { h.run = host.run })
+	defer h.stop(t)
+	waitFor(t, "the table to go", func() bool { return slices.Contains(host.commands(), "nft delete table inet boxrunner") })
+	if got := host.applied(); len(got) != 0 {
+		t.Errorf("the agent built a table for no class: %q", got)
+	}
 }
