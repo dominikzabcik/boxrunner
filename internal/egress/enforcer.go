@@ -77,10 +77,12 @@ func (e *Enforcer) listing(ctx context.Context) string {
 	return out
 }
 
-// Open opens addresses for a class. An element that has most of its time left
-// is not touched, so a job that resolves a name again and again costs nothing.
+// Open opens addresses for a class and returns how long the grants stay open:
+// the time the first of their elements ends. An element that has most of its
+// time left is not touched, so a job that resolves a name again and again
+// costs nothing, and the time returned may then be shorter than a grant's TTL.
 // One transaction sets the others, whether or not they are open already.
-func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
+func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) (time.Duration, error) {
 	e.exec.Lock()
 	defer e.exec.Unlock()
 	now := e.now()
@@ -116,20 +118,28 @@ func (e *Enforcer) Open(ctx context.Context, c Class, grants []Grant) error {
 	full := len(live)+fresh > MaxLive
 	e.mu.Unlock()
 	if full {
-		return ErrFull
+		return 0, ErrFull
 	}
-	if len(todo) == 0 {
-		return nil
-	}
-	if out, err := e.Run(ctx, ElementScript(c, todo), "nft", "-f", "-"); err != nil {
-		return fmt.Errorf("nft add element: %w: %s", err, strings.TrimSpace(out))
+	if len(todo) > 0 {
+		if out, err := e.Run(ctx, ElementScript(c, todo), "nft", "-f", "-"); err != nil {
+			return 0, fmt.Errorf("nft add element: %w: %s", err, strings.TrimSpace(out))
+		}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, el := range todo {
 		live[el.Key()] = now.Add(el.TTL)
 	}
-	return nil
+	var left time.Duration
+	first := true
+	for _, g := range grants {
+		for _, el := range g.Elements() {
+			if d := live[el.Key()].Sub(now); first || d < left {
+				left, first = d, false
+			}
+		}
+	}
+	return left, nil
 }
 
 var counterBlock = regexp.MustCompile(`(?s)counter (\S+) \{\s*packets (\d+) bytes (\d+)`)

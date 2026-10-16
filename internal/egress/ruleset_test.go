@@ -314,7 +314,7 @@ func TestOpenSkipsAddressesThatHaveMostOfTheirTimeLeft(t *testing.T) {
 	c := agentClass(t)
 	grants := []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(443), TTL: 10 * time.Minute}}
 	for range 2 {
-		if err := e.Open(context.Background(), c, grants); err != nil {
+		if _, err := e.Open(context.Background(), c, grants); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -322,16 +322,16 @@ func TestOpenSkipsAddressesThatHaveMostOfTheirTimeLeft(t *testing.T) {
 		t.Fatalf("scripts = %q, want one script for the same grant twice", f.scripts)
 	}
 	now = now.Add(6 * time.Minute)
-	if err := e.Open(context.Background(), c, grants); err != nil {
+	if _, err := e.Open(context.Background(), c, grants); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.scripts) != 2 || f.scripts[1] != opened(c, "203.0.113.5", 443, 600) {
 		t.Errorf("scripts = %q, want the element set again once it had less than half its time left", f.scripts)
 	}
-	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 || f.scripts[2] != opened(c, "203.0.113.5", 80, 60) {
+	if _, err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 || f.scripts[2] != opened(c, "203.0.113.5", 80, 60) {
 		t.Errorf("another port was not opened: %v, scripts %q", err, f.scripts)
 	}
-	if err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("2001:db8::1"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 {
+	if _, err := e.Open(context.Background(), c, []Grant{{Addr: netip.MustParseAddr("2001:db8::1"), Ports: onePort(80), TTL: time.Minute}}); err != nil || len(f.scripts) != 3 {
 		t.Errorf("an IPv6 address was opened: %v, %d scripts", err, len(f.scripts))
 	}
 }
@@ -341,12 +341,12 @@ func TestOpenKeepsATimeForEachPortOfAnAddress(t *testing.T) {
 	e := &Enforcer{Run: f.run, Now: func() time.Time { return time.Unix(1_000_000, 0) }}
 	c := agentClass(t)
 	addr := netip.MustParseAddr("203.0.113.5")
-	if err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: DefaultPorts(), TTL: 10 * time.Minute}}); err != nil {
+	if _, err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: DefaultPorts(), TTL: 10 * time.Minute}}); err != nil {
 		t.Fatal(err)
 	}
 	// Another name on the same address that allows 443 finds that element open
 	// and leaves it, and opens the port the first name did not.
-	if err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: Ports{List: []uint16{443, 8443}}, TTL: 10 * time.Minute}}); err != nil {
+	if _, err := e.Open(context.Background(), c, []Grant{{Addr: addr, Ports: Ports{List: []uint16{443, 8443}}, TTL: 10 * time.Minute}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.scripts) != 2 || f.scripts[1] != opened(c, "203.0.113.5", 8443, 600) {
@@ -358,11 +358,11 @@ func TestOpenReportsFailureAndDoesNotRememberIt(t *testing.T) {
 	f := &nft{fail: func(string) error { return errors.New("exit status 1") }}
 	e := &Enforcer{Run: f.run}
 	grants := []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(443), TTL: time.Minute}}
-	if err := e.Open(context.Background(), agentClass(t), grants); err == nil {
+	if _, err := e.Open(context.Background(), agentClass(t), grants); err == nil {
 		t.Fatal("Open succeeded though nft failed")
 	}
 	f.fail = nil
-	if err := e.Open(context.Background(), agentClass(t), grants); err != nil || len(f.scripts) != 2 {
+	if _, err := e.Open(context.Background(), agentClass(t), grants); err != nil || len(f.scripts) != 2 {
 		t.Errorf("a failed grant was remembered as open: %v, %d scripts", err, len(f.scripts))
 	}
 }
@@ -374,13 +374,13 @@ func TestOpenRefusesPastTheLimit(t *testing.T) {
 	for i := range MaxLive {
 		grants = append(grants, Grant{Addr: netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}), Ports: onePort(443), TTL: time.Hour})
 	}
-	if err := e.Open(context.Background(), agentClass(t), grants); err != nil {
+	if _, err := e.Open(context.Background(), agentClass(t), grants); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Open(context.Background(), agentClass(t), []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(443), TTL: time.Hour}}); !errors.Is(err, ErrFull) {
+	if _, err := e.Open(context.Background(), agentClass(t), []Grant{{Addr: netip.MustParseAddr("203.0.113.5"), Ports: onePort(443), TTL: time.Hour}}); !errors.Is(err, ErrFull) {
 		t.Errorf("Open past the limit = %v, want ErrFull", err)
 	}
-	if err := e.Open(context.Background(), agentClass(t), grants[:1]); err != nil {
+	if _, err := e.Open(context.Background(), agentClass(t), grants[:1]); err != nil {
 		t.Errorf("renewing an address that is open = %v", err)
 	}
 }

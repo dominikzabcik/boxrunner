@@ -189,7 +189,9 @@ func (a *Agent) convergeEgress(ctx context.Context, services firewall.Services, 
 		}
 		e.server = &dnsfwd.Server{
 			Policy: *e.class.Egress, Clients: e.net.Subnet, Upstream: upstream,
-			Open:  func(ctx context.Context, g []egress.Grant) error { return a.egress.enforcer.Open(ctx, e.rules, g) },
+			Open: func(ctx context.Context, g []egress.Grant) (time.Duration, error) {
+				return a.egress.enforcer.Open(ctx, e.rules, g)
+			},
 			Event: func(ev dnsfwd.Event) { a.onLookup(e, ev) },
 		}
 	}

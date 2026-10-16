@@ -72,9 +72,11 @@ type Server struct {
 	// Clients are the addresses lookups may come from: the class's network.
 	Clients  netip.Prefix
 	Upstream Upstream
-	// Open makes the grants reachable. The answer goes back only when it
-	// succeeds, so a name never resolves to an address the job cannot use.
-	Open  func(ctx context.Context, grants []egress.Grant) error
+	// Open makes the grants reachable and returns how long the first of them
+	// stays open. The answer goes back only when it succeeds, so a name never
+	// resolves to an address the job cannot use, and with no TTL longer than
+	// that time, so a job that caches it does not outlive the address.
+	Open  func(ctx context.Context, grants []egress.Grant) (time.Duration, error)
 	Event func(Event)
 	Now   func() time.Time
 
@@ -205,16 +207,19 @@ func (s *Server) Handle(ctx context.Context, query []byte, from netip.Addr, tcp 
 		ttl := min(max(time.Duration(r.TTL)*time.Second, MinOpen), MaxOpen)
 		grants = append(grants, egress.Grant{Addr: addr, Ports: ports, TTL: ttl})
 	}
+	keep := MaxOpen
 	if len(grants) > 0 && s.Open != nil {
-		if err := s.Open(ctx, grants); err != nil {
+		left, err := s.Open(ctx, grants)
+		if err != nil {
 			s.event(Event{Kind: Failed, From: from, Name: q.Name, Err: err})
 			return Reply(query, RcodeServFail)
 		}
+		keep = min(keep, max(left, 0))
 	}
 	for _, g := range grants {
 		s.remember(g.Addr, q.Name, g.TTL)
 	}
-	return ClampTTLs(response, uint32(MaxOpen/time.Second))
+	return ClampTTLs(response, uint32(keep/time.Second))
 }
 
 // ServeUDP answers datagrams on pc until ctx ends.

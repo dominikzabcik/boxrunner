@@ -47,11 +47,16 @@ type recorder struct {
 	events []Event
 }
 
-func (r *recorder) open(_ context.Context, g []egress.Grant) error {
+// open opens every grant afresh, for its whole TTL.
+func (r *recorder) open(_ context.Context, g []egress.Grant) (time.Duration, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.grants = append(r.grants, g...)
-	return nil
+	left := MaxOpen
+	for _, grant := range g {
+		left = min(left, grant.TTL)
+	}
+	return left, nil
 }
 
 func (r *recorder) event(e Event) {
@@ -88,7 +93,7 @@ func TestHandleOpensTheAddressesOfAnAllowedNameBeforeAnswering(t *testing.T) {
 	up := &fakeUpstream{answers: map[string][]rr{"api.example.com": {cname(60, "edge.example.net"), a(120, "203.0.113.5"), a(120, "2001:db8::5")}}}
 	s, rec := newServer(t, []string{"api.example.com:8443"}, up)
 	var order []string
-	s.Open = func(ctx context.Context, g []egress.Grant) error {
+	s.Open = func(ctx context.Context, g []egress.Grant) (time.Duration, error) {
 		order = append(order, "open")
 		return rec.open(ctx, g)
 	}
@@ -193,7 +198,9 @@ func TestHandleKeepsPrivateAddressesForHostsNamedInFull(t *testing.T) {
 func TestHandleFailsClosedWhenTheAddressesCannotBeOpened(t *testing.T) {
 	up := &fakeUpstream{answers: map[string][]rr{"github.com": {a(60, "140.82.112.3")}}}
 	s, rec := newServer(t, nil, up)
-	s.Open = func(context.Context, []egress.Grant) error { return errors.New("nft: exit status 1") }
+	s.Open = func(context.Context, []egress.Grant) (time.Duration, error) {
+		return 0, errors.New("nft: exit status 1")
+	}
 	q := query(3, "github.com", TypeA)
 	if got := s.Handle(context.Background(), q, job, false); !reflect.DeepEqual(got, Reply(q, RcodeServFail)) {
 		t.Errorf("Handle = % x, want SERVFAIL", got)
@@ -547,8 +554,47 @@ func TestHandleKeepsATTLAtMostAsLongAsTheAddressStaysOpen(t *testing.T) {
 	for _, r := range got.Records {
 		ttls = append(ttls, r.TTL)
 	}
-	if want := []uint32{3600, 30}; !reflect.DeepEqual(ttls, want) {
+	// 203.0.113.6 stays open for five minutes, so no record of the answer lasts longer.
+	if want := []uint32{300, 30}; !reflect.DeepEqual(ttls, want) {
 		t.Errorf("TTLs the job gets = %v, want %v", ttls, want)
+	}
+}
+
+// An address that is open already is not set again while it has most of its
+// time left, so a second answer's TTL is what remains of it, not the upstream's.
+func TestHandleKeepsATTLWithinWhatIsLeftOfAnOpenAddress(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	var scripts []string
+	enforcer := &egress.Enforcer{Now: clock, Run: func(_ context.Context, stdin, _ string, _ ...string) (string, error) {
+		scripts = append(scripts, stdin)
+		return "", nil
+	}}
+	up := &fakeUpstream{answers: map[string][]rr{"github.com": {a(3600, "203.0.113.5")}}}
+	s, _ := newServer(t, nil, up)
+	class := egress.Class{Net: egress.NetOf("agent"), Policy: s.Policy}
+	s.Now = clock
+	s.Open = func(ctx context.Context, g []egress.Grant) (time.Duration, error) {
+		return enforcer.Open(ctx, class, g)
+	}
+
+	ttl := func(id uint16) uint32 {
+		t.Helper()
+		got, err := ParseAnswer(s.Handle(context.Background(), query(id, "github.com", TypeA), job, false))
+		if err != nil || len(got.Records) != 1 {
+			t.Fatalf("answer %+v, %v", got, err)
+		}
+		return got.Records[0].TTL
+	}
+	if got := ttl(1); got != 3600 {
+		t.Errorf("first answer's TTL = %d, want 3600", got)
+	}
+	now = now.Add(1700 * time.Second)
+	if got := ttl(2); got != 1900 {
+		t.Errorf("answer's TTL 1700 s later = %d, want the 1900 s the address has left", got)
+	}
+	if len(scripts) != 1 {
+		t.Errorf("nft ran %d times, want once: the address had more than half its time left", len(scripts))
 	}
 }
 
