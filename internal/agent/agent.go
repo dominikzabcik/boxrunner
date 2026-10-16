@@ -47,6 +47,9 @@ import (
 
 const (
 	reposEvery = 5 * time.Minute
+	// An organization's repositories are listed every minute, as often as the
+	// Worker reads them: the agent decides alone which offered jobs to acquire.
+	orgReposEvery = time.Minute
 	// Docker is observed every second tick.
 	decideEvery = 5 * time.Second
 	imageEvery  = 24 * time.Hour
@@ -91,6 +94,9 @@ type Options struct {
 	// the rules' log first wait to start again after they stop; 0 means a
 	// second. The wait doubles up to a minute.
 	EgressRetry time.Duration
+	// ReposEvery is how often the repositories are listed while the Worker
+	// serves an organization; 0 means a minute.
+	ReposEvery time.Duration
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
@@ -149,6 +155,13 @@ type Agent struct {
 	// scale set was offered from repositories the box does not serve.
 	refusedMu sync.Mutex
 	refused   map[scheduler.Key]map[string]int
+	// served changes whenever accepts does, so the listeners read the jobs
+	// waiting for their scale sets again.
+	served atomic.Int64
+	// pending holds, by organization scale set, the repositories of the jobs
+	// it holds that no runner has taken, which a mint names to the Worker.
+	pendingMu sync.Mutex
+	pending   map[scheduler.Key][]string
 	// draining mirrors DrainFile; drainMu orders the changes to both.
 	draining atomic.Bool
 	drainMu  sync.Mutex
@@ -559,8 +572,14 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 			return
 		}
 	}
-	minted, err := a.Worker.MintRunner(ctx, r.ScaleSet.Repo, r.ScaleSetID, r.Name)
+	minted, err := a.Worker.MintRunner(ctx, r.ScaleSet.Repo, r.ScaleSetID, r.Name, a.pendingRepos(r.ScaleSet))
 	if err != nil {
+		if worker.IsOrg(r.ScaleSet.Repo) && worker.Is(err, worker.RepoIneligible) {
+			// Such a job stays with the scale set until someone cancels it, so the class backs off instead of asking every tick.
+			log.Error("the Worker refuses a runner while the organization's scale set holds a job of a repository it does not serve; cancel that job on GitHub", "class", class.Name, "err", err)
+			a.post(scheduler.StartFailed{Runner: r.Name, Container: true})
+			return
+		}
 		log.Error("minting a runner config failed", "err", err)
 		if worker.Fatal(err) {
 			a.raise(err)
@@ -942,15 +961,23 @@ func (a *Agent) supervise(ctx context.Context) error {
 		return nil
 	}
 
+	every := func() time.Duration {
+		if a.org.Load() != nil {
+			return cmp.Or(a.ReposEvery, orgReposEvery)
+		}
+		return reposEvery
+	}
 	err := sync()
-	tick := time.NewTicker(reposEvery)
+	tick := time.NewTicker(every())
 	defer tick.Stop()
 	for err == nil && ctx.Err() == nil {
 		select {
 		case <-tick.C:
 			err = sync()
+			tick.Reset(every())
 		case <-a.resync:
 			err = sync()
+			tick.Reset(every())
 		case e := <-exits:
 			if worker.HeldBy(e.err) != "" {
 				held[e.key] = true
@@ -1031,8 +1058,30 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 			}
 		}
 	}
-	a.accepts.Store(&accepts)
+	if old := a.accepts.Swap(&accepts); old == nil || !maps.EqualFunc(*old, accepts, maps.Equal) {
+		a.served.Add(1)
+	}
 	return want, nil
+}
+
+// pendingRepos are the repositories of the jobs the organization scale set
+// holds that no runner has taken; nil for a repository's scale set.
+func (a *Agent) pendingRepos(key scheduler.Key) []string {
+	if !worker.IsOrg(key.Repo) {
+		return nil
+	}
+	a.pendingMu.Lock()
+	defer a.pendingMu.Unlock()
+	return a.pending[key]
+}
+
+func (a *Agent) setPending(key scheduler.Key, repos []string) {
+	a.pendingMu.Lock()
+	defer a.pendingMu.Unlock()
+	if a.pending == nil {
+		a.pending = map[scheduler.Key][]string{}
+	}
+	a.pending[key] = repos
 }
 
 // accept reports whether the class's organization scale set acquires a job
@@ -1098,6 +1147,9 @@ func (a *Agent) listen(ctx context.Context, key scheduler.Key) error {
 	if worker.IsOrg(key.Repo) {
 		c.Accept = func(j queue.Job) bool { return a.accept(key.Class, j.FullName(key.Repo)) }
 		c.Refused = func(j queue.Job) { a.refuse(key, j) }
+		c.Acquirable = func(ctx context.Context) ([]queue.Job, error) { return a.Worker.AcquirableJobs(ctx, key.Repo, ss.ID) }
+		c.Served = a.served.Load
+		c.Pending = func(repos []string) { a.setPending(key, repos) }
 	}
 	return listener.Run(ctx, c)
 }

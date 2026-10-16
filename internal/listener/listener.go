@@ -47,6 +47,16 @@ type Config struct {
 	// queued at GitHub, and Refused hears of it once.
 	Accept  func(queue.Job) bool
 	Refused func(queue.Job)
+	// Acquirable, when set, lists the jobs the scale set may still acquire.
+	// GitHub offers a job in one message, so the listener asks when a session
+	// opens and whenever Served changes, and acquires the ones Accept takes
+	// now, such as a job it turned down while the box's list was out of date.
+	Acquirable func(context.Context) ([]queue.Job, error)
+	// Served changes whenever the repositories Accept takes change.
+	Served func() int64
+	// Pending, when set, hears the repositories (owner/name) of the jobs the
+	// scale set holds that no runner has taken, after each message.
+	Pending func([]string)
 }
 
 type listener struct {
@@ -58,6 +68,12 @@ type listener struct {
 	jobs map[int64]time.Time
 	// refused are the offered jobs Accept turned down, so each is reported once.
 	refused map[int64]bool
+	// pending maps each job the scale set holds that no runner took to its repository.
+	pending map[int64]string
+	// served is Served's value when the acquirable jobs were last read;
+	// recheck asks to read them before the next poll.
+	served  int64
+	recheck bool
 }
 
 // Run serves the scale set until ctx ends, then closes the session. It
@@ -70,7 +86,7 @@ func Run(ctx context.Context, c Config) error {
 	if c.Log == nil {
 		c.Log = slog.New(slog.DiscardHandler)
 	}
-	l := &listener{Config: c, jobs: map[int64]time.Time{}, refused: map[int64]bool{}}
+	l := &listener{Config: c, jobs: map[int64]time.Time{}, refused: map[int64]bool{}, pending: map[int64]string{}}
 	if err := l.open(ctx); err != nil {
 		return quiet(ctx, err)
 	}
@@ -126,6 +142,9 @@ func (l *listener) poll(ctx context.Context, lastID *int64) error {
 			return err
 		}
 	}
+	if l.Acquirable != nil && (l.recheck || l.served != l.servedNow()) {
+		l.acquireWaiting(ctx)
+	}
 	msg, err := l.Queue.Get(ctx, l.session.Queue, *lastID, l.Capacity)
 	if err != nil || msg == nil {
 		return err
@@ -149,6 +168,45 @@ func (l *listener) poll(ctx context.Context, lastID *int64) error {
 		return ctx.Err()
 	}
 	return nil
+}
+
+func (l *listener) servedNow() int64 {
+	if l.Served == nil {
+		return 0
+	}
+	return l.Served()
+}
+
+// acquireWaiting acquires the waiting jobs Accept now takes. A failure is
+// tried again before the next poll.
+func (l *listener) acquireWaiting(ctx context.Context) {
+	served := l.servedNow()
+	jobs, err := l.Acquirable(ctx)
+	if err == nil {
+		jobs = l.accepted(jobs)
+		if len(jobs) > 0 {
+			ids := make([]int64, len(jobs))
+			for i, j := range jobs {
+				ids[i] = j.RequestID
+			}
+			_, err = l.Queue.Acquire(ctx, l.session.Queue, ids)
+		}
+	}
+	if err != nil {
+		if ctx.Err() == nil {
+			l.Log.Warn("reading the jobs waiting for the scale set failed; trying again before the next poll", "repo", l.ScaleSet.Repo, "class", l.ScaleSet.Class, "err", err)
+		}
+		l.recheck = true
+		return
+	}
+	l.served, l.recheck = served, false
+	for _, j := range jobs {
+		l.track(j)
+		l.hold(j)
+	}
+	if len(jobs) > 0 {
+		l.Log.Info("acquired jobs that waited for the scale set", "repo", l.ScaleSet.Repo, "class", l.ScaleSet.Class, "jobs", len(jobs))
+	}
 }
 
 // accepted drops the offered jobs Accept refuses, reporting each one once.
@@ -182,6 +240,7 @@ func (l *listener) open(ctx context.Context) error {
 		return err
 	}
 	l.session, l.opened, l.refreshAt = s, l.Now(), l.Now().Add(RefreshAfter)
+	l.recheck = true
 	return nil
 }
 
@@ -211,12 +270,15 @@ func (l *listener) publish(ctx context.Context, msg *queue.Message, stats *queue
 	if msg != nil {
 		for _, j := range append(msg.Available, msg.Assigned...) {
 			l.track(j)
+			l.hold(j)
 		}
 		for _, j := range msg.Started {
 			l.track(j.Job)
+			delete(l.pending, j.RequestID)
 			u.Started = append(u.Started, j.RunnerName)
 		}
 		for i, j := range msg.Completed {
+			delete(l.pending, j.RequestID)
 			// GitHub leaves queueTime out of JobCompleted; the listener saw it
 			// when the job was offered or assigned.
 			if t, ok := l.jobs[j.RequestID]; ok && j.QueueTime.IsZero() {
@@ -231,11 +293,25 @@ func (l *listener) publish(ctx context.Context, msg *queue.Message, stats *queue
 		assigned = stats.TotalAssignedJobs
 	}
 	u.Jobs = l.demand(assigned)
+	if assigned == 0 {
+		clear(l.pending)
+	}
+	if l.Pending != nil {
+		repos := slices.Sorted(maps.Values(l.pending))
+		l.Pending(slices.Compact(repos))
+	}
 	select {
 	case l.Events <- u:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// hold records the repository of a job the scale set holds for a runner.
+func (l *listener) hold(j queue.Job) {
+	if name := j.FullName(l.ScaleSet.Repo); name != "" {
+		l.pending[j.RequestID] = name
 	}
 }
 

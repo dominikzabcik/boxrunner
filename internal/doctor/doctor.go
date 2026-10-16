@@ -179,6 +179,14 @@ func Organization(org worker.Organization, repos int) Result {
 	return Result{"organization", true, fmt.Sprintf("the Worker serves %s of %s through one scale set per class in the runner group %q, which admits only selected repositories and no public one", served, org.Name, org.Group)}
 }
 
+// OrgForks says that doctor cannot check the fork pull request settings of an
+// organization the Worker serves: GitHub shows them only with the organization
+// permission Administration, or Administration on each repository, and the App
+// has neither.
+func OrgForks(org string) Result {
+	return Result{"fork PRs", true, fmt.Sprintf(`cannot check them: reading the fork pull request settings takes the permission Administration, which the App serving an organization does not have. Check "Fork pull request workflows in private repositories" at https://github.com/organizations/%s/settings/actions and in each served repository's Settings, Actions, General`, org)}
+}
+
 // LiveRestore says what restarting Docker does to running jobs. It never
 // fails: install leaves live-restore off, because under Sysbox it breaks DNS
 // in the jobs that survive a restart (docs/decisions.md).
@@ -257,8 +265,7 @@ func (c Checks) Forks(ctx context.Context) []Result {
 		return nil
 	}
 	if repos.Organization != nil {
-		// The organization's App has no repository Administration permission to read them with.
-		return []Result{{"fork PRs", true, "the Worker serves an organization and reads no repository's fork pull request settings; check them under Settings, Actions, General in each repository, or for the whole organization"}}
+		return []Result{OrgForks(repos.Organization.Name)}
 	}
 	return Forks(repos.Repos, c.Config.Classes)
 }

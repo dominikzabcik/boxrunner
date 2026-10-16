@@ -125,7 +125,7 @@ func TestRequestShapes(t *testing.T) {
 	if err := c.CloseSession(ctx, "octo/site", 7, "5d6e"); err != nil {
 		t.Error(err)
 	}
-	r, err := c.MintRunner(ctx, "octo/site", 7, "box-1-boxrunner-3f9a2c")
+	r, err := c.MintRunner(ctx, "octo/site", 7, "box-1-boxrunner-3f9a2c", []string{"octo/site"})
 	if err != nil || r != (Runner{ID: 41, JITConfig: "eyIu"}) {
 		t.Errorf("MintRunner = %+v, %v", r, err)
 	}
@@ -139,6 +139,37 @@ func TestRequestShapes(t *testing.T) {
 		{"DELETE", "/v1/sessions/5d6e?repo=octo%2Fsite&scaleSetId=7", "Bearer box-token", "0.1.0", ""},
 		{"POST", "/v1/runners", "Bearer box-token", "0.1.0", `{"name":"box-1-boxrunner-3f9a2c","repo":"octo/site","scaleSetId":7}`},
 		{"DELETE", "/v1/runners/41?repo=octo%2Fsite&scaleSetId=7", "Bearer box-token", "0.1.0", ""},
+	}
+	if !reflect.DeepEqual(*seen, want) {
+		t.Errorf("requests =\n%+v\nwant\n%+v", *seen, want)
+	}
+}
+
+// An organization scale set's mint names the repositories of the jobs it
+// holds, an empty list included, and the jobs still waiting for it are read
+// from the Worker.
+func TestOrganizationRequestShapes(t *testing.T) {
+	c, seen, _ := fake(t,
+		reply{200, `{"runnerId":41,"jitConfig":"eyIu"}`},
+		reply{200, `{"runnerId":42,"jitConfig":"eyIv"}`},
+		reply{200, `{"jobs":[{"runnerRequestId":502,"ownerName":"octo","repositoryName":"docs","jobWorkflowRef":"octo/docs/.github/workflows/ci.yml@refs/heads/main","eventName":"push","requestLabels":["boxrunner"]}]}`},
+	)
+	ctx := context.Background()
+	if _, err := c.MintRunner(ctx, "octo", 7, "box-1-boxrunner-3f9a2c", []string{"octo/site"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.MintRunner(ctx, "octo", 7, "box-1-boxrunner-4e1b2d", nil); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := c.AcquirableJobs(ctx, "octo", 7)
+	wantJobs := []queue.Job{{RequestID: 502, Owner: "octo", Repository: "docs", WorkflowRef: "octo/docs/.github/workflows/ci.yml@refs/heads/main", Event: "push", Labels: []string{"boxrunner"}}}
+	if err != nil || !reflect.DeepEqual(jobs, wantJobs) {
+		t.Errorf("AcquirableJobs = %+v, %v", jobs, err)
+	}
+	want := []request{
+		{"POST", "/v1/runners", "Bearer box-token", "0.1.0", `{"jobRepos":["octo/site"],"name":"box-1-boxrunner-3f9a2c","org":"octo","scaleSetId":7}`},
+		{"POST", "/v1/runners", "Bearer box-token", "0.1.0", `{"jobRepos":[],"name":"box-1-boxrunner-4e1b2d","org":"octo","scaleSetId":7}`},
+		{"GET", "/v1/jobs?org=octo&scaleSetId=7", "Bearer box-token", "0.1.0", ""},
 	}
 	if !reflect.DeepEqual(*seen, want) {
 		t.Errorf("requests =\n%+v\nwant\n%+v", *seen, want)

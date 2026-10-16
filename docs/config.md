@@ -118,6 +118,8 @@ A class paused on the [dashboard](dashboard.md#pausing-a-class) is paused on eve
 
 By default the Worker makes one scale set per repository and class. That needs the App's repository permission **Administration** (read and write), which also lets the App change a repository's settings and delete it. For an organization, the Worker can instead make one scale set per class for the whole organization. The App then needs the organization permission **Self-hosted runners** (read and write) and **Metadata** (read), and nothing on its repositories.
 
+That permission is not narrower, only different. It covers every repository of the organization, not only those the App is installed on, and the runner group fences what the Worker does with it, not what the key can do. Whoever holds the App key can register a runner with any labels in any group, the **Default** group included, and set any group to admit all repositories or public ones, so a leaked key can take jobs, secrets and `GITHUB_TOKEN`s across the whole organization. With **Administration**, a leaked key can do that, and change or delete repositories, but only in the repositories the App is installed on. See [SECURITY.md](../SECURITY.md) and [the decision](decisions.md#organization-scale-sets-fenced-by-a-selected-runner-group).
+
 Two Worker variables, in `wrangler.jsonc` or the Worker's settings in the Cloudflare dashboard, turn it on:
 
 | Variable | Meaning |
@@ -125,7 +127,7 @@ Two Worker variables, in `wrangler.jsonc` or the Worker's settings in the Cloudf
 | `ORG` | The organization's login. Empty, the default, serves repositories one by one. |
 | `RUNNER_GROUP` | Required with `ORG`. The organization's runner group the scale sets go in, by name. |
 
-With only one of them set, or `ORG` not a login, the Worker answers every agent call with `503 not_configured` and the setup page is locked, each naming the variable.
+With only one of them set, or `ORG` not a login, the Worker answers every agent call with `503 not_configured` and the setup page is locked. The setup page names the variable; the agent's answer only says that `ORG` or `RUNNER_GROUP` is not valid, because the Worker gives it before it checks the box token, and the Worker's log (`wrangler tail`) says why.
 
 ### The runner group is the fence
 
@@ -134,7 +136,9 @@ An organization scale set takes the jobs of every repository its runner group ad
 - its repository access is **Selected repositories**, and
 - **Allow public repositories** is off, for the group and, for a group an enterprise shares with the organization, for the enterprise.
 
-It reads the group each time it lists the repositories, at most once a minute, and again from GitHub right before a session opens or is refreshed and before a runner is minted. While the group admits every repository, or every private one, the Worker serves none of the organization's repositories and answers `409 group_ineligible` with the reason, which `boxrunner doctor`, `boxrunner status` and the [dashboard](dashboard.md) show too. When the group allows public repositories, the Worker also deletes its organization scale sets, which disconnects their runners, as it does for a repository that turns public. Once the group is fixed, the agent creates them again within five minutes.
+It finds the group by name each time it lists the repositories, at most once a minute, and reads it again by its id from GitHub right before a session opens or is refreshed and before a runner is minted. While the group admits every repository, or every private one, the Worker serves none of the organization's repositories and answers `409 group_ineligible` with the reason, which `boxrunner doctor`, `boxrunner status` and the [dashboard](dashboard.md) show too. When the group allows public repositories, is renamed or is deleted (GitHub then moves its runners to the **Default** group), the Worker also deletes its organization scale sets, which disconnects their runners, as it does for a repository that turns public. Once the group is fixed, the agent creates them again within a minute.
+
+The Worker keeps the group each scale set was made in. Before a session or a runner, it also reads the scale set's group from GitHub, and deletes a scale set that is not in the group it just checked, by its own record or by GitHub's: one left in a group that was renamed while another took its name, or in the group `RUNNER_GROUP` named before it changed. Each listing deletes such scale sets too. The agent then makes a new one in the right group.
 
 The served repositories are the group's selected repositories that are private and not archived, narrowed by `REPOS` when it is set. A public repository in the group is not served, and GitHub gives the group no job of a public repository while public repositories are off.
 
@@ -149,9 +153,13 @@ The served repositories are the group's selected repositories that are private a
 
 The box's config does not change. The agent opens one session per class for the organization instead of one per repository and class, and acquires an offered job only when the Worker serves its repository and so does the class (`repos`). A job of any other repository stays queued at GitHub: the agent logs it once, `sudo boxrunner status` names the repository and how many of its jobs wait, and the `boxrunner_refused_jobs_total` [metric](#metrics) counts them. Take such a repository out of the group, or let the class serve it.
 
+The agent lists an organization's repositories every minute, not every five minutes, because it alone decides which offered jobs to acquire. GitHub offers a job once, so when a session opens and whenever the list changes, the agent also asks the Worker for the jobs still waiting for the scale set (`GET /v1/jobs`) and acquires those it now serves: a job turned down while a repository was not yet served runs once it is.
+
+`REPOS` is checked again by the Worker before each runner: the agent names the repositories of the jobs the scale set holds, and the Worker refuses the runner while one of them is not a repository it serves, as its listing says, at most a minute old. A runner takes whichever job its scale set holds, so such a job, acquired in the minute before a repository left `REPOS`, stops every new runner of the class until someone cancels it on GitHub. The agent logs that and holds the class's starts, backing off up to 30 minutes, rather than asking every few seconds.
+
 - **`repos`** narrows what a class acquires, as above. It cannot split one class over [several boxes](#several-boxes): a class has one scale set for the whole organization, and one session at a time reads it, so give each box its own classes instead.
 - **`warm`** keeps one idle runner for the class's organization scale set when it names any repository of the organization, since that runner takes jobs of every repository.
-- **Fork pull requests.** The App has no repository permission to read their settings with, so `doctor` and the dashboard do not warn about them. Check them in each repository's settings under **Actions**, **General**, or for the whole organization.
+- **Fork pull requests.** Reading their settings takes the permission **Administration**, on the organization (`GET /orgs/{org}/actions/permissions/fork-pr-workflows-private-repos`) or on each repository, and the App has neither. So the dashboard does not warn about them, and `doctor` says it cannot check them and links the organization's setting, **Fork pull request workflows in private repositories**, under **Settings**, **Actions**, **General**. Check it there and in each served repository.
 - **Finished jobs** are recorded under their own repository; runners and assigned jobs under the organization, as `octo (organization)` in `status` and `organization="octo"`, `repository=""` in the metrics, as actions-runner-controller labels an organization scale set.
 
 ### Switching a Worker that served repositories
@@ -165,12 +173,13 @@ The organization code is tested against a fake of GitHub's API built from [actio
 1. **The Free plan.** On a Free organization, open **Settings**, **Actions**, **Runner groups**. Note whether the **Default** group's repository access can be set to **Selected repositories**. If it cannot, the Worker refuses the group and organization mode does not work on Free.
 2. **The App.** Deploy the Worker with `ORG`, `RUNNER_GROUP` and `REPOS = "octo/site,octo/docs"`, run setup and install the App on the organization. On the App's page, check that it asks for **Self-hosted runners** (read and write) and **Metadata** (read) and nothing else.
 3. **The group.** Install an agent and run `sudo boxrunner doctor`. Its `organization` line should be OK and name 1 repository. A failure that the App lacks the permission means GitHub did not take the manifest key `organization_self_hosted_runners`.
-4. **The scale sets.** Under **Runner groups**, the group should list the scale sets `boxrunner` and `boxrunner-light`. If they are in another group, the Actions service's group id differs from the REST API's.
+4. **The scale sets.** Under **Runner groups**, the group should list the scale sets `boxrunner` and `boxrunner-light`. The Worker makes them only when the Actions service gives the group the same id as the REST API; if it does not, `doctor` and the agent's log show a `group_ineligible` error that names both ids, and organization mode needs a change to work.
 5. **A job.** Push a workflow with `runs-on: boxrunner` to `octo/site`. It should run on the box, and `sudo boxrunner status` should list the finished job under `octo/site`, not `octo`: that checks how a job names its repository.
 6. **The fences.** Push the same workflow to `octo/docs`: it should stay queued, and `status` should not mention it, because GitHub keeps it from the group. Push it to `octo/api`: it should stay queued, and `status` should say `octo boxrunner was offered 1 job of octo/api`.
-7. **A group that opens up.** Set the group's repository access to **All repositories**. Within a minute `doctor` should fail its `organization` line and new runners should not start. Set it back. Then turn on **Allow public repositories**: the scale sets should leave the group within a minute. Turn it off, and they should come back within five minutes.
+7. **A group that opens up.** Set the group's repository access to **All repositories**. Within a minute `doctor` should fail its `organization` line and new runners should not start. Set it back. Then turn on **Allow public repositories**: the scale sets should leave the group within a minute. Turn it off, and they should come back within a minute or two. Then rename the group and create a new one with the old name: within a minute the scale sets should leave the renamed group and appear in the new one.
 8. **Precedence.** Leave a repository scale set named `boxrunner` in `octo/site` from a Worker that served repositories, and push a job there. Note which scale set gets it.
 9. **Two classes, one box.** Queue jobs for `boxrunner` and `boxrunner-light` at once and check that both run.
+10. **Waiting jobs.** Stop the agent, queue a job in `octo/site`, then start the agent. The job should run within a minute: that checks `acquirablejobs`, which actions-runner-controller's first listener read when a session opened. Then add `octo/api` to `REPOS`: its queued job from step 6 should run within two minutes.
 
 ## Docker inside jobs
 

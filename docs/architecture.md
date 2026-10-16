@@ -58,11 +58,12 @@ A job queued while the box is down waits for it. When the box opens its session,
 
 ### For an organization
 
-With the Worker variables `ORG` and `RUNNER_GROUP` set, the Worker serves one organization with one scale set per class, in that runner group, instead of one per repository and class ([config](config.md#organizations)). The App then holds the organization permission Self-hosted runners instead of repository Administration. The steps above change in three places:
+With the Worker variables `ORG` and `RUNNER_GROUP` set, the Worker serves one organization with one scale set per class, in that runner group, instead of one per repository and class ([config](config.md#organizations)). The App then holds the organization permission Self-hosted runners instead of repository Administration. The steps above change in four places:
 
-- **Step 1.** `GET /v1/repos` lists the private, unarchived repositories the runner group admits, narrowed by `REPOS`, and names the organization. The Worker serves none of them while the group admits every repository, or every private one, or allows public repositories.
+- **Step 1.** `GET /v1/repos` lists the private, unarchived repositories the runner group admits, narrowed by `REPOS`, and names the organization. The Worker serves none of them while the group admits every repository, or every private one, or allows public repositories. The agent asks every minute.
 - **Step 2.** The agent asks for one scale set per class for the organization, and the scale set's name and label are the class name as before.
-- **Step 4.** An organization scale set is offered the jobs of every repository its group admits. The agent acquires a job only when its repository is in the list and its class serves it, and leaves the others queued at GitHub.
+- **Step 4.** An organization scale set is offered the jobs of every repository its group admits. The agent acquires a job only when its repository is in the list and its class serves it, and leaves the others queued at GitHub. When a session opens and whenever the list changes, it also reads the jobs still waiting (`GET /v1/jobs`) and acquires those it now serves, because GitHub offers a job once.
+- **Step 6.** The agent names the repositories of the jobs the scale set holds, and the Worker mints no runner while one of them is not a repository it serves.
 
 Not *measured*: no part of this has run against a real organization yet. [Config](config.md#not-checked-against-github-yet) lists the steps that check it.
 
@@ -240,9 +241,10 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 | `DELETE /v1/sessions/:id` | Close a session |
 | `POST /v1/runners` | Mint a one-job runner config for a scale set |
 | `DELETE /v1/runners/:id` | Remove a runner that has not taken a job |
+| `GET /v1/jobs` | The jobs an organization scale set may still acquire, of repositories the Worker serves |
 | `POST /v1/heartbeat` | Report the box's state for the dashboard; the answer names the paused classes |
 
-The Worker checks on every call that the scale set or runner belongs to a repository it serves, or with `ORG` to the organization. For an organization it reads the runner group instead of a repository's visibility: a group that stopped admitting only selected repositories gets the answer 409, and one that allows public repositories also has the organization's scale sets deleted. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
+The Worker checks on every call that the scale set or runner belongs to a repository it serves, or with `ORG` to the organization. For an organization it reads the runner group instead of a repository's visibility: a group that stopped admitting only selected repositories gets the answer 409, and one that allows public repositories, was renamed or was deleted also has the organization's scale sets deleted. It also reads the scale set's own group at GitHub and deletes a scale set in any group but the one it checked. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
 
 ## Agent commands
 

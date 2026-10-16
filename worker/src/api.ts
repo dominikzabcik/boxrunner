@@ -21,7 +21,11 @@ export async function handleApi(box: Box, request: Request, route: ApiRoute): Pr
 		const classes = box.classes();
 		if (!classes.ok) throw new ApiError('not_configured', `The Worker's ${classes.problem}.`);
 		const org = box.orgConfig();
-		if (!org.ok) throw new ApiError('not_configured', `The Worker's ${org.problem}.`);
+		if (!org.ok) {
+			// The value may name the organization; only the Worker's log, not an unauthenticated caller, sees it.
+			console.error(`The Worker's ${org.problem}.`);
+			throw new ApiError('not_configured', "The Worker's ORG or RUNNER_GROUP variable is not valid; the Worker's log says why.");
+		}
 		await authenticate(request, stored.boxTokenSha256);
 		const wait = box.spend(Date.now());
 		if (wait > 0) {
@@ -142,6 +146,8 @@ function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 			return mintRunner(context);
 		case 'runners.remove':
 			return removeRunner(context, route.id);
+		case 'jobs':
+			return acquirableJobs(context);
 	}
 }
 
@@ -184,7 +190,7 @@ async function openSession(context: Context) {
 	const id = field(parse.scaleSetId(input.scaleSetId), 'scaleSetId');
 	const owner = field(parse.boxName(input.owner), 'owner');
 	const scaleSet = await owned(context, asked, id);
-	await context.box.assertEligible(context.app, scaleSet.scope);
+	await context.box.assertEligible(context.app, scaleSet.scope, id);
 	const result = await context.box.actions(context.app, scaleSet.scope, (c) => github.openSession(c, id, owner));
 	if (result.kind === 'conflict') throw sessionExists(context, scaleSet, owner);
 	if (result.kind === 'open') context.box.store.holdSession(scopeId(scaleSet.scope), id, result.session.sessionId, owner);
@@ -206,7 +212,7 @@ async function refreshSession(context: Context, routeId: string) {
 	// Older agents send no owner. A session opened before the Worker kept holders gets one here.
 	const owner = input.owner === undefined ? undefined : field(parse.boxName(input.owner), 'owner');
 	const scaleSet = await owned(context, asked, id);
-	await context.box.assertEligible(context.app, scaleSet.scope);
+	await context.box.assertEligible(context.app, scaleSet.scope, id);
 	const result = await context.box.actions(context.app, scaleSet.scope, (c) => github.refreshSession(c, id, sessionId));
 	if (result.kind === 'open' && owner !== undefined) context.box.store.holdSession(scopeId(scaleSet.scope), id, result.session.sessionId, owner);
 	return sessionResponse(context, scaleSet, result, true);
@@ -227,7 +233,8 @@ async function mintRunner(context: Context) {
 	const id = field(parse.scaleSetId(input.scaleSetId), 'scaleSetId');
 	const runnerName = field(parse.runnerName(input.name), 'name');
 	const scaleSet = await owned(context, asked, id);
-	await context.box.assertEligible(context.app, scaleSet.scope);
+	if (scaleSet.scope.kind === 'org') await context.box.assertJobRepos(context.app, field(parse.jobRepos(input.jobRepos), 'jobRepos'));
+	await context.box.assertEligible(context.app, scaleSet.scope, id);
 	const result = await context.box.actions(context.app, scaleSet.scope, (c) => github.generateJitConfig(c, id, runnerName));
 	if (result.kind === 'gone') return gone(context, scaleSet);
 	return json({ runnerId: result.runnerId, jitConfig: result.jitConfig });
@@ -246,4 +253,21 @@ async function removeRunner(context: Context, routeId: string) {
 	if (outcome === 'foreign') throw new ApiError('not_found', `Runner ${runnerId} does not belong to scale set ${scaleSetId}.`);
 	if (outcome === 'busy') throw new ApiError('runner_busy', `Runner ${runnerId} is running a job.`);
 	return noContent();
+}
+
+/**
+ * The jobs an organization scale set may still acquire, of repositories the
+ * Worker serves. GitHub offers a job once; the agent asks here when a session
+ * opens and when its list of repositories changes, for the jobs it turned down.
+ */
+async function acquirableJobs(context: Context) {
+	const { asked, scaleSetId } = query(context.request);
+	const scaleSet = await owned(context, asked, scaleSetId);
+	const jobs = await context.box.actions(context.app, scaleSet.scope, (c) => github.acquirableJobs(c, scaleSetId));
+	if (jobs === undefined) return gone(context, scaleSet);
+	const { scope } = scaleSet;
+	if (scope.kind === 'repo') return json({ jobs });
+	const served = new Set((await context.box.repos(context.app)).map((repo) => repo.name.toLowerCase()));
+	const name = (job: github.AcquirableJob) => (job.repositoryName.includes('/') ? job.repositoryName : `${job.ownerName || scope.org.login}/${job.repositoryName}`);
+	return json({ jobs: jobs.filter((job) => job.repositoryName !== '' && served.has(name(job).toLowerCase())) });
 }

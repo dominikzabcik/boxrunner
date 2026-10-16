@@ -72,6 +72,8 @@ export class FakeGitHub {
 	sessions = new Map<string, string>();
 	private scaleSetIds = new Map<number, number>();
 	runners = new Map<number, { scaleSetId: number; repoId: number; busy: boolean }>();
+	/** Jobs waiting for a scale set that it has not acquired, by `scope/id`, in the Actions service's shape. */
+	acquirable = new Map<string, Record<string, unknown>[]>();
 	/** What the installation granted the App; GitHub refuses a token that asks for more. */
 	granted: Record<string, 'read' | 'write'> = { administration: 'write', metadata: 'read' };
 	/** Fork pull request settings by repository id, as GitHub's REST API names them; a repository missing here allows none. */
@@ -326,7 +328,17 @@ export class FakeGitHub {
 			const id = Number(scaleSet[1]);
 			const key = scaleSetKey(repoId, id);
 			const rest = scaleSet[2] ?? '';
-			if (!this.scaleSets.has(key)) return json({ typeName: 'RunnerScaleSetNotFoundException' }, 404);
+			const found = this.scaleSets.get(key);
+			if (!found) return json({ typeName: 'RunnerScaleSetNotFoundException' }, 404);
+			if (method === 'GET' && rest === '') {
+				const group = this.runnerGroups.find((candidate) => candidate.id === found.runnerGroupId);
+				return json({ id, name: found.name, runnerGroupId: found.runnerGroupId, runnerGroupName: group?.name ?? 'Default', labels: [{ name: found.name, type: 'System' }] });
+			}
+			if (method === 'GET' && rest === '/acquirablejobs') {
+				const jobs = this.acquirable.get(key) ?? [];
+				if (jobs.length === 0) return new Response(null, { status: 204 });
+				return json({ count: jobs.length, value: jobs });
+			}
 			if (method === 'DELETE' && rest === '') {
 				this.scaleSets.delete(key);
 				this.sessions.delete(key);

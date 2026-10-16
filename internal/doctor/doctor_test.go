@@ -386,3 +386,10 @@ func TestOrganization(t *testing.T) {
 		t.Errorf("Organization = %+v, want %+v", got, want)
 	}
 }
+
+func TestOrgForks(t *testing.T) {
+	want := Result{"fork PRs", true, `cannot check them: reading the fork pull request settings takes the permission Administration, which the App serving an organization does not have. Check "Fork pull request workflows in private repositories" at https://github.com/organizations/octo/settings/actions and in each served repository's Settings, Actions, General`}
+	if got := OrgForks("octo"); got != want {
+		t.Errorf("OrgForks = %+v, want %+v", got, want)
+	}
+}

@@ -368,11 +368,28 @@ func (c *Client) CloseSession(ctx context.Context, repo string, scaleSetID int64
 	return err
 }
 
-func (c *Client) MintRunner(ctx context.Context, repo string, scaleSetID int64, name string) (Runner, error) {
+// MintRunner mints a one-job runner. For an organization scale set, jobRepos
+// are the repositories of the jobs it holds that no runner has taken: the
+// Worker refuses the runner while one of them is not a repository it serves.
+func (c *Client) MintRunner(ctx context.Context, repo string, scaleSetID int64, name string, jobRepos []string) (Runner, error) {
 	var out Runner
-	err := c.do(ctx, "mint runner", http.MethodPost, "/v1/runners", nil,
-		map[string]any{scopeField(repo): repo, "scaleSetId": scaleSetID, "name": name}, &out)
+	in := map[string]any{scopeField(repo): repo, "scaleSetId": scaleSetID, "name": name}
+	if IsOrg(repo) {
+		in["jobRepos"] = append([]string{}, jobRepos...)
+	}
+	err := c.do(ctx, "mint runner", http.MethodPost, "/v1/runners", nil, in, &out)
 	return out, err
+}
+
+// AcquirableJobs lists the jobs an organization scale set may still acquire,
+// of repositories the Worker serves. GitHub offers a job in one message, so
+// one the agent turned down is found here once it serves the repository.
+func (c *Client) AcquirableJobs(ctx context.Context, repo string, scaleSetID int64) ([]queue.Job, error) {
+	var out struct {
+		Jobs []queue.Job `json:"jobs"`
+	}
+	err := c.do(ctx, "list acquirable jobs", http.MethodGet, "/v1/jobs", scaleSetQuery(repo, scaleSetID), nil, &out)
+	return out.Jobs, err
 }
 
 // RemoveRunner removes a runner that has not taken a job. One already gone

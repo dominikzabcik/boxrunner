@@ -25,7 +25,8 @@ export type ApiRoute =
 	| { name: 'sessions.refresh'; id: string }
 	| { name: 'sessions.close'; id: string }
 	| { name: 'runners.mint' }
-	| { name: 'runners.remove'; id: string };
+	| { name: 'runners.remove'; id: string }
+	| { name: 'jobs' };
 
 /** GitHub's webhook deliveries for the App. */
 export type WebhookRoute = { name: 'webhook' };
@@ -57,6 +58,7 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['DELETE', /^\/v1\/sessions\/([^/]+)$/, (id) => ({ name: 'sessions.close', id })],
 	['POST', /^\/v1\/runners$/, () => ({ name: 'runners.mint' })],
 	['DELETE', /^\/v1\/runners\/([^/]+)$/, (id) => ({ name: 'runners.remove', id })],
+	['GET', /^\/v1\/jobs$/, () => ({ name: 'jobs' })],
 ];
 
 const decode = (segment: string) => {

@@ -305,8 +305,14 @@ type fakeGitHub struct {
 	list   string
 	tags   map[string]string
 	// org, when set, is the organization the Worker serves; it then lists
-	// octo/site and octo/docs, the private repositories its runner group admits.
-	org string
+	// orgRepos, the private repositories its runner group admits, octo/site
+	// and octo/docs when nil.
+	org      string
+	orgRepos []string
+	// waiting is the jobs GET /v1/jobs lists, none when empty, and refuseMint
+	// makes the Worker refuse every runner with repo_ineligible.
+	waiting    string
+	refuseMint bool
 	// acquired are the bodies of the acquire calls, the jobs the agent took.
 	acquired []string
 }
@@ -345,9 +351,18 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			g.mu.Unlock()
 			serving := slices.DeleteFunc([]string{"boxrunner", "boxrunner-light"}, func(c string) bool { return slices.Contains(paused, c) })
 			if g.org != "" {
+				g.mu.Lock()
+				names := g.orgRepos
+				if names == nil {
+					names = []string{"octo/site", "octo/docs"}
+				}
+				repos := []map[string]any{}
+				for i, name := range names {
+					repos = append(repos, map[string]any{"name": name, "id": 123 + i})
+				}
+				g.mu.Unlock()
 				json.NewEncoder(w).Encode(map[string]any{
-					"repos":   []map[string]any{{"name": "octo/site", "id": 123}, {"name": "octo/docs", "id": 124}},
-					"classes": serving, "paused": paused,
+					"repos": repos, "classes": serving, "paused": paused,
 					"organization": map[string]string{"name": g.org, "group": "boxrunner", "problem": ""},
 				})
 				return
@@ -362,8 +377,15 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			io.WriteString(w, session)
 		case strings.HasPrefix(r.URL.Path, "/v1/sessions/"):
 			w.WriteHeader(204)
+		case r.URL.Path == "/v1/runners" && g.refuseMint:
+			w.WriteHeader(410)
+			io.WriteString(w, `{"error":"repo_ineligible","message":"octo/docs is not a repository this Worker serves, so it mints no runner for its job."}`)
 		case r.URL.Path == "/v1/runners":
 			io.WriteString(w, `{"runnerId":41,"jitConfig":"jit-41"}`)
+		case r.URL.Path == "/v1/jobs":
+			g.mu.Lock()
+			fmt.Fprintf(w, `{"jobs":%s}`, cmp.Or(g.waiting, "[]"))
+			g.mu.Unlock()
 		case strings.HasPrefix(r.URL.Path, "/v1/runners/"):
 			if g.busy[strings.TrimPrefix(r.URL.Path, "/v1/runners/")] {
 				w.WriteHeader(409)
@@ -442,6 +464,8 @@ type harness struct {
 	upstream     dnsfwd.Upstream
 	// guardEvery is how often the egress rules are checked, 50 ms when zero.
 	guardEvery time.Duration
+	// reposEvery is how often an organization's repositories are listed, a minute when zero.
+	reposEvery time.Duration
 	// logs is what the agent logged.
 	logs *logBuffer
 	// metrics is where the agent serves metrics, none when zero.
@@ -518,6 +542,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
 			Tick:                 50 * time.Millisecond,
 			HeartbeatEvery:       50 * time.Millisecond,
+			ReposEvery:           h.reposEvery,
 			SysboxDir:            t.TempDir(),
 			CgroupDir:            h.cgroup,
 			CacheDir:             t.TempDir(),
@@ -638,18 +663,21 @@ func TestJobLifecycle(t *testing.T) {
 
 // An organization scale set is offered the jobs of every repository its
 // runner group admits; the agent takes only those of repositories both the
-// Worker and the class serve, and records each job under its own repository.
+// Worker and the class serve, names their repositories when it mints a
+// runner, and records each job under its own repository. GitHub offers a job
+// once, so a job turned down while the Worker did not serve its repository is
+// found among the waiting jobs once it does.
 func TestOrganizationScaleSet(t *testing.T) {
 	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) {
 		h.github.org = "octo"
-		c.Repos = []string{"octo/site", "octo/secret"}
+		h.github.orgRepos = []string{"octo/site"}
+		h.reposEvery = 50 * time.Millisecond
+		c.Repos = []string{"octo/site", "octo/docs", "octo/secret"}
 	})
 	h.github.queue <- message(1, 1,
 		`{"messageType":"JobAvailable","runnerRequestId":501,"repositoryName":"site","ownerName":"octo","queueTime":"2026-10-13T21:00:00Z"}`,
 		`{"messageType":"JobAvailable","runnerRequestId":502,"repositoryName":"docs","ownerName":"octo","jobDisplayName":"lint"}`,
 		`{"messageType":"JobAvailable","runnerRequestId":503,"repositoryName":"secret","ownerName":"octo"}`)
-	// GitHub offers a job it could not place again; the agent counts it once.
-	h.github.queue <- message(2, 1, `{"messageType":"JobAvailable","runnerRequestId":502,"repositoryName":"docs","ownerName":"octo","jobDisplayName":"lint"}`)
 
 	var name string
 	waitFor(t, "a running job container", func() bool {
@@ -660,13 +688,20 @@ func TestOrganizationScaleSet(t *testing.T) {
 		return false
 	})
 	h.waitLog(t, "was offered a job of a repository this box does not serve", "repo=octo/docs", "job=lint")
-	h.github.queue <- message(3, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"repositoryName":"site","ownerName":"octo"}`, name))
-	h.github.queue <- message(4, 0, fmt.Sprintf(`{"messageType":"JobCompleted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"result":"succeeded","jobDisplayName":"test",
+	h.github.queue <- message(2, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"repositoryName":"site","ownerName":"octo"}`, name))
+	h.github.queue <- message(3, 0, fmt.Sprintf(`{"messageType":"JobCompleted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"result":"succeeded","jobDisplayName":"test",
 		"repositoryName":"site","ownerName":"octo","queueTime":"2026-10-13T21:00:00Z","runnerAssignTime":"2026-10-13T21:00:08Z","finishTime":"2026-10-13T21:03:00Z"}`, name))
 	waitFor(t, "the finished job's container to go", func() bool { return len(h.docker.snapshot()) == 0 })
-	waitFor(t, "the second offer of octo/docs's job", func() bool {
-		snap, err := status.Fetch(context.Background(), h.socket)
-		return err == nil && len(snap.ScaleSets) == 1 && snap.ScaleSets[0].Assigned == 0
+
+	// The Worker now serves octo/docs; its job still waits, and GitHub does not offer it again.
+	h.github.mu.Lock()
+	h.github.orgRepos = []string{"octo/site", "octo/docs"}
+	h.github.waiting = `[{"runnerRequestId":502,"repositoryName":"docs","ownerName":"octo"}]`
+	h.github.mu.Unlock()
+	waitFor(t, "octo/docs's waiting job to be acquired", func() bool {
+		h.github.mu.Lock()
+		defer h.github.mu.Unlock()
+		return len(h.github.acquired) == 2
 	})
 	snap, err := status.Fetch(context.Background(), h.socket)
 	if err != nil {
@@ -674,18 +709,25 @@ func TestOrganizationScaleSet(t *testing.T) {
 	}
 	h.stop(t)
 
+	var calls []string
+	for _, call := range h.github.workerCalls() {
+		if call != "GET /v1/repos" {
+			calls = append(calls, call)
+		}
+	}
 	wantCalls := []string{
-		"GET /v1/repos",
 		`POST /v1/scalesets {"class":"boxrunner","org":"octo"}`,
 		`POST /v1/sessions {"org":"octo","owner":"box-1","scaleSetId":7}`,
-		fmt.Sprintf(`POST /v1/runners {"name":%q,"org":"octo","scaleSetId":7}`, name),
+		"GET /v1/jobs?org=octo&scaleSetId=7",
+		fmt.Sprintf(`POST /v1/runners {"jobRepos":["octo/site"],"name":%q,"org":"octo","scaleSetId":7}`, name),
+		"GET /v1/jobs?org=octo&scaleSetId=7",
 		"DELETE /v1/sessions/s1?org=octo&scaleSetId=7",
 	}
-	if got := h.github.workerCalls(); !reflect.DeepEqual(got, wantCalls) {
-		t.Errorf("worker calls =\n%q\nwant\n%q", got, wantCalls)
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Errorf("worker calls =\n%q\nwant\n%q", calls, wantCalls)
 	}
-	if got := h.github.acquired; !reflect.DeepEqual(got, []string{"[501]"}) {
-		t.Errorf("acquired %q, want only octo/site's job", got)
+	if got := h.github.acquired; !reflect.DeepEqual(got, []string{"[501]", "[502]"}) {
+		t.Errorf("acquired %q, want octo/site's job, then octo/docs's", got)
 	}
 	wantSets := []status.ScaleSet{{Repo: "octo", Class: "boxrunner", Refused: map[string]int{"octo/docs": 1, "octo/secret": 1}}}
 	if !reflect.DeepEqual(snap.ScaleSets, wantSets) {
@@ -697,6 +739,43 @@ func TestOrganizationScaleSet(t *testing.T) {
 	jobs, _ := status.Recent(h.jobs, 10)
 	if len(jobs) != 1 || jobs[0].Repo != "octo/site" {
 		t.Errorf("job log = %+v; want the job under octo/site", jobs)
+	}
+}
+
+// While an organization scale set holds a job of a repository the Worker no
+// longer serves, the Worker refuses every runner; the class backs off rather
+// than asking every tick.
+func TestOrganizationMintRefused(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.github.org = "octo"
+		h.github.refuseMint = true
+	})
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501,"repositoryName":"docs","ownerName":"octo"}`)
+	var held time.Time
+	waitFor(t, "the class to hold its starts", func() bool {
+		snap, err := status.Fetch(context.Background(), h.socket)
+		if err != nil || len(snap.Classes) == 0 {
+			return false
+		}
+		held = snap.Classes[0].HeldUntil
+		return !held.IsZero()
+	})
+	h.waitLog(t, "the Worker refuses a runner while the organization's scale set holds a job of a repository it does not serve", "octo/docs is not a repository this Worker serves")
+	h.stop(t)
+	mints := 0
+	for _, call := range h.github.workerCalls() {
+		if strings.HasPrefix(call, "POST /v1/runners ") {
+			mints++
+			if !strings.Contains(call, `"jobRepos":["octo/docs"]`) {
+				t.Errorf("mint %s does not name octo/docs", call)
+			}
+		}
+	}
+	if mints != 3 {
+		t.Errorf("%d mints before the class held its starts, want 3", mints)
+	}
+	if time.Until(held) < 50*time.Second {
+		t.Errorf("held until %v, want about a minute from now", held)
 	}
 }
 

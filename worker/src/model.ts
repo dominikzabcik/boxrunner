@@ -105,6 +105,12 @@ export const parse = {
 	sessionId: (value: unknown) => matching<SessionId>(uuidPattern)(value)?.toLowerCase() as SessionId | undefined,
 	scaleSetId: (value: unknown) => positiveInteger(value) as ScaleSetId | undefined,
 	runnerId: (value: unknown) => positiveInteger(value) as RunnerId | undefined,
+	/** The repositories of the jobs an organization scale set holds for runners to take: at most 128, each owner/name. */
+	jobRepos: (value: unknown): RepoName[] | undefined => {
+		if (!Array.isArray(value) || value.length > 128) return undefined;
+		const repos = value.map((repo) => matching<RepoName>(repoPattern)(repo));
+		return repos.every((repo) => repo !== undefined) ? (repos as RepoName[]) : undefined;
+	},
 };
 
 // GitHub-hosted runners answer to these labels; a scale set named after one

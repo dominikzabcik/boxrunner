@@ -20,15 +20,15 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 | 400 | `bad_request` | Malformed body or a missing field | Logs it as a bug and does not retry |
 | 400 | `unknown_class` | The class, or the class a scale set was made for, is not in the Worker's `CLASSES` | Stops serving that class and logs which classes exist |
 | 401 | `unauthorized` | Missing or wrong box token | Stops and logs that the token is wrong |
-| 404 | `not_found` | Unknown scale set, session or runner for this repository, or a scale set GitHub no longer has | Treats it as already gone; for a scale set, calls `POST /v1/scalesets` again |
+| 404 | `not_found` | Unknown scale set, session or runner for this repository, a scale set GitHub no longer has, or with `ORG` one the Worker deleted because it was not in the runner group it checked | Treats it as already gone; for a scale set, calls `POST /v1/scalesets` again |
 | 409 | `session_exists` | Another session holds the scale set; `heldBy` names the box that opened it when that is another box that still reports | Retries with backoff; with `heldBy`, tries again within five minutes and names that box in `status` and `doctor` |
 | 409 | `runner_busy` | The runner already took a job | Leaves the runner alone |
-| 409 | `group_ineligible` | With `ORG`, the organization's runner group admits every repository or every private one, allows public repositories, or is missing, or the App is not installed on the organization or lacks its permission; `message` says which | Stops listening to that scale set and tries again within five minutes |
-| 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed. Also a repository's scale set from a Worker that serves an organization, and the reverse | Stops serving the repository |
+| 409 | `group_ineligible` | With `ORG`, the organization's runner group admits every repository or every private one, allows public repositories, is missing, was renamed or deleted, or has another id in the Actions service than in the REST API, or the App is not installed on the organization or lacks its permission; `message` says which | Stops listening to that scale set and tries again within a minute |
+| 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed. Also a repository's scale set from a Worker that serves an organization, and the reverse, and a runner for an organization scale set that holds a job of a repository the Worker does not serve | Stops serving the repository; for that runner, holds the class's starts with backoff |
 | 426 | `upgrade_required` | The agent's major version differs from the Worker's | Stops and logs the upgrade command |
 | 429 | `rate_limited` | Too many requests for this box token | Backs off |
 | 502 | `github_error` | GitHub answered with an error; `message` names the call and status | Backs off |
-| 503 | `not_configured` | Setup has not finished, or `CLASSES`, `ORG` or `RUNNER_GROUP` is unreadable (the message says why) | Stops and logs the setup URL |
+| 503 | `not_configured` | Setup has not finished, or `CLASSES`, `ORG` or `RUNNER_GROUP` is unreadable. The message says why, except for `ORG` and `RUNNER_GROUP`: the Worker answers before it checks the box token, so it says only that one of them is not valid and logs the reason | Stops and logs the setup URL |
 
 Repositories are named `owner/name` and matched case-insensitively. Scale set ids are numbers. Session ids are UUIDs.
 
@@ -73,7 +73,7 @@ With `ORG` set, `repos` are the private, unarchived repositories the runner grou
 
 ## `POST /v1/scalesets`
 
-Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name, in the default runner group. With `ORG`, the body names `org` instead of `repo`, and the scale set is the organization's, in the runner group `RUNNER_GROUP`, whose id the Worker looks up by name in the Actions service as actions-runner-controller does. Runner self-update stays on. A scale set that already exists at GitHub under that name is adopted rather than duplicated, and concurrent calls create one.
+Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name, in the default runner group. With `ORG`, the body names `org` instead of `repo`, and the scale set is the organization's, in the runner group `RUNNER_GROUP`, whose id the Worker looks up by name in the Actions service as actions-runner-controller does. That id must be the one the REST API gave the group the Worker checked, or it answers `409 group_ineligible`, so a group renamed in between cannot take the scale set. The Worker keeps the group id with the scale set; a scale set it holds in another group is deleted and made again. Runner self-update stays on. A scale set that already exists at GitHub under that name is adopted rather than duplicated, and concurrent calls create one.
 
 Request:
 
@@ -145,6 +145,12 @@ Closes a session. Answers 204, including when the session was already gone.
 
 Mints a one-job runner config for a scale set. The Worker checks the repository's visibility first. `name` is unique on the box and at most 64 characters of `[a-z0-9-]`.
 
+With `ORG`, the body names `org` and `jobRepos`, the repositories (`owner/name`) of the jobs the scale set holds that no runner has taken, at most 128 and possibly none. A runner takes whichever of them comes first, so the Worker answers `410 repo_ineligible` while any of them is not a repository it serves, as its repository list says, at most a minute old:
+
+```json
+{ "org": "octo", "scaleSetId": 7, "name": "box-1-boxrunner-3f9a2c", "jobRepos": ["octo/site"] }
+```
+
 Request:
 
 ```json
@@ -162,6 +168,20 @@ The agent passes `jitConfig` to the container as `ACTIONS_RUNNER_INPUT_JITCONFIG
 ## `DELETE /v1/runners/{runnerId}?repo=octo/site&scaleSetId=7`
 
 Removes a runner that has not taken a job. Answers 204, including when the runner was already gone, `409 runner_busy` when it is running a job, and `404 not_found` when the runner belongs to another scale set.
+
+## `GET /v1/jobs?org=octo&scaleSetId=7`
+
+The jobs a scale set may still acquire. GitHub offers a job in one message; this reads the ones still waiting, through the Actions service's `_apis/runtime/runnerscalesets/{id}/acquirablejobs` with the admin connection, as actions-runner-controller's first listener did when a session opened. With `ORG`, only jobs of repositories the Worker serves are listed. The agent asks when a session opens and whenever its repository list changes, and acquires the ones it serves through the queue, as it does an offered job.
+
+```json
+{
+  "jobs": [
+    { "runnerRequestId": 502, "ownerName": "octo", "repositoryName": "docs", "jobWorkflowRef": "octo/docs/.github/workflows/ci.yml@refs/heads/main", "eventName": "push", "requestLabels": ["boxrunner"] }
+  ]
+}
+```
+
+`404 not_found` when GitHub no longer has the scale set.
 
 ## `POST /v1/heartbeat`
 
@@ -249,7 +269,8 @@ The box token, compared in constant time. Then, on every call but `POST /v1/hear
 - The repository is in the list `GET /v1/repos` would return.
 - The class is in `CLASSES`.
 - The scale set id belongs to that repository and was created for one of the Worker's classes.
-- With `ORG`: the request names the organization `ORG` names, and the runner group admits only selected repositories and no public one. Before a session opens, is refreshed or a runner is minted, the Worker reads the group fresh from GitHub. If it now allows public repositories, the Worker deletes the organization's scale sets; either way it answers `409 group_ineligible`.
+- With `ORG`: the request names the organization `ORG` names, and the runner group admits only selected repositories and no public one. Before a session opens, is refreshed or a runner is minted, the Worker reads the group fresh from GitHub by its id. If it now allows public repositories, has another name or is gone (GitHub moves a deleted group's runners to the Default group), the Worker deletes the organization's scale sets; either way it answers `409 group_ineligible`. It then reads the scale set's group at GitHub: a scale set that is not in the group just read, by GitHub's answer or the Worker's record, is deleted and answers `404 not_found`. Each listing deletes the scale sets the Worker made in any other group.
+- With `ORG`, before a runner is minted: every repository in `jobRepos` is one the Worker serves (`410 repo_ineligible`).
 - Before a session opens, is refreshed or a runner is minted: the repository is still private, read fresh from GitHub. If it turned public, the Worker deletes every scale set it made for the repository and answers `410 repo_ineligible`; if deleting fails, it answers `502 github_error` and deletes on the next call. An archived repository or one the App left also gets `410 repo_ineligible`.
 - When `GET /v1/repos` reads the list fresh (at most once a minute), the Worker deletes the scale sets of every repository it holds them for and no longer serves. Where the App was removed it cannot delete them and only forgets them; any other failure waits for the next listing.
 - Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners, `actions_variables: write` to set or delete the [fallback](fallback.md) variable. With `ORG`, the tokens that register runners and read the runner group are for the organization's installation and carry only `organization_self_hosted_runners`, `write` and `read`.

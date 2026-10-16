@@ -30,8 +30,10 @@ const tokenRequests = (github: FakeGitHub) =>
 	github.calls.filter((call) => call.path.endsWith('/access_tokens')).map((call) => call.body as { repository_ids?: number[]; permissions: Record<string, string> });
 
 describe('ORG and RUNNER_GROUP', () => {
-	it('stop the API and setup while only one of them is set or ORG is not a login', async () => {
+	it('stop the API and setup while only one of them is set or ORG is not a login, and tell only the Worker’s log why', async () => {
 		const { call } = await ready();
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const stranger = agent('not-the-box-token');
 		const cases: [Record<string, string>, string][] = [
 			[{ ORG: 'octo', RUNNER_GROUP: '' }, "The Worker's ORG is set without RUNNER_GROUP, the runner group its scale sets go in."],
 			[{ ORG: '', RUNNER_GROUP: 'boxrunner' }, "The Worker's RUNNER_GROUP is set without ORG."],
@@ -40,8 +42,11 @@ describe('ORG and RUNNER_GROUP', () => {
 		];
 		for (const [vars, message] of cases) {
 			await withEnv(vars, async () => {
-				await expectError(await call('GET', '/v1/repos'), 503, 'not_configured', message);
+				for (const caller of [stranger, call]) {
+					await expectError(await caller('GET', '/v1/repos'), 503, 'not_configured', "The Worker's ORG or RUNNER_GROUP variable is not valid; the Worker's log says why.");
+				}
 			});
+			expect(logged).toHaveBeenLastCalledWith(message);
 		}
 	});
 });
@@ -88,7 +93,7 @@ describe('serving an organization', () => {
 			const opened = await call('POST', '/v1/sessions', { org: 'octo', scaleSetId: id, owner: 'box-1' });
 			expect(opened.status).toBe(200);
 			const { sessionId } = (await opened.json()) as { sessionId: string };
-			const minted = await call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c' });
+			const minted = await call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c', jobRepos: ['octo/site'] });
 			expect(minted.status).toBe(200);
 			const { runnerId } = (await minted.json()) as { runnerId: number };
 			expect((await call('DELETE', `/v1/runners/${runnerId}?org=octo&scaleSetId=${id}`)).status).toBe(204);
@@ -202,7 +207,7 @@ describe('the runner group', () => {
 			github.runnerGroups[1]!.visibility = 'selected';
 			github.runnerGroups[1]!.allows_public_repositories = true;
 			await expectError(
-				await call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c' }),
+				await call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c', jobRepos: [] }),
 				409,
 				'group_ineligible',
 				'The runner group “boxrunner” of octo allows public repositories; turn off “Allow public repositories” in its settings.',
@@ -227,6 +232,131 @@ describe('the runner group', () => {
 			expect((await call('GET', '/v1/repos')).status).toBe(200);
 		});
 		expect(github.scaleSets.has(scaleSetKey(123, repoScaleSet))).toBe(false);
+	});
+});
+
+describe('the scale sets’ runner group', () => {
+	const open = (call: Agent, id: number) => call('POST', '/v1/sessions', { org: 'octo', scaleSetId: id, owner: 'box-1' });
+	const mint = (call: Agent, id: number) => call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c', jobRepos: [] });
+
+	it('is the group the Worker checked: a scale set left in a renamed group is deleted, and the group that took the name gets a new one', async () => {
+		const { github, call } = await ready();
+		vi.useFakeTimers({ toFake: ['Date'] });
+		await withEnv(org, async () => {
+			const id = await scaleSet(call);
+			Object.assign(github.runnerGroups[1]!, { name: 'old', visibility: 'all', allows_public_repositories: true });
+			github.runnerGroups.push({ id: 3, name: 'boxrunner', visibility: 'selected', allows_public_repositories: false, repos: [123] });
+			vi.setSystemTime(Date.now() + 61_000);
+			await expectError(await open(call, id), 404, 'not_found', `Scale set ${id} is not one this Worker made for octo.`);
+			expect(github.scaleSets.has(scaleSetKey(orgScope, id))).toBe(false);
+
+			const again = await scaleSet(call);
+			expect(github.scaleSets.get(scaleSetKey(orgScope, again))).toEqual({ name: 'boxrunner', repoId: orgScope, runnerGroupId: 3 });
+			expect((await open(call, again)).status).toBe(200);
+			expect((await mint(call, again)).status).toBe(200);
+		});
+	});
+
+	it('loses its scale sets when it is renamed, even before the listing finds the new name', async () => {
+		const { github, call } = await ready();
+		await withEnv(org, async () => {
+			const id = await scaleSet(call);
+			github.runnerGroups[1]!.name = 'old';
+			await expectError(await open(call, id), 409, 'group_ineligible', 'The runner group “boxrunner” of octo is now named “old”, so the Worker deleted its scale sets.');
+			expect(github.scaleSets.has(scaleSetKey(orgScope, id))).toBe(false);
+		});
+	});
+
+	it('follows RUNNER_GROUP: the scale sets of the group it named before are deleted', async () => {
+		const { github, call } = await ready();
+		vi.useFakeTimers({ toFake: ['Date'] });
+		let id = 0;
+		await withEnv(org, async () => {
+			id = await scaleSet(call);
+		});
+		github.runnerGroups[1]!.visibility = 'all';
+		github.runnerGroups.push({ id: 3, name: 'newgroup', visibility: 'selected', allows_public_repositories: false, repos: [123] });
+		vi.setSystemTime(Date.now() + 61_000);
+		await withEnv({ ORG: 'octo', RUNNER_GROUP: 'newgroup' }, async () => {
+			expect((await call('GET', '/v1/repos')).status).toBe(200);
+			expect(github.scaleSets.has(scaleSetKey(orgScope, id))).toBe(false);
+			await expectError(await mint(call, id), 404, 'not_found', `Scale set ${id} is not one this Worker made for octo.`);
+			const again = await scaleSet(call);
+			expect(github.scaleSets.get(scaleSetKey(orgScope, again))).toEqual({ name: 'boxrunner', repoId: orgScope, runnerGroupId: 3 });
+		});
+	});
+
+	it('is deleted: GitHub moves its scale sets to the Default group, and the Worker deletes them', async () => {
+		const { github, call } = await ready();
+		await withEnv(org, async () => {
+			const id = await scaleSet(call);
+			github.runnerGroups.splice(1, 1);
+			github.scaleSets.get(scaleSetKey(orgScope, id))!.runnerGroupId = 1;
+			await expectError(
+				await mint(call, id),
+				409,
+				'group_ineligible',
+				'The runner group “boxrunner” of octo was deleted, which moves its runners to the Default group, so the Worker deleted its scale sets.',
+			);
+			expect(github.scaleSets.has(scaleSetKey(orgScope, id))).toBe(false);
+		});
+	});
+
+	it('is read at GitHub for the scale set itself: one in another group is deleted before a session or a runner', async () => {
+		const { github, call } = await ready();
+		await withEnv(org, async () => {
+			const id = await scaleSet(call);
+			github.scaleSets.get(scaleSetKey(orgScope, id))!.runnerGroupId = 1;
+			await expectError(await open(call, id), 404, 'not_found', `Scale set ${id} is not in the runner group “boxrunner”, so the Worker deleted it; find or create it again.`);
+			expect(github.scaleSets.has(scaleSetKey(orgScope, id))).toBe(false);
+			const again = await scaleSet(call);
+			expect(github.scaleSets.get(scaleSetKey(orgScope, again))?.runnerGroupId).toBe(2);
+			expect((await mint(call, again)).status).toBe(200);
+		});
+	});
+});
+
+describe('a runner for an organization scale set', () => {
+	it('is minted only while every job the agent acquired is of a repository the Worker serves', async () => {
+		const { github, call } = await ready();
+		await withEnv({ ...org, REPOS: 'octo/site' }, async () => {
+			const id = await scaleSet(call);
+			const mint = (jobRepos?: unknown) => call('POST', '/v1/runners', { org: 'octo', scaleSetId: id, name: 'box-1-boxrunner-3f9a2c', jobRepos });
+			await expectError(await mint(['octo/site', 'octo/docs']), 410, 'repo_ineligible', 'octo/docs is not a repository this Worker serves, so it mints no runner for its job.');
+			await expectError(await mint(), 400, 'bad_request', '"jobRepos" is missing or malformed.');
+			expect(github.runners.size).toBe(0);
+			expect((await mint(['Octo/Site'])).status).toBe(200);
+			expect((await mint([])).status).toBe(200);
+		});
+	});
+});
+
+describe('GET /v1/jobs', () => {
+	it('lists the jobs an organization scale set may still acquire, of repositories the Worker serves', async () => {
+		const { github, call } = await ready();
+		await withEnv({ ...org, REPOS: 'octo/site' }, async () => {
+			const id = await scaleSet(call);
+			const listed = async () => {
+				const response = await call('GET', `/v1/jobs?org=octo&scaleSetId=${id}`);
+				expect(response.status).toBe(200);
+				return response.json();
+			};
+			expect(await listed()).toEqual({ jobs: [] });
+			const job = (runnerRequestId: number, repositoryName: string) => ({
+				acquireJobUrl: 'https://actions.fake.test/acquire',
+				messageType: 'JobAvailable',
+				runnerRequestId,
+				repositoryName,
+				ownerName: 'octo',
+				jobWorkflowRef: 'octo/x/.github/workflows/ci.yml@refs/heads/main',
+				eventName: 'push',
+				requestLabels: ['boxrunner'],
+			});
+			github.acquirable.set(scaleSetKey(orgScope, id), [job(501, 'site'), job(502, 'docs'), job(503, 'other')]);
+			expect(await listed()).toEqual({
+				jobs: [{ runnerRequestId: 501, ownerName: 'octo', repositoryName: 'site', jobWorkflowRef: 'octo/x/.github/workflows/ci.yml@refs/heads/main', eventName: 'push', requestLabels: ['boxrunner'] }],
+			});
+		});
 	});
 });
 

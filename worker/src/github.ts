@@ -349,6 +349,53 @@ export async function createScaleSet(connection: AdminConnection, name: string, 
 	return read(response, `POST ${scaleSets}`, scaleSetIdOf);
 }
 
+/** The runner group the scale set is in at GitHub, or undefined when the scale set is gone. */
+export async function scaleSetGroup(connection: AdminConnection, id: ScaleSetId): Promise<number | undefined> {
+	const path = `${scaleSets}/${id}`;
+	const response = await actions(connection, 'GET', path, [200, 404]);
+	if (response.status === 404) return undefined;
+	return read(response, `GET ${path}`, (body) => integer(body.runnerGroupId));
+}
+
+/** A job waiting for a scale set that it has not acquired, as the Actions service names its fields. */
+export type AcquirableJob = {
+	runnerRequestId: number;
+	ownerName: string;
+	repositoryName: string;
+	jobWorkflowRef: string;
+	eventName: string;
+	requestLabels: string[];
+};
+
+/**
+ * The jobs the scale set may still acquire, or undefined when the scale set is
+ * gone. GitHub offers a job in one message; an agent that turned it down, or
+ * missed the message, finds it here, as actions-runner-controller's first
+ * listener did when a session opened.
+ */
+export async function acquirableJobs(connection: AdminConnection, id: ScaleSetId): Promise<AcquirableJob[] | undefined> {
+	const path = `${scaleSets}/${id}/acquirablejobs`;
+	const response = await actions(connection, 'GET', path, [200, 204, 404]);
+	if (response.status === 404) return undefined;
+	if (response.status === 204) return [];
+	const list = await read(response, `GET ${path}`, (body) => (Array.isArray(body.value) ? body.value : undefined));
+	const jobs: AcquirableJob[] = [];
+	for (const raw of list) {
+		if (!isObject(raw)) continue;
+		const runnerRequestId = integer(raw.runnerRequestId);
+		if (runnerRequestId === undefined) continue;
+		jobs.push({
+			runnerRequestId,
+			ownerName: typeof raw.ownerName === 'string' ? raw.ownerName : '',
+			repositoryName: typeof raw.repositoryName === 'string' ? raw.repositoryName : '',
+			jobWorkflowRef: typeof raw.jobWorkflowRef === 'string' ? raw.jobWorkflowRef : '',
+			eventName: typeof raw.eventName === 'string' ? raw.eventName : '',
+			requestLabels: Array.isArray(raw.requestLabels) ? raw.requestLabels.filter((label): label is string => typeof label === 'string') : [],
+		});
+	}
+	return jobs;
+}
+
 export async function deleteScaleSet(connection: AdminConnection, id: ScaleSetId): Promise<void> {
 	await actions(connection, 'DELETE', `${scaleSets}/${id}`, [200, 204, 404]);
 }
