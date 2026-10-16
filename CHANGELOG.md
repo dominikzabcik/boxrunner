@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0
+
+**Local Actions cache**
+- Opt-in: a top-level `cache = "20GB"` and `cache = true` on a class keep `actions/cache` and every `setup-*` cache on the box. The agent serves the cache on the job bridge, checks each job's runtime token against GitHub's published keys and keeps each repository's entries apart, with the branch rules GitHub uses. Upload and download links carry 256 random bits. Everything else on the results service, artifacts included, passes through to GitHub, and a job falls back to GitHub's cache when the box's does not answer within 2 seconds (#26, docs/config.md).
+- The cache has a size cap with least-recently-used eviction, a per-repository fair share, caps on blocks, open uploads and connections per job, and empties itself below the disk floor. Two independent security reviews found and verified fixes for disk filling, cross-repository eviction and connection exhaustion before release; three smaller fairness edges are tracked in #91.
+
+**Site**
+- boxrunner.zabcik.me has a new design: warm paper, a serif display face and the box drawn as an engraving, with the docs in the same look.
+
+**Project**
+- CI checks the site on every pull request, and Dependabot's majors come one per pull request.
+
 ## v0.5.0
 
 **Security**
