@@ -3,11 +3,14 @@ package doctor
 import (
 	"net/netip"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
+	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 )
 
@@ -120,5 +123,30 @@ func TestRefusals(t *testing.T) {
 	}
 	if got := Refusals(snap, "other"); got.OK {
 		t.Errorf("Refusals(other) = %+v, want a failure", got)
+	}
+}
+
+func TestEgressRulesJudgesTheListTheAgentRuns(t *testing.T) {
+	running, _ := egress.Parse([]string{"github", "api.example.com"})
+	edited, _ := egress.Parse([]string{"github", "api.example.com", "registry.example.com"})
+	table := egress.Ruleset{Classes: []egress.Class{{Net: egress.NetOf("agent"), Policy: running}}}.Script("")
+	// What nft lists back of the script: the objects and the jumps it adds.
+	listing := regexp.MustCompile(`(?m)^add (chain|set|counter) inet boxrunner (\S+).*$`).ReplaceAllString(table, "$1 $2 {")
+	listing = regexp.MustCompile(`(?m)^add rule inet boxrunner (forward|input) `).ReplaceAllString(listing, "")
+	snap := &status.Snapshot{Egress: []status.Egress{{Class: "agent", Entries: running.Entries}}}
+
+	got := EgressRules(config.Class{Name: "agent", Egress: &edited}, snap, listing, firewall.Current)
+	want := []Result{
+		{"egress agent rules", true, "the table boxrunner and the host's rules for bridge " + egress.NetOf("agent").Bridge + " are in place"},
+		{"egress agent config", false, "the config's egress list is not the one the agent runs; restart boxrunner to apply it"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EgressRules after an edit =\n%+v\nwant\n%+v", got, want)
+	}
+	if got := EgressRules(config.Class{Name: "agent", Egress: &running}, snap, listing, firewall.Current); len(got) != 1 || !got[0].OK {
+		t.Errorf("EgressRules with the list the agent runs = %+v, want one passing result", got)
+	}
+	if got := EgressRules(config.Class{Name: "agent", Egress: &running}, snap, "", firewall.Current); got[0].OK {
+		t.Errorf("EgressRules with no table = %+v, want it to fail", got)
 	}
 }

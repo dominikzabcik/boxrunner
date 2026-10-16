@@ -86,6 +86,10 @@ type Options struct {
 	// EgressGuardEvery how often the table is checked; 0 means five and ten seconds.
 	EgressCountEvery time.Duration
 	EgressGuardEvery time.Duration
+	// EgressRetry is how long an egress class's forwarder and the reader of
+	// the rules' log first wait to start again after they stop; 0 means a
+	// second. The wait doubles up to a minute.
+	EgressRetry time.Duration
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
@@ -520,10 +524,18 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	defer cancel()
 	log := a.Log.With("runner", r.Name, "repo", r.ScaleSet.Repo)
 	class, _ := a.Config.Class(r.ScaleSet.Class)
+	var egressNet *egress.Net
 	if class.Egress != nil {
 		// A job of an egress class never starts on a box whose rules are gone.
 		if err := a.verifyEgress(ctx, true); err != nil {
 			log.Error("the egress rules are not in place; not starting a runner", "class", class.Name, "err", err)
+			a.post(scheduler.StartFailed{Runner: r.Name})
+			return
+		}
+		// Nor on the job network, which its rules do not cover.
+		if egressNet = a.egressNet(class.Name); egressNet == nil {
+			problem, _ := a.egressProblem(class.Name)
+			log.Error("the class's egress allowlist is not in force; not starting a runner", "class", class.Name, "problem", problem)
 			a.post(scheduler.StartFailed{Runner: r.Name})
 			return
 		}
@@ -541,7 +553,7 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	if class.Priority == config.Idle {
 		a.idleSlice(ctx)
 	}
-	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror, a.cache, a.egressNet(class.Name)))
+	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror, a.cache, egressNet))
 	if err == nil {
 		err = a.Docker.Start(ctx, id)
 	}
@@ -641,7 +653,9 @@ func (a *Agent) ensureClasses(ctx context.Context) {
 }
 
 // shutdown removes runners that have not taken a job, so GitHub hands their
-// jobs to the next session. Jobs that are running keep running.
+// jobs to the next session. Jobs that are running keep running, except those
+// of egress classes: with the agent gone nobody puts their rules back, so
+// they are stopped, and their jobs cancelled, as the forwarder still answers.
 func (a *Agent) shutdown(s scheduler.State) {
 	ctx, cancel := context.WithTimeout(context.Background(), stopBudget)
 	defer cancel()
@@ -650,6 +664,12 @@ func (a *Agent) shutdown(s scheduler.State) {
 		if r.Phase == scheduler.Starting {
 			wg.Go(func() { a.remove(ctx, r, true, false) })
 		}
+	}
+	a.egress.mu.Lock()
+	egressClasses := len(a.egress.classes) > 0 || len(a.egress.ruleset.Classes) > 0
+	a.egress.mu.Unlock()
+	if egressClasses {
+		wg.Go(func() { a.stopEgressJobs(ctx, stopGrace, "the agent is stopping") })
 	}
 	wg.Wait()
 }

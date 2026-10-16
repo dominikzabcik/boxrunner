@@ -408,6 +408,10 @@ type NetworkSpec struct {
 	// ICC allows traffic between containers on the network.
 	ICC    bool
 	Labels map[string]string
+	// Subnet and Gateway, when valid, are the network's; otherwise Docker
+	// takes a subnet from its address pools.
+	Subnet  netip.Prefix
+	Gateway netip.Addr
 }
 
 func (c *Client) CreateNetwork(ctx context.Context, s NetworkSpec) error {
@@ -419,6 +423,9 @@ func (c *Client) CreateNetwork(ctx context.Context, s NetworkSpec) error {
 			"com.docker.network.bridge.enable_icc": strconv.FormatBool(s.ICC),
 		},
 		"Labels": s.Labels,
+	}
+	if s.Subnet.IsValid() && s.Gateway.IsValid() {
+		body["IPAM"] = map[string]any{"Config": []map[string]string{{"Subnet": s.Subnet.String(), "Gateway": s.Gateway.String()}}}
 	}
 	return c.call(ctx, http.MethodPost, "/networks/create", "application/json", body, nil)
 }

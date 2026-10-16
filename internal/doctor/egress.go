@@ -65,20 +65,47 @@ func (c Checks) egressChecks(ctx context.Context, d *docker.Client, services fir
 	}
 	hostRules := firewall.CheckEgress(ctx, c.Exec, nets)
 	for _, k := range classes {
-		n := egress.NetOf(k.Name)
-		whole := tableErr == nil && egress.Ruleset{Classes: []egress.Class{{Net: n, Policy: *k.Egress}}}.Intact(listing)
-		switch {
-		case !whole:
-			add(k.Name, "rules", false, "the nftables table %s is missing or has no rules for the class; the agent sets it up when it starts", egress.Table)
-		case hostRules != firewall.Current:
-			add(k.Name, "rules", false, "the host's input rules for the class's bridge %s are incomplete; restart boxrunner", n.Bridge)
-		default:
-			add(k.Name, "rules", true, "the table %s and the host's rules for bridge %s are in place", egress.Table, n.Bridge)
+		if tableErr != nil {
+			listing = ""
 		}
+		results = append(results, EgressRules(k, snap, listing, hostRules)...)
 		if snap != nil {
 			results = append(results, Refusals(*snap, k.Name))
 		}
 		results = append(results, c.egressProbe(ctx, d, k)...)
+	}
+	return results
+}
+
+// EgressRules judges a class's rules: listing is what nft prints of the
+// table, "" when there is none. The table holds the list the agent runs,
+// which snap gives, so a list edited since the agent started is reported as
+// that, not as a table that lacks it.
+func EgressRules(k config.Class, snap *status.Snapshot, listing string, host firewall.State) []Result {
+	name := "egress " + k.Name + " "
+	n := egress.NetOf(k.Name)
+	configured := egress.Class{Net: n, Policy: *k.Egress}
+	running := configured
+	if snap != nil {
+		for _, e := range snap.Egress {
+			if p, err := egress.Parse(e.Entries); e.Class == k.Name && err == nil {
+				running.Policy = p
+			}
+		}
+	}
+	var results []Result
+	switch {
+	case listing == "" || !(egress.Ruleset{Classes: []egress.Class{running}}).Intact(listing):
+		results = append(results, Result{name + "rules", false, fmt.Sprintf("the nftables table %s is missing or has no rules for the class; the agent sets it up when it starts", egress.Table)})
+	case host != firewall.Current:
+		results = append(results, Result{name + "rules", false, fmt.Sprintf("the host's input rules for the class's bridge %s are incomplete; restart boxrunner", n.Bridge)})
+	default:
+		results = append(results, Result{name + "rules", true, fmt.Sprintf("the table %s and the host's rules for bridge %s are in place", egress.Table, n.Bridge)})
+	}
+	runningSets, _ := running.Sets()
+	configuredSets, _ := configured.Sets()
+	if runningSets != configuredSets {
+		results = append(results, Result{name + "config", false, "the config's egress list is not the one the agent runs; restart boxrunner to apply it"})
 	}
 	return results
 }

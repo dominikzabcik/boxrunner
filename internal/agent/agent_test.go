@@ -68,6 +68,12 @@ type fakeDocker struct {
 	// failInspect makes the nth inspection of a network, by name, fail.
 	failInspect map[string]int
 	inspected   map[string]int
+	// failRemove names the containers that cannot be removed, and
+	// failNetwork makes creating an egress network fail.
+	failRemove  map[string]bool
+	failNetwork bool
+	// stopped names the containers that were stopped.
+	stopped []string
 }
 
 // fakeNet is an egress class's network.
@@ -165,18 +171,29 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				Name    string
 				Options map[string]string
 				Labels  map[string]string
+				IPAM    struct {
+					Config []struct{ Subnet, Gateway string }
+				}
 			}
 			json.NewDecoder(r.Body).Decode(&body)
 			if body.Name == "boxrunner" {
 				f.network = true
 				break
 			}
+			if f.failNetwork {
+				http.Error(w, `{"message":"Pool overlaps with other one on this address space"}`, http.StatusForbidden)
+				return
+			}
 			if f.nets == nil {
 				f.nets = map[string]*fakeNet{}
 			}
-			f.nets[body.Name] = &fakeNet{Bridge: body.Options["com.docker.network.bridge.name"], Labels: body.Labels,
+			n := &fakeNet{Bridge: body.Options["com.docker.network.bridge.name"], Labels: body.Labels,
 				Subnet:  cmp.Or(f.subnet, fmt.Sprintf("172.%d.0.0/16", 30+len(f.nets))),
 				Gateway: cmp.Or(f.gateway, fmt.Sprintf("172.%d.0.1", 30+len(f.nets)))}
+			if len(body.IPAM.Config) == 1 {
+				n.Subnet, n.Gateway = body.IPAM.Config[0].Subnet, body.IPAM.Config[0].Gateway
+			}
+			f.nets[body.Name] = n
 		case path == "/volumes/create":
 			var body struct{ Name string }
 			json.NewDecoder(r.Body).Decode(&body)
@@ -220,12 +237,22 @@ func (f *fakeDocker) serve(t *testing.T) string {
 		case len(parts) == 3 && parts[2] == "start":
 			f.containers[parts[1]].State = map[bool]string{false: "running", true: "exited"}[f.exitOnStart]
 			w.WriteHeader(204)
+		case len(parts) == 3 && parts[2] == "stop":
+			if c, ok := f.containers[parts[1]]; ok {
+				c.State = "exited"
+			}
+			f.stopped = append(f.stopped, parts[1])
+			w.WriteHeader(204)
 		case len(parts) == 3 && parts[2] == "logs":
 			f.logs = append(f.logs, parts[1])
 			io.WriteString(w, "\x02\x00\x00\x00\x00\x00\x00\x12exec format error\n")
 		case r.Method == http.MethodDelete && parts[0] == "containers":
 			if _, ok := f.containers[parts[1]]; !ok {
 				http.Error(w, `{"message":"no such container"}`, 404)
+				return
+			}
+			if f.failRemove[parts[1]] {
+				http.Error(w, `{"message":"removal of container is already in progress"}`, http.StatusConflict)
 				return
 			}
 			delete(f.containers, parts[1])
@@ -386,6 +413,10 @@ type harness struct {
 	egressListen func(egress.Net) (net.PacketConn, net.Listener, error)
 	openPackets  func(uint16) (PacketSource, error)
 	upstream     dnsfwd.Upstream
+	// guardEvery is how often the egress rules are checked, 50 ms when zero.
+	guardEvery time.Duration
+	// logs is what the agent logged.
+	logs *logBuffer
 	// metrics is where the agent serves metrics, none when zero.
 	metrics netip.AddrPort
 	// cache is the Actions cache's size, none when zero, served at cacheAddr.
@@ -407,6 +438,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
 		cgroup: t.TempDir(),
+		logs:   &logBuffer{},
 	}
 	os.Mkdir(filepath.Join(h.cgroup, "boxrunner_idle.slice"), 0o755)
 	os.WriteFile(filepath.Join(h.cgroup, "boxrunner_idle.slice", "cpu.idle"), []byte("0\n"), 0o644)
@@ -426,7 +458,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	}
 	u, _ := url.Parse(srv.URL)
 	cfg.Worker = u
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := slog.New(slog.NewTextHandler(h.logs, nil))
 	var ctx context.Context
 	ctx, h.cancel = context.WithCancel(context.Background())
 	t.Cleanup(h.cancel)
@@ -450,7 +482,8 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			OpenPackets:          h.openPackets,
 			EgressUpstream:       h.upstream,
 			EgressCountEvery:     50 * time.Millisecond,
-			EgressGuardEvery:     50 * time.Millisecond,
+			EgressGuardEvery:     cmp.Or(h.guardEvery, 50*time.Millisecond),
+			EgressRetry:          50 * time.Millisecond,
 			JobsLog:              h.jobs,
 			DrainFile:            h.drain,
 			Socket:               h.socket,
@@ -477,6 +510,41 @@ func (h *harness) stop(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the agent did not stop")
 	}
+}
+
+// logBuffer keeps what the agent logs, and passes it on to stderr.
+type logBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	l.b.Write(p)
+	l.mu.Unlock()
+	return os.Stderr.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// waitLog waits for the agent to log a line that has every part.
+func (h *harness) waitLog(t *testing.T, parts ...string) string {
+	t.Helper()
+	var found string
+	waitFor(t, "a log line with "+strings.Join(parts, " and "), func() bool {
+		for _, line := range strings.Split(h.logs.String(), "\n") {
+			if !slices.ContainsFunc(parts, func(p string) bool { return !strings.Contains(line, p) }) {
+				found = line
+				return true
+			}
+		}
+		return false
+	})
+	return found
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {

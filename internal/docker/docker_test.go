@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -191,6 +192,22 @@ func TestCreateNetworkShape(t *testing.T) {
 		"Options":{"com.docker.network.bridge.name":"boxrunner0","com.docker.network.bridge.enable_icc":"false"}}`), &want)
 	if got := (*requests)[0]; got.uri != "/v1.47/networks/create" || !reflect.DeepEqual(got.body, want) {
 		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestCreateNetworkOnASubnet(t *testing.T) {
+	c, requests := fakeDaemon(t, "1.47", ok)
+	err := c.CreateNetwork(context.Background(), NetworkSpec{Name: "boxrunner-agent", Bridge: "boxrunner-1a2b3",
+		Subnet: netip.MustParsePrefix("172.19.0.0/16"), Gateway: netip.MustParseAddr("172.19.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want any
+	json.Unmarshal([]byte(`{"Name":"boxrunner-agent","Driver":"bridge","Labels":null,
+		"Options":{"com.docker.network.bridge.name":"boxrunner-1a2b3","com.docker.network.bridge.enable_icc":"false"},
+		"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}`), &want)
+	if got := (*requests)[0]; !reflect.DeepEqual(got.body, want) {
+		t.Errorf("body = %v, want %v", got.body, want)
 	}
 }
 
