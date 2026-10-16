@@ -41,6 +41,12 @@ type Config struct {
 	Log      *slog.Logger
 	Now      func() time.Time
 	Backoff  backoff.Policy
+	// Accept, when set, decides which offered jobs the listener acquires. An
+	// organization scale set is offered the jobs of every repository its runner
+	// group admits, and the box serves only some of them. A job it refuses stays
+	// queued at GitHub, and Refused hears of it once.
+	Accept  func(queue.Job) bool
+	Refused func(queue.Job)
 }
 
 type listener struct {
@@ -50,6 +56,8 @@ type listener struct {
 	refreshAt time.Time
 	// jobs maps each job assigned to the scale set to its queue time.
 	jobs map[int64]time.Time
+	// refused are the offered jobs Accept turned down, so each is reported once.
+	refused map[int64]bool
 }
 
 // Run serves the scale set until ctx ends, then closes the session. It
@@ -62,7 +70,7 @@ func Run(ctx context.Context, c Config) error {
 	if c.Log == nil {
 		c.Log = slog.New(slog.DiscardHandler)
 	}
-	l := &listener{Config: c, jobs: map[int64]time.Time{}}
+	l := &listener{Config: c, jobs: map[int64]time.Time{}, refused: map[int64]bool{}}
 	if err := l.open(ctx); err != nil {
 		return quiet(ctx, err)
 	}
@@ -122,6 +130,7 @@ func (l *listener) poll(ctx context.Context, lastID *int64) error {
 	if err != nil || msg == nil {
 		return err
 	}
+	msg.Available = l.accepted(msg.Available)
 	if len(msg.Available) > 0 {
 		ids := make([]int64, len(msg.Available))
 		for i, j := range msg.Available {
@@ -140,6 +149,31 @@ func (l *listener) poll(ctx context.Context, lastID *int64) error {
 		return ctx.Err()
 	}
 	return nil
+}
+
+// accepted drops the offered jobs Accept refuses, reporting each one once.
+func (l *listener) accepted(offered []queue.Job) []queue.Job {
+	if l.Accept == nil {
+		return offered
+	}
+	var kept []queue.Job
+	for _, j := range offered {
+		if l.Accept(j) {
+			kept = append(kept, j)
+			continue
+		}
+		if l.refused[j.RequestID] {
+			continue
+		}
+		if len(l.refused) >= 1000 {
+			clear(l.refused)
+		}
+		l.refused[j.RequestID] = true
+		if l.Refused != nil {
+			l.Refused(j)
+		}
+	}
+	return kept
 }
 
 func (l *listener) open(ctx context.Context) error {

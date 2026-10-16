@@ -29,8 +29,25 @@ export function forkProblems(settings: ForkPullRequests): { problem: string; fix
 	return problems;
 }
 
-/** A scale set the Worker created or adopted, for one repository and class. */
-export type OwnedScaleSet = { repo: Repo; className: ClassName; id: ScaleSetId };
+/**
+ * The organization the Worker serves through organization scale sets, as its
+ * last listing found it. `id` and `installationId` are null while the App is
+ * not installed on it, `groupId` while the runner group was not found, and
+ * `problem` says why the Worker serves none of its repositories.
+ */
+export type Org = { login: Login; id: number | null; installationId: number | null; group: string; groupId: number | null; problem: string | null };
+
+/** What a scale set serves: one repository, or the repositories an organization's runner group admits. */
+export type Scope = { kind: 'repo'; repo: Repo } | { kind: 'org'; org: Org & { id: number; installationId: number } };
+
+/** Scale sets and session holders are stored by a number: a repository's id, or minus an organization's account id. */
+export const scopeId = (scope: Scope) => (scope.kind === 'repo' ? scope.repo.id : -scope.org.id);
+
+/** How the scope is named to GitHub and in messages: `owner/name`, or the organization's login. */
+export const scopeName = (scope: Scope) => (scope.kind === 'repo' ? scope.repo.name : scope.org.login);
+
+/** A scale set the Worker created or adopted, for one scope and class. */
+export type OwnedScaleSet = { scope: Scope; className: ClassName; id: ScaleSetId };
 
 export type App = {
 	id: number;
@@ -79,6 +96,8 @@ const matching = <T extends string>(pattern: RegExp) => (value: unknown) =>
 
 export const parse = {
 	repo: matching<RepoName>(repoPattern),
+	/** A repository, or an organization's login for an organization scale set, as a heartbeat names a scale set's scope. */
+	scope: (value: unknown) => matching<RepoName>(repoPattern)(value) ?? (matching<Login>(loginPattern)(value) as unknown as RepoName | undefined),
 	className: matching<ClassName>(classPattern),
 	runnerName: matching<RunnerName>(runnerNamePattern),
 	boxName: matching<BoxName>(boxNamePattern),
@@ -124,6 +143,44 @@ export function repoFilter(value: string | undefined): (name: string) => boolean
 			.filter(Boolean),
 	);
 	return names.size === 0 ? () => true : (name) => names.has(name.toLowerCase());
+}
+
+/** The organization and runner group named by `ORG` and `RUNNER_GROUP`; null serves repositories one by one. */
+export type OrgConfig = { ok: true; org: { login: Login; group: string } | null } | { ok: false; problem: string };
+
+// GitHub's own limit on a runner group's name is not documented; this keeps it printable and short.
+const groupPattern = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/;
+
+/**
+ * Reads the optional `ORG` and `RUNNER_GROUP` variables. With `ORG` set, the
+ * Worker makes one scale set per class for the organization, in the runner
+ * group `RUNNER_GROUP`, which must then be set too.
+ */
+export function parseOrg(org: string | undefined, group: string | undefined): OrgConfig {
+	const login = (org ?? '').trim();
+	const name = (group ?? '').trim();
+	if (login === '') return name === '' ? { ok: true, org: null } : { ok: false, problem: 'RUNNER_GROUP is set without ORG' };
+	const parsed = parse.login(login);
+	if (!parsed) return { ok: false, problem: `ORG is "${login}", which is not a GitHub login` };
+	if (name === '') return { ok: false, problem: 'ORG is set without RUNNER_GROUP, the runner group its scale sets go in' };
+	if (!groupPattern.test(name)) return { ok: false, problem: `RUNNER_GROUP is "${name}", which is not 1 to 64 letters, digits, spaces, dots, dashes or underscores` };
+	return { ok: true, org: { login: parsed, group: name } };
+}
+
+/** A runner group as GitHub's REST API describes it. */
+export type RunnerGroup = { id: number; name: string; visibility: string; allowsPublicRepositories: boolean };
+
+/**
+ * Why the Worker must not register runners in the group, or null when it may:
+ * the group admits only repositories picked one by one, and no public one.
+ */
+export function groupProblem(org: string, group: RunnerGroup): string | null {
+	if (group.allowsPublicRepositories) return `The runner group “${group.name}” of ${org} allows public repositories; turn off “Allow public repositories” in its settings.`;
+	if (group.visibility !== 'selected') {
+		const admits = group.visibility === 'all' ? 'every repository' : group.visibility === 'private' ? 'every private repository' : `repositories by “${group.visibility}”`;
+		return `The runner group “${group.name}” admits ${admits} of ${org}; set its repository access to selected repositories.`;
+	}
+	return null;
 }
 
 /** A class paused on the dashboard: boxes start no new runners for it until someone resumes it. */
@@ -295,7 +352,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 					const value = record(raw, at);
 					return {
 						name: need(parse.runnerName(value.name), `${at}.name`),
-						repo: need(parse.repo(value.repo), `${at}.repo`),
+						repo: need(parse.scope(value.repo), `${at}.repo`),
 						className: need(parse.className(value.class), `${at}.class`),
 						state: need(oneOf(runnerStates)(value.state), `${at}.state`),
 						since: need(instant(value.since), `${at}.since`),
@@ -306,7 +363,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 					const at = `scaleSets[${i}]`;
 					const value = record(raw, at);
 					return {
-						repo: need(parse.repo(value.repo), `${at}.repo`),
+						repo: need(parse.scope(value.repo), `${at}.repo`),
 						className: need(parse.className(value.class), `${at}.class`),
 						assigned: need(count(value.assigned), `${at}.assigned`),
 					};
@@ -316,7 +373,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 					const value = record(raw, at);
 					return {
 						runner: need(parse.runnerName(value.runner), `${at}.runner`),
-						repo: need(parse.repo(value.repo), `${at}.repo`),
+						repo: need(parse.scope(value.repo), `${at}.repo`),
 						className: need(parse.className(value.class), `${at}.class`),
 						name: need(label(200)(value.name), `${at}.name`),
 						result: need(matching(/^[a-z_]{1,32}$/)(value.result), `${at}.result`),

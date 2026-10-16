@@ -203,7 +203,7 @@ describe('POST /v1/scalesets', () => {
 
 	it('adopts a scale set that already exists at GitHub under the class name', async () => {
 		const { github, call } = await ready();
-		github.scaleSets.set(scaleSetKey(123, 77), { name: 'boxrunner-light', repoId: 123 });
+		github.scaleSets.set(scaleSetKey(123, 77), { name: 'boxrunner-light', repoId: 123, runnerGroupId: 1 });
 		expect(await scaleSet(call, 'OCTO/Site', 'boxrunner-light')).toBe(77);
 		expect(github.count('POST', '/_apis/runtime/runnerscalesets')).toBe(0);
 	});
@@ -362,7 +362,7 @@ describe('sessions', () => {
 	it('refuses scale sets the Worker did not make for that repository', async () => {
 		const { github, call } = await ready();
 		const docs = await scaleSet(call, 'octo/docs');
-		github.scaleSets.set(scaleSetKey(123, 900), { name: 'boxrunner', repoId: 123 });
+		github.scaleSets.set(scaleSetKey(123, 900), { name: 'boxrunner', repoId: 123, runnerGroupId: 1 });
 		for (const scaleSetId of [docs, 900]) {
 			await expectError(
 				await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId, owner: 'box-1' }),
@@ -386,7 +386,7 @@ describe('sessions', () => {
 		);
 		const again = await scaleSet(call);
 		expect(again).not.toBe(id);
-		expect(github.scaleSets.get(scaleSetKey(123, again))).toEqual({ name: 'boxrunner', repoId: 123 });
+		expect(github.scaleSets.get(scaleSetKey(123, again))).toEqual({ name: 'boxrunner', repoId: 123, runnerGroupId: 1 });
 	});
 });
 

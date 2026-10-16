@@ -122,7 +122,7 @@ func TestDrained(t *testing.T) {
 		want bool
 	}{
 		{"serving", Snapshot{}, false},
-		{"a session still open", Snapshot{Draining: true, ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 0}}}, false},
+		{"a session still open", Snapshot{Draining: true, ScaleSets: []ScaleSet{{Repo: "octo/site", Class: "boxrunner"}}}, false},
 		{"a job still running", Snapshot{Draining: true, Runners: []Runner{running, kept}}, false},
 		{"only a kept failed container", Snapshot{Draining: true, Runners: []Runner{kept}}, true},
 		{"nothing left", Snapshot{Draining: true}, true},
@@ -151,7 +151,7 @@ func TestPrint(t *testing.T) {
 		Box: "box-1", Version: "0.1.0", Worker: "0.1.0", Latest: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
 		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
-		ScaleSets: []ScaleSet{{"octo/site", "boxrunner", 1}},
+		ScaleSets: []ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
 		Elsewhere: []Elsewhere{{"octo/docs", "boxrunner", "box-2"}},
 		Runners: []Runner{
 			{Name: "box-1-boxrunner-3f9a2c", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0},
@@ -350,5 +350,33 @@ func TestPrintEgress(t *testing.T) {
 	}
 	if got, want := snap.Egress[0].Summary(), "12 packets dropped and 1 lookup refused since the agent started"; got != want {
 		t.Errorf("Summary = %q, want %q", got, want)
+	}
+}
+
+func TestPrintOrganization(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", DiskFloor: 10e9,
+		Organization: &Organization{Name: "octo", Group: "boxrunner"},
+		ScaleSets:    []ScaleSet{{Repo: "octo", Class: "boxrunner", Assigned: 1, Refused: map[string]int{"octo/secret": 1, "octo/docs": 2}}},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	want := `The Worker serves the organization octo through one scale set per class in the runner group "boxrunner".
+
+REPOSITORY           CLASS      ASSIGNED JOBS
+octo (organization)  boxrunner  1
+
+octo boxrunner was offered 2 jobs of octo/docs, which this box does not serve, so they wait at GitHub. Take the repository out of the runner group, or let class boxrunner serve it.
+octo boxrunner was offered 1 job of octo/secret, which this box does not serve, so it waits at GitHub. Take the repository out of the runner group, or let class boxrunner serve it.
+`
+	if got := b.String(); !strings.Contains(got, want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", got, want)
+	}
+
+	snap.Organization.Problem = "The runner group “boxrunner” admits every repository of octo; set its repository access to selected repositories."
+	b.Reset()
+	Print(&b, snap, t0)
+	if want := "The Worker serves no repository of the organization octo: The runner group “boxrunner” admits every repository of octo; set its repository access to selected repositories.\n"; !strings.Contains(b.String(), want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", b.String(), want)
 	}
 }

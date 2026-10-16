@@ -23,13 +23,16 @@ The agent talks to its Worker over HTTPS with JSON bodies. This page is the cont
 | 404 | `not_found` | Unknown scale set, session or runner for this repository, or a scale set GitHub no longer has | Treats it as already gone; for a scale set, calls `POST /v1/scalesets` again |
 | 409 | `session_exists` | Another session holds the scale set; `heldBy` names the box that opened it when that is another box that still reports | Retries with backoff; with `heldBy`, tries again within five minutes and names that box in `status` and `doctor` |
 | 409 | `runner_busy` | The runner already took a job | Leaves the runner alone |
-| 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed | Stops serving the repository |
+| 409 | `group_ineligible` | With `ORG`, the organization's runner group admits every repository or every private one, allows public repositories, or is missing, or the App is not installed on the organization or lacks its permission; `message` says which | Stops listening to that scale set and tries again within five minutes |
+| 410 | `repo_ineligible` | Not in the list `GET /v1/repos` returns: public, archived, or the App is no longer installed. Also a repository's scale set from a Worker that serves an organization, and the reverse | Stops serving the repository |
 | 426 | `upgrade_required` | The agent's major version differs from the Worker's | Stops and logs the upgrade command |
 | 429 | `rate_limited` | Too many requests for this box token | Backs off |
 | 502 | `github_error` | GitHub answered with an error; `message` names the call and status | Backs off |
-| 503 | `not_configured` | Setup has not finished, or `CLASSES` is unreadable (the message says why) | Stops and logs the setup URL |
+| 503 | `not_configured` | Setup has not finished, or `CLASSES`, `ORG` or `RUNNER_GROUP` is unreadable (the message says why) | Stops and logs the setup URL |
 
 Repositories are named `owner/name` and matched case-insensitively. Scale set ids are numbers. Session ids are UUIDs.
+
+**Organizations.** With the Worker variables `ORG` and `RUNNER_GROUP` set ([config](config.md#organizations)), every call that names a scale set's repository names the organization instead, as `"org": "octo"` in a body or `org=octo` in a query, in place of `repo`. A Worker without `ORG` answers such a call with `410 repo_ineligible`, and a Worker with it answers a call that names a repository the same way.
 
 `CLASSES` is a comma-separated list of lower-case letters, digits and dashes. A label GitHub's own runners answer to (`ubuntu-*`, `windows-*`, `macos-*`, `self-hosted`) makes it unreadable, because a scale set with that label would take jobs meant for GitHub's machines.
 
@@ -53,11 +56,24 @@ The private, unarchived repositories the App is installed on, narrowed to the `R
 
 `forkPullRequests` holds the repository's settings for workflows from fork pull requests, which GitHub keeps under Settings, Actions, General, Fork pull request workflows: whether they run at all, whether each run waits for approval, and whether it gets a write token or the repository's secrets. The Worker reads them with `GET /repos/{owner}/{repo}/actions/permissions/fork-pr-workflows-private-repos` and a token narrowed to that repository and `administration: read`. It reads a repository at most once an hour, and ten minutes after a read that failed. Each listing reads at most five of the repositories that are due, so a Worker that serves many spreads the reads over several listings, at two GitHub calls each. Until a read succeeds the field is `null`, and a failed read keeps the last settings it read; a failed read never fails the listing. A Worker from before this field sends none, and an agent that does not know it ignores it. `boxrunner doctor` and the [dashboard](dashboard.md) warn about a repository whose fork pull requests run workflows without approval, with write tokens or with secrets; the agent serves the repository either way.
 
+With `ORG` set, `repos` are the private, unarchived repositories the runner group admits, narrowed by `REPOS`, each `forkPullRequests` is `null`, because the App has no repository permission to read the settings with, and the answer names the organization:
+
+```json
+{
+  "repos": [{ "name": "octo/site", "id": 123, "forkPullRequests": null }],
+  "classes": ["boxrunner"],
+  "paused": [],
+  "organization": { "name": "octo", "group": "boxrunner", "problem": null }
+}
+```
+
+`problem` says why the Worker serves none of the organization's repositories, with `repos` empty: the App is not installed on the organization or lacks its Self-hosted runners permission, the group is missing, admits every repository or every private one, or allows public repositories. The Worker reads the group through `GET /orgs/{org}/actions/runner-groups` and its repositories through `GET /orgs/{org}/actions/runner-groups/{id}/repositories`, with an installation token for the organization and `organization_self_hosted_runners: read`. A Worker without `ORG` sends no `organization`.
+
 `classes` is `CLASSES` without the classes paused on the [dashboard](dashboard.md#pausing-a-class), and `paused` lists those. An agent that does not know `paused` still stops serving a paused class, because the class is missing from `classes`; it logs that the class is not one of the Worker's. The agent stops listening to a paused class's scale sets, so it starts no runner for it, and lists the repositories again as soon as a heartbeat's answer shows the paused classes changed.
 
 ## `POST /v1/scalesets`
 
-Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name, in the default runner group. Runner self-update stays on. A scale set that already exists at GitHub under that name is adopted rather than duplicated, and concurrent calls create one.
+Finds the repository's scale set for a class, or creates it. Its name and its single label are the class name, in the default runner group. With `ORG`, the body names `org` instead of `repo`, and the scale set is the organization's, in the runner group `RUNNER_GROUP`, whose id the Worker looks up by name in the Actions service as actions-runner-controller does. Runner self-update stays on. A scale set that already exists at GitHub under that name is adopted rather than duplicated, and concurrent calls create one.
 
 Request:
 
@@ -195,7 +211,7 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 | `image` | The job image's identity, with ` from ` and the digest of the runner image it is built from once the agent knows it, and `, building ` and the identity of a newer image while the agent builds one; `building ` and the identity while it builds the first image or the class images after a start. 1 to 128 characters without control characters: the digest is left out when all of it would not fit |
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
 | `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more. Optional `heldUntil`: present while the class's runners fail before taking a job, so the box holds its starts until then and starts one at a time after |
-| `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state |
+| `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state. `repo` is an organization's login for a runner of an organization scale set, as it is in `scaleSets` |
 | `draining` | Optional, `false` when missing. `true` while `boxrunner drain` keeps the box from serving |
 | `scaleSets` | Optional, empty when missing. At most 128: the scale sets the box listens to, those with jobs assigned first. `assigned` counts the jobs, including the ones runners already took. With `runners`, it tells the Worker which jobs wait with no runner, for [alerts](alerts.md#when-jobs-wait) and the dashboard |
 | `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it |
@@ -233,9 +249,10 @@ The box token, compared in constant time. Then, on every call but `POST /v1/hear
 - The repository is in the list `GET /v1/repos` would return.
 - The class is in `CLASSES`.
 - The scale set id belongs to that repository and was created for one of the Worker's classes.
+- With `ORG`: the request names the organization `ORG` names, and the runner group admits only selected repositories and no public one. Before a session opens, is refreshed or a runner is minted, the Worker reads the group fresh from GitHub. If it now allows public repositories, the Worker deletes the organization's scale sets; either way it answers `409 group_ineligible`.
 - Before a session opens, is refreshed or a runner is minted: the repository is still private, read fresh from GitHub. If it turned public, the Worker deletes every scale set it made for the repository and answers `410 repo_ineligible`; if deleting fails, it answers `502 github_error` and deletes on the next call. An archived repository or one the App left also gets `410 repo_ineligible`.
 - When `GET /v1/repos` reads the list fresh (at most once a minute), the Worker deletes the scale sets of every repository it holds them for and no longer serves. Where the App was removed it cannot delete them and only forgets them; any other failure waits for the next listing.
-- Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners, `actions_variables: write` to set or delete the [fallback](fallback.md) variable.
+- Installation tokens name one repository and only the permission the call needs: `metadata: read` to read visibility, `administration: write` to register runners, `actions_variables: write` to set or delete the [fallback](fallback.md) variable. With `ORG`, the tokens that register runners and read the runner group are for the organization's installation and carry only `organization_self_hosted_runners`, `write` and `read`.
 
 ## Talking to the queue
 
@@ -245,4 +262,4 @@ These calls go from the agent straight to GitHub with the session's `queueToken`
 - **Acknowledge a message.** `DELETE` the queue URL with `/{messageId}` appended to its path, after the message's jobs are acquired. 204 means done.
 - **Acquire jobs.** `POST {acquireJobsUrl}` with a JSON array of the offered jobs' `runnerRequestId` values.
 
-The Worker builds `acquireJobsUrl` from the Actions service URL of the repository's admin connection, as `actions/scaleset` does. The message format follows `actions/scaleset`'s `RunnerScaleSetMessage`.
+The Worker builds `acquireJobsUrl` from the Actions service URL of the repository's or the organization's admin connection, as `actions/scaleset` does. An organization scale set's messages offer jobs of every repository its runner group admits; each names its repository in `ownerName` and `repositoryName`, and the agent acquires only those of repositories it serves. The message format follows `actions/scaleset`'s `RunnerScaleSetMessage`.

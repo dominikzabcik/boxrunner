@@ -143,6 +143,9 @@ func (c Checks) All(ctx context.Context) []Result {
 			add("worker", false, "%v", err)
 		} else {
 			add("worker", true, "%s accepts the token; %d repositories, classes %s", c.Config.Worker, len(repos.Repos), strings.Join(repos.Classes, ", "))
+			if org := repos.Organization; org != nil {
+				results = append(results, Organization(*org, len(repos.Repos)))
+			}
 			for _, class := range c.Config.Classes {
 				served := false
 				for _, name := range repos.Classes {
@@ -161,6 +164,19 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, RunnerImage(snap.Image)...)
 	}
 	return results
+}
+
+// Organization says whether the Worker serves its organization: it refuses a
+// runner group that admits public repositories or every repository.
+func Organization(org worker.Organization, repos int) Result {
+	if org.Problem != "" {
+		return Result{"organization", false, org.Problem}
+	}
+	served := fmt.Sprintf("%d private repositories", repos)
+	if repos == 1 {
+		served = "1 private repository"
+	}
+	return Result{"organization", true, fmt.Sprintf("the Worker serves %s of %s through one scale set per class in the runner group %q, which admits only selected repositories and no public one", served, org.Name, org.Group)}
 }
 
 // LiveRestore says what restarting Docker does to running jobs. It never
@@ -239,6 +255,10 @@ func (c Checks) Forks(ctx context.Context) []Result {
 	repos, err := c.Worker.Repos(ctx)
 	if err != nil {
 		return nil
+	}
+	if repos.Organization != nil {
+		// The organization's App has no repository Administration permission to read them with.
+		return []Result{{"fork PRs", true, "the Worker serves an organization and reads no repository's fork pull request settings; check them under Settings, Actions, General in each repository, or for the whole organization"}}
 	}
 	return Forks(repos.Repos, c.Config.Classes)
 }

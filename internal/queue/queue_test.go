@@ -120,3 +120,20 @@ func TestUnexpectedStatus(t *testing.T) {
 		t.Errorf("error = %v", err)
 	}
 }
+
+func TestJobFullName(t *testing.T) {
+	cases := []struct {
+		job  Job
+		want string
+	}{
+		{Job{Repository: "site", Owner: "octo"}, "octo/site"},
+		{Job{Repository: "octo/site"}, "octo/site"},
+		{Job{Repository: "site"}, "fallback/site"},
+		{Job{Owner: "octo"}, ""},
+	}
+	for _, c := range cases {
+		if got := c.job.FullName("fallback"); got != c.want {
+			t.Errorf("%+v.FullName = %q, want %q", c.job, got, c.want)
+		}
+	}
+}

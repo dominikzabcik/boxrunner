@@ -170,6 +170,21 @@ A forwarder works because Docker's embedded resolver forwards what it does not k
 
 A third review, of the code, found more, and the code fixes each. A start that found the class's network missing put the job on the open job network. `nft flush ruleset` took the backstop with the table, and a job's connections opened in that time outlived the rules; jobs also outlived a stopped agent, with nobody to put the rules back. A second lookup of an address that was open already got the upstream's TTL, longer than the address had left. The class stayed "ready" with its network removed, its forwarder stopped or its rules not restored. A first start listed the box's networks before it made the class's, so the class's own subnet was missing from the deny list until a restart.
 
+## Organization scale sets, fenced by a selected runner group
+
+A repository scale set needs the App's repository permission Administration (read and write), which can also change the repository's settings and delete it. A company that runs boxrunner for an organization would rather give the App no power over its repositories. An organization scale set uses the same protocol with the organization's registration token ([actions/scaleset](https://github.com/actions/scaleset/blob/e6daac702355cdb5b880b4fbdcf6d85dcd9e48e5/client.go#L1020-L1033)), and the App needs only the organization permission Self-hosted runners ([GitHub's docs](https://docs.github.com/en/actions/tutorials/use-actions-runner-controller/authenticate-to-the-api)).
+
+It moves the fence. A repository scale set takes jobs only of its repository, which the Worker checks is private before every runner. An organization scale set takes jobs of every repository its runner group admits, and a runner it mints is bound to no repository, so the Worker cannot check the job's repository before the runner exists. The ways to keep public and unwanted repositories off the box:
+
+- **Repository scale sets in every repository (the default, kept).** Each repository is fenced on its own, at the cost of Administration on each.
+- **Any runner group, with the agent as the fence.** Accept the default group whatever it admits and let the agent acquire only the served repositories' jobs. It works on every plan, but a job from any repository the group admits, a new one included, would still be routed to the scale set and wait there, and the only check against a public repository would be one GitHub setting the Worker never looked at.
+- **A group limited to selected repositories, refused otherwise (chosen).** The Worker serves a group only while its repository access is "Selected repositories" and it does not allow public repositories, reads it again before every session and runner, and deletes the organization's scale sets when it starts allowing public repositories, as it does for a repository that turns public. The agent still acquires only jobs of repositories the Worker and the class serve, so `REPOS` and a class's `repos` keep working, and a repository the group admits by mistake is never run. The cost is the group: GitHub lets only Team and Enterprise organizations create one, and whether a Free organization can limit its default group is not known.
+- **The Worker keeps the group's repositories in step with `REPOS`.** Self-hosted runners (write) lets the App set a group's repositories. It would save a step, but it would make the Worker change an organization's settings, and a mistake in `REPOS` would open the box to a repository. Left out.
+
+A Worker serves either repositories or one organization, not both, so one set of permissions and one notion of "served" holds at a time. The App's fork pull request settings cannot be read without a repository permission, so the warnings about them are off for an organization.
+
+None of this has run against a real organization: the tests use a fake built from actions/scaleset and GitHub's REST documentation. [Config](config.md#not-checked-against-github-yet) lists the probe that would check it, and the Free plan question decides whether it helps a small organization at all.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

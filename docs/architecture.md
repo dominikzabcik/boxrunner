@@ -39,8 +39,8 @@ flowchart LR
 
 | Part | Holds | Can do |
 |---|---|---|
-| Worker | The App's private key and webhook secret. Admin tokens, each for one repository and ten minutes (*measured*). | What the App may do on the repositories it is installed on |
-| Agent | A box token. One session token per scale set, valid 70 minutes (*measured*). | Through the Worker: find scale sets, open and close sessions, mint one-job runner configs, remove runners, all only for private repositories the App is installed on and only for the Worker's classes. Directly at GitHub: read its own queue, acknowledge messages, acquire jobs. |
+| Worker | The App's private key and webhook secret. Admin tokens, each for one repository, or with `ORG` for the organization, and ten minutes (*measured* for a repository). | What the App may do on the repositories it is installed on, or with `ORG`, register runners for the organization |
+| Agent | A box token. One session token per scale set, valid 70 minutes (*measured*). | Through the Worker: find scale sets, open and close sessions, mint one-job runner configs, remove runners, all only for private repositories the App is installed on, or with `ORG` for the organization while its runner group admits only selected repositories and no public one, and only for the Worker's classes. Directly at GitHub: read its own queue, acknowledge messages, acquire jobs. |
 | Job container | One runner config, then the job's own `GITHUB_TOKEN` and secrets | Run one job |
 
 A session token is refused ("Invalid Claims") when it asks to mint a runner config, read, list or delete a scale set, or open a session (*measured*). Only the Worker's admin token can do those.
@@ -55,6 +55,16 @@ A session token is refused ("Invalid Claims") when it asks to mint a runner conf
 6. To start a runner, the agent asks the Worker for a one-job runner config and starts a container with it in the environment. The runner takes one job and exits, and the agent removes the container.
 
 A job queued while the box is down waits for it. When the box opens its session, the job is already assigned to the scale set (*measured*).
+
+### For an organization
+
+With the Worker variables `ORG` and `RUNNER_GROUP` set, the Worker serves one organization with one scale set per class, in that runner group, instead of one per repository and class ([config](config.md#organizations)). The App then holds the organization permission Self-hosted runners instead of repository Administration. The steps above change in three places:
+
+- **Step 1.** `GET /v1/repos` lists the private, unarchived repositories the runner group admits, narrowed by `REPOS`, and names the organization. The Worker serves none of them while the group admits every repository, or every private one, or allows public repositories.
+- **Step 2.** The agent asks for one scale set per class for the organization, and the scale set's name and label are the class name as before.
+- **Step 4.** An organization scale set is offered the jobs of every repository its group admits. The agent acquires a job only when its repository is in the list and its class serves it, and leaves the others queued at GitHub.
+
+Not *measured*: no part of this has run against a real organization yet. [Config](config.md#not-checked-against-github-yet) lists the steps that check it.
 
 ## Agent internals
 
@@ -185,8 +195,9 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 
 - the App's id, slug, private key and webhook secret
 - the SHA-256 hash of the box token
-- the scale sets it created or adopted, by repository and class
+- the scale sets it created or adopted, by repository and class, or with `ORG` by organization and class
 - which box opened or last refreshed each scale set's session, until that box closes it
+- with `ORG`, the organization's account and installation, its runner group's id and why the Worker serves none of its repositories, as the last repository list found them
 - the classes paused on the dashboard, with who paused each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 - each served repository's fork pull request settings, read at most once an hour
@@ -195,7 +206,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - with [fallback](fallback.md) or [alerts](alerts.md) on, whether every box is down, whether every served repository's `BOXRUNNER_DOWN` variable says so and what the last alert said
 - which scale sets have jobs waiting with no runner, since when, and the box that reported them
 
-The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories.
+The class list is the `CLASSES` variable in `wrangler.jsonc`, so changing it is a redeploy. The optional `REPOS` variable narrows the served repositories further, for an App that was installed on all of an account's repositories. The optional `ORG` and `RUNNER_GROUP` variables make the Worker serve [an organization](#for-an-organization).
 
 The optional `FALLBACK_MINUTES` variable turns on [fallback to GitHub's runners](fallback.md). When no heartbeat arrived for that long, a Durable Object alarm sets the Actions variable `BOXRUNNER_DOWN` in every served repository, and workflows that read it in `runs-on` run on GitHub's runners. Once the box has reported for two minutes without a gap, the Worker deletes it. Heartbeats never call GitHub; the alarm does, with a token narrowed to one repository and `actions_variables: write`, a permission the App has only when its owner added it.
 
@@ -222,8 +233,8 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 
 | Endpoint | Does |
 |---|---|
-| `GET /v1/repos` | Private repositories the App is installed on, with their fork pull request settings, the classes to serve and the paused ones |
-| `POST /v1/scalesets` | Find or create the scale set for a repository and one of the Worker's classes |
+| `GET /v1/repos` | Private repositories the App is installed on, or with `ORG` that the runner group admits, with their fork pull request settings, the classes to serve, the paused ones and the organization |
+| `POST /v1/scalesets` | Find or create the scale set for a repository, or the organization, and one of the Worker's classes |
 | `POST /v1/sessions` | Open a session; returns the queue URL and session token |
 | `PATCH /v1/sessions/:id` | Refresh a session |
 | `DELETE /v1/sessions/:id` | Close a session |
@@ -231,7 +242,7 @@ Every endpoint is authenticated with the box token and versioned under `/v1`.
 | `DELETE /v1/runners/:id` | Remove a runner that has not taken a job |
 | `POST /v1/heartbeat` | Report the box's state for the dashboard; the answer names the paused classes |
 
-The Worker checks on every call that the scale set or runner belongs to a repository it serves. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
+The Worker checks on every call that the scale set or runner belongs to a repository it serves, or with `ORG` to the organization. For an organization it reads the runner group instead of a repository's visibility: a group that stopped admitting only selected repositories gets the answer 409, and one that allows public repositories also has the organization's scale sets deleted. Before it opens or refreshes a session or mints a runner, it reads the repository's visibility. A repository made public gets the answer 410 and has its scale sets deleted, which disconnects its runners. Because runners start when a job is waiting, the check runs seconds before the job, not hours. The repository list, refreshed at most once a minute, catches the rest: the scale sets of a repository it no longer serves (public, archived or left out of `REPOS`) are deleted too, so they leave the repository's runner settings even when no agent asks for it again.
 
 ## Agent commands
 

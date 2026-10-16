@@ -98,7 +98,14 @@ type Class struct {
 	MaxDuration time.Duration
 }
 
-func (c Class) warm(repo string) bool { return slices.Contains(c.Warm, strings.ToLower(repo)) }
+// warm reports whether the scale set of scope keeps a runner ready. An
+// organization scale set's runners take jobs of all its repositories, so it
+// keeps one when the class warms any of them.
+func (c Class) warm(scope string) bool {
+	scope = strings.ToLower(scope)
+	org := !strings.Contains(scope, "/")
+	return slices.ContainsFunc(c.Warm, func(repo string) bool { return repo == scope || org && strings.HasPrefix(repo, scope+"/") })
+}
 
 // Backoff is a class whose runners fail before they take a job: their
 // containers exit, or fail to start.

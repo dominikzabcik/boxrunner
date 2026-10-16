@@ -56,7 +56,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `dockerfile` | none | Builds the class's own image; see below. Set either this or `image`. |
 | `keep_failed` | none | Keeps a failed job's container this long, like `15m`, so `sudo boxrunner shell` can open a shell in a copy of it with the workspace as the job left it. At most `24h`. Kept containers do not count toward `max`. |
 | `max_duration` | none | Stops a job that runs longer than this, like `6h`, counted from when the runner took it. The runner gets SIGTERM, cancels the job and reports it, and its container is removed. It frees the place of a runner that hangs after its job ends, which `timeout-minutes` cannot do. At least `1m`. |
-| `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. |
+| `repos` | every repository | Only these repositories, as `["owner/name", …]`. Each class opens one scale set in every repository it serves, so a class meant for one project should name it. For a Worker that serves an [organization](#organizations), the class has one scale set and acquires jobs only of these repositories. |
 | `warm` | none | Keeps one idle runner of this class ready for each of these repositories, as `["owner/name", …]`, so their jobs skip the cold start. Each must be one the class serves. A warm runner counts toward `max` and is never removed for being idle; when it takes a job, another starts once no other job is waiting for the place. Name fewer repositories than `max`, unless `repos` lists only warm repositories, so the class's other repositories always have a place. |
 | `isolation` | `sysbox` when Docker has Sysbox's runtime, else `runc` | How the class's jobs are kept from the box; see below. |
 | `docker` | `false` | Gives each job its own Docker daemon; see below. Needs `isolation = "sysbox"`, which it implies. |
@@ -78,7 +78,7 @@ Sysbox supports Ubuntu 22.04 or newer and Debian 11 or newer on Linux 5.15 or ne
 
 ## Several boxes
 
-Several boxes can share one Worker and its box token. Give each box its own `box` name and its own work: different classes, or the same class with `repos` lists that do not overlap. A workflow then picks the box through the class in `runs-on`, and the dashboard shows each box by name.
+Several boxes can share one Worker and its box token. Give each box its own `box` name and its own work: different classes, or the same class with `repos` lists that do not overlap. A workflow then picks the box through the class in `runs-on`, and the dashboard shows each box by name. With a Worker that serves an [organization](#organizations), give each box its own classes: a class has one scale set for the whole organization.
 
 ```toml
 # /etc/boxrunner/config.toml on the first box
@@ -113,6 +113,64 @@ One label spread over several boxes, so that both run jobs from the same `runs-o
 The boxes share the box token's request budget of about 1,800 requests an hour ([api.md](api.md#conventions)). A box's heartbeat alone takes 120 of them.
 
 A class paused on the [dashboard](dashboard.md#pausing-a-class) is paused on every box. With [fallback](fallback.md) on, the Worker sends jobs to GitHub's runners only when no box has reported for `FALLBACK_MINUTES`, so while one box reports, the jobs of a box that is down wait for it.
+
+## Organizations
+
+By default the Worker makes one scale set per repository and class. That needs the App's repository permission **Administration** (read and write), which also lets the App change a repository's settings and delete it. For an organization, the Worker can instead make one scale set per class for the whole organization. The App then needs the organization permission **Self-hosted runners** (read and write) and **Metadata** (read), and nothing on its repositories.
+
+Two Worker variables, in `wrangler.jsonc` or the Worker's settings in the Cloudflare dashboard, turn it on:
+
+| Variable | Meaning |
+|---|---|
+| `ORG` | The organization's login. Empty, the default, serves repositories one by one. |
+| `RUNNER_GROUP` | Required with `ORG`. The organization's runner group the scale sets go in, by name. |
+
+With only one of them set, or `ORG` not a login, the Worker answers every agent call with `503 not_configured` and the setup page is locked, each naming the variable.
+
+### The runner group is the fence
+
+An organization scale set takes the jobs of every repository its runner group admits, whatever repositories the App is installed on. So the runner group, not the App's installation, decides which repositories can reach the box. The Worker serves a group only while:
+
+- its repository access is **Selected repositories**, and
+- **Allow public repositories** is off, for the group and, for a group an enterprise shares with the organization, for the enterprise.
+
+It reads the group each time it lists the repositories, at most once a minute, and again from GitHub right before a session opens or is refreshed and before a runner is minted. While the group admits every repository, or every private one, the Worker serves none of the organization's repositories and answers `409 group_ineligible` with the reason, which `boxrunner doctor`, `boxrunner status` and the [dashboard](dashboard.md) show too. When the group allows public repositories, the Worker also deletes its organization scale sets, which disconnects their runners, as it does for a repository that turns public. Once the group is fixed, the agent creates them again within five minutes.
+
+The served repositories are the group's selected repositories that are private and not archived, narrowed by `REPOS` when it is set. A public repository in the group is not served, and GitHub gives the group no job of a public repository while public repositories are off.
+
+### Setting it up
+
+1. **Make the runner group.** In the organization's settings, under **Actions**, **Runner groups**, create a group, such as `boxrunner`. Set **Repository access** to **Selected repositories**, add the private repositories whose jobs should run on the box and leave **Allow public repositories** off. GitHub lets only Team and Enterprise organizations create groups; see [what is not checked yet](#not-checked-against-github-yet) for the Free plan.
+2. **Set the variables** `ORG` and `RUNNER_GROUP` and deploy the Worker.
+3. **Run setup.** With `ORG` set, the setup page creates the App under the organization, so you must be one of its owners, with **Self-hosted runners** (read and write) and **Metadata** (read) instead of **Administration**. Install it on the organization. For the runners it does not matter which repositories you pick; [fallback](fallback.md) and [unserved jobs](unserved-jobs.md) still work per repository, so pick the group's repositories for them.
+4. **Install the agent** as usual. Workflows use `runs-on: boxrunner` as before.
+
+### On the box
+
+The box's config does not change. The agent opens one session per class for the organization instead of one per repository and class, and acquires an offered job only when the Worker serves its repository and so does the class (`repos`). A job of any other repository stays queued at GitHub: the agent logs it once, `sudo boxrunner status` names the repository and how many of its jobs wait, and the `boxrunner_refused_jobs_total` [metric](#metrics) counts them. Take such a repository out of the group, or let the class serve it.
+
+- **`repos`** narrows what a class acquires, as above. It cannot split one class over [several boxes](#several-boxes): a class has one scale set for the whole organization, and one session at a time reads it, so give each box its own classes instead.
+- **`warm`** keeps one idle runner for the class's organization scale set when it names any repository of the organization, since that runner takes jobs of every repository.
+- **Fork pull requests.** The App has no repository permission to read their settings with, so `doctor` and the dashboard do not warn about them. Check them in each repository's settings under **Actions**, **General**, or for the whole organization.
+- **Finished jobs** are recorded under their own repository; runners and assigned jobs under the organization, as `octo (organization)` in `status` and `organization="octo"`, `repository=""` in the metrics, as actions-runner-controller labels an organization scale set.
+
+### Switching a Worker that served repositories
+
+The scale sets the Worker made in each repository keep the class's label, and GitHub may still hand them jobs that no box reads. Take them off GitHub before you switch. With the old App still in place, set `REPOS` to `none/none`, which matches no repository, and redeploy: within five minutes the agent lists the repositories and the Worker deletes every repository scale set it made. Then set `ORG` and `RUNNER_GROUP`, empty `REPOS`, and on the setup page forget the old App and create the new one. An App that the organization already owns can instead keep **Administration** while you add **Self-hosted runners**: the first time the Worker lists the organization, it deletes its repository scale sets itself, and you can then remove **Administration**.
+
+### Not checked against GitHub yet
+
+The organization code is tested against a fake of GitHub's API built from [actions/scaleset](https://github.com/actions/scaleset/blob/e6daac702355cdb5b880b4fbdcf6d85dcd9e48e5/client.go), the client that [actions-runner-controller](https://github.com/actions/actions-runner-controller/blob/5aed393af8a412f6b0fe27507713687a6beeb000/controllers/actions.github.com/autoscalingrunnerset_controller.go#L1022-L1031) uses, and from GitHub's [runner groups API](https://docs.github.com/en/rest/actions/self-hosted-runner-groups). It has not run against a real organization. These are the steps to check it, on a test organization of yours and a throwaway Worker, with one private repository in the group (`octo/site`), one private repository outside it (`octo/docs`) and one in it that `REPOS` leaves out (`octo/api`):
+
+1. **The Free plan.** On a Free organization, open **Settings**, **Actions**, **Runner groups**. Note whether the **Default** group's repository access can be set to **Selected repositories**. If it cannot, the Worker refuses the group and organization mode does not work on Free.
+2. **The App.** Deploy the Worker with `ORG`, `RUNNER_GROUP` and `REPOS = "octo/site,octo/docs"`, run setup and install the App on the organization. On the App's page, check that it asks for **Self-hosted runners** (read and write) and **Metadata** (read) and nothing else.
+3. **The group.** Install an agent and run `sudo boxrunner doctor`. Its `organization` line should be OK and name 1 repository. A failure that the App lacks the permission means GitHub did not take the manifest key `organization_self_hosted_runners`.
+4. **The scale sets.** Under **Runner groups**, the group should list the scale sets `boxrunner` and `boxrunner-light`. If they are in another group, the Actions service's group id differs from the REST API's.
+5. **A job.** Push a workflow with `runs-on: boxrunner` to `octo/site`. It should run on the box, and `sudo boxrunner status` should list the finished job under `octo/site`, not `octo`: that checks how a job names its repository.
+6. **The fences.** Push the same workflow to `octo/docs`: it should stay queued, and `status` should not mention it, because GitHub keeps it from the group. Push it to `octo/api`: it should stay queued, and `status` should say `octo boxrunner was offered 1 job of octo/api`.
+7. **A group that opens up.** Set the group's repository access to **All repositories**. Within a minute `doctor` should fail its `organization` line and new runners should not start. Set it back. Then turn on **Allow public repositories**: the scale sets should leave the group within a minute. Turn it off, and they should come back within five minutes.
+8. **Precedence.** Leave a repository scale set named `boxrunner` in `octo/site` from a Worker that served repositories, and push a job there. Note which scale set gets it.
+9. **Two classes, one box.** Queue jobs for `boxrunner` and `boxrunner-light` at once and check that both run.
 
 ## Docker inside jobs
 
@@ -309,6 +367,7 @@ Jobs cannot reach the port, whatever the address. boxrunner's firewall drops eve
 | `boxrunner_class_held` | gauge | `class` | 1 while the class holds its starts because its runners exit before taking a job, else 0. |
 | `boxrunner_egress_ready` | gauge | `class` | 1 while the agent serves the class with its [egress allowlist](#egress-allowlist) in force, else 0. Only for classes with `egress`. |
 | `boxrunner_egress_blocked_total` | counter | `class`, `kind` | What the class's allowlist refused since the agent started: `packet`s dropped and `lookup`s refused. |
+| `boxrunner_refused_jobs_total` | counter | `name`, `organization`, `repository` | Jobs an [organization scale set](#on-the-box) was offered from a repository this box does not serve, since the agent started. They wait at GitHub. Only once there is one. |
 | `gha_assigned_jobs` | gauge | `name`, `organization`, `repository` | Jobs GitHub assigned to the scale set. |
 | `gha_completed_jobs_total` | counter | `name`, `organization`, `repository`, `job_result` | Jobs that finished since the agent started. |
 | `gha_job_execution_duration_seconds` | histogram | `name`, `organization`, `repository`, `job_result` | From when a runner took the job to when it finished. |

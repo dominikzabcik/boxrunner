@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,20 @@ type Job struct {
 	ScaleSetAssignTime time.Time `json:"scaleSetAssignTime"`
 	RunnerAssignTime   time.Time `json:"runnerAssignTime"`
 	FinishTime         time.Time `json:"finishTime"`
+}
+
+// FullName is the job's repository as owner/name. A job offered to an
+// organization scale set names its repository apart from its owner; owner
+// stands in when the job leaves its owner out. It is "" when the job names no
+// repository.
+func (j Job) FullName(owner string) string {
+	switch {
+	case j.Repository == "" || strings.Contains(j.Repository, "/"):
+		return j.Repository
+	case j.Owner != "":
+		owner = j.Owner
+	}
+	return owner + "/" + j.Repository
 }
 
 type JobStarted struct {

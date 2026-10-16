@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 	NotFound        Code = "not_found"
 	SessionExists   Code = "session_exists"
 	RunnerBusy      Code = "runner_busy"
+	GroupIneligible Code = "group_ineligible"
 	RepoIneligible  Code = "repo_ineligible"
 	UpgradeRequired Code = "upgrade_required"
 	RateLimited     Code = "rate_limited"
@@ -53,6 +55,7 @@ var handlings = map[Code]handling{
 	NotFound:        giveBack,
 	SessionExists:   retry,
 	RunnerBusy:      giveBack,
+	GroupIneligible: giveBack,
 	RepoIneligible:  giveBack,
 	UpgradeRequired: fatal,
 	RateLimited:     retry,
@@ -148,10 +151,35 @@ type ForkPullRequests struct {
 
 type Repos struct {
 	Repos []Repo `json:"repos"`
+	// Organization is set when the Worker serves an organization through one
+	// scale set per class; Repos are then the repositories its runner group
+	// admits. A Worker that serves repositories one by one sends none.
+	Organization *Organization `json:"organization"`
 	// Classes are the classes to serve now: the Worker's classes without the paused ones.
 	Classes []string `json:"classes"`
 	// Paused are the classes paused on the dashboard. A Worker from before pausing sends none.
 	Paused []string `json:"paused"`
+}
+
+// Organization is the organization a Worker serves and the runner group its
+// scale sets are in. Problem says why the Worker serves none of its
+// repositories, such as a group that admits public repositories.
+type Organization struct {
+	Name    string `json:"name"`
+	Group   string `json:"group"`
+	Problem string `json:"problem"`
+}
+
+// IsOrg reports whether a scale set's scope, which the agent keeps where a
+// repository's name goes, names an organization rather than a repository.
+func IsOrg(scope string) bool { return scope != "" && !strings.Contains(scope, "/") }
+
+// scopeField is the field that names a scale set's scope in a request.
+func scopeField(scope string) string {
+	if IsOrg(scope) {
+		return "org"
+	}
+	return "repo"
 }
 
 type ScaleSet struct {
@@ -284,10 +312,13 @@ func (c *Client) Repos(ctx context.Context) (Repos, error) {
 	return out, err
 }
 
+// ScaleSet finds or creates the scale set of a class for repo, which is
+// owner/name, or for an organization scale set the organization's login. So
+// do the other calls that name a scale set.
 func (c *Client) ScaleSet(ctx context.Context, repo, class string) (ScaleSet, error) {
 	var out ScaleSet
 	err := c.do(ctx, "find scale set", http.MethodPost, "/v1/scalesets", nil,
-		map[string]any{"repo": repo, "class": class}, &out)
+		map[string]any{scopeField(repo): repo, "class": class}, &out)
 	return out, err
 }
 
@@ -314,7 +345,7 @@ func (r sessionResponse) session() Session {
 func (c *Client) OpenSession(ctx context.Context, repo string, scaleSetID int64, owner string) (Session, error) {
 	var out sessionResponse
 	err := c.do(ctx, "open session", http.MethodPost, "/v1/sessions", nil,
-		map[string]any{"repo": repo, "scaleSetId": scaleSetID, "owner": owner}, &out)
+		map[string]any{scopeField(repo): repo, "scaleSetId": scaleSetID, "owner": owner}, &out)
 	return out.session(), err
 }
 
@@ -323,7 +354,7 @@ func (c *Client) OpenSession(ctx context.Context, repo string, scaleSetID int64,
 func (c *Client) RefreshSession(ctx context.Context, repo string, scaleSetID int64, sessionID, owner string) (Session, error) {
 	var out sessionResponse
 	err := c.do(ctx, "refresh session", http.MethodPatch, "/v1/sessions/"+url.PathEscape(sessionID), nil,
-		map[string]any{"repo": repo, "scaleSetId": scaleSetID, "owner": owner}, &out)
+		map[string]any{scopeField(repo): repo, "scaleSetId": scaleSetID, "owner": owner}, &out)
 	return out.session(), err
 }
 
@@ -340,7 +371,7 @@ func (c *Client) CloseSession(ctx context.Context, repo string, scaleSetID int64
 func (c *Client) MintRunner(ctx context.Context, repo string, scaleSetID int64, name string) (Runner, error) {
 	var out Runner
 	err := c.do(ctx, "mint runner", http.MethodPost, "/v1/runners", nil,
-		map[string]any{"repo": repo, "scaleSetId": scaleSetID, "name": name}, &out)
+		map[string]any{scopeField(repo): repo, "scaleSetId": scaleSetID, "name": name}, &out)
 	return out, err
 }
 
@@ -356,7 +387,7 @@ func (c *Client) RemoveRunner(ctx context.Context, repo string, scaleSetID, runn
 }
 
 func scaleSetQuery(repo string, scaleSetID int64) url.Values {
-	return url.Values{"repo": {repo}, "scaleSetId": {strconv.FormatInt(scaleSetID, 10)}}
+	return url.Values{scopeField(repo): {repo}, "scaleSetId": {strconv.FormatInt(scaleSetID, 10)}}
 }
 
 func (c *Client) do(ctx context.Context, call, method, path string, query url.Values, in, out any) error {

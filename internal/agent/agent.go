@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -139,6 +140,15 @@ type Agent struct {
 	latest atomic.Pointer[string]
 	// heartbeatOK is when the Worker last took a heartbeat, in Unix nanoseconds.
 	heartbeatOK atomic.Int64
+	// org is the organization the Worker serves, nil while it serves
+	// repositories one by one. accepts holds, by class, the repositories (lower
+	// case) whose jobs the class's organization scale set acquires.
+	org     atomic.Pointer[worker.Organization]
+	accepts atomic.Pointer[map[string]map[string]bool]
+	// refused counts, by scale set and repository, the jobs an organization
+	// scale set was offered from repositories the box does not serve.
+	refusedMu sync.Mutex
+	refused   map[scheduler.Key]map[string]int
 	// draining mirrors DrainFile; drainMu orders the changes to both.
 	draining atomic.Bool
 	drainMu  sync.Mutex
@@ -794,8 +804,13 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 	if finished.IsZero() {
 		finished = time.Now()
 	}
+	// A job of an organization scale set is recorded under its own repository.
+	repo := r.ScaleSet.Repo
+	if worker.IsOrg(repo) {
+		repo = cmp.Or(j.FullName(repo), repo)
+	}
 	job := status.Job{
-		Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Runner: r.Name,
+		Repo: repo, Class: r.ScaleSet.Class, Runner: r.Name,
 		Workflow: j.WorkflowRef, Name: j.DisplayName, Result: j.Result,
 		Queued: j.QueueTime, Started: j.RunnerAssignTime, Finished: finished,
 	}
@@ -803,7 +818,7 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 	if err := status.Append(a.JobsLog, job); err != nil {
 		a.Log.Warn("writing the job log", "err", err)
 	}
-	a.Log.Info("job finished", "repo", r.ScaleSet.Repo, "class", r.ScaleSet.Class, "job", j.DisplayName, "result", j.Result)
+	a.Log.Info("job finished", "repo", repo, "class", r.ScaleSet.Class, "job", j.DisplayName, "result", j.Result)
 }
 
 func (a *Agent) publish(s scheduler.State) {
@@ -827,6 +842,9 @@ func (a *Agent) publish(s scheduler.State) {
 	if building := a.building.Load(); building != nil {
 		snap.Image.Building = *building
 	}
+	if org := a.org.Load(); org != nil {
+		snap.Organization = &status.Organization{Name: org.Name, Group: org.Group, Problem: org.Problem}
+	}
 	warm := scheduler.Warm(s)
 	active := map[string]int{}
 	for _, r := range s.Runners {
@@ -838,9 +856,11 @@ func (a *Agent) publish(s scheduler.State) {
 	for _, c := range a.Config.Classes {
 		snap.Classes = append(snap.Classes, status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until})
 	}
+	a.refusedMu.Lock()
 	for key, ss := range s.ScaleSets {
-		snap.ScaleSets = append(snap.ScaleSets, status.ScaleSet{Repo: key.Repo, Class: key.Class, Assigned: len(ss.Jobs)})
+		snap.ScaleSets = append(snap.ScaleSets, status.ScaleSet{Repo: key.Repo, Class: key.Class, Assigned: len(ss.Jobs), Refused: maps.Clone(a.refused[key])})
 	}
+	a.refusedMu.Unlock()
 	for key, box := range s.HeldBy {
 		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box})
 	}
@@ -966,6 +986,12 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 		return nil, nil
 	}
 	want := map[scheduler.Key]bool{}
+	org := repos.Organization
+	a.org.Store(org)
+	if org != nil && org.Problem != "" {
+		a.Log.Error("the Worker serves no repository of its organization", "org", org.Name, "group", org.Group, "problem", org.Problem)
+	}
+	accepts := map[string]map[string]bool{}
 	for _, c := range a.Config.Classes {
 		now := slices.Contains(repos.Paused, c.Name)
 		switch {
@@ -991,12 +1017,45 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 			continue
 		}
 		for _, r := range repos.Repos {
-			if c.Serves(r.Name) {
+			switch {
+			case !c.Serves(r.Name):
+			case org == nil:
 				want[scheduler.Key{Repo: r.Name, Class: c.Name}] = true
+			default:
+				// One scale set per class serves the whole organization.
+				want[scheduler.Key{Repo: org.Name, Class: c.Name}] = true
+				if accepts[c.Name] == nil {
+					accepts[c.Name] = map[string]bool{}
+				}
+				accepts[c.Name][strings.ToLower(r.Name)] = true
 			}
 		}
 	}
+	a.accepts.Store(&accepts)
 	return want, nil
+}
+
+// accept reports whether the class's organization scale set acquires a job
+// of repo: the Worker serves the repository and so does the class.
+func (a *Agent) accept(class, repo string) bool {
+	accepts := a.accepts.Load()
+	return accepts != nil && (*accepts)[class][strings.ToLower(repo)]
+}
+
+// refuse records an offered job of a repository the box does not serve,
+// which waits at GitHub for a box that does.
+func (a *Agent) refuse(key scheduler.Key, j queue.Job) {
+	repo := cmp.Or(j.FullName(key.Repo), "an unnamed repository")
+	a.Log.Warn("the organization's scale set was offered a job of a repository this box does not serve; it waits at GitHub", "org", key.Repo, "class", key.Class, "repo", repo, "job", j.DisplayName)
+	a.refusedMu.Lock()
+	defer a.refusedMu.Unlock()
+	if a.refused == nil {
+		a.refused = map[scheduler.Key]map[string]int{}
+	}
+	if a.refused[key] == nil {
+		a.refused[key] = map[string]int{}
+	}
+	a.refused[key][repo]++
 }
 
 func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]context.CancelFunc, key scheduler.Key, err error) error {
@@ -1015,6 +1074,8 @@ func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]co
 		return err
 	case worker.Is(err, worker.RepoIneligible):
 		a.Log.Warn("repository is public, archived or no longer has the App; stopped serving it", "repo", key.Repo, "err", err)
+	case worker.Is(err, worker.GroupIneligible):
+		a.Log.Error("the Worker refuses the organization's runner group; trying again within five minutes", "org", key.Repo, "class", key.Class, "err", err)
 	default:
 		a.Log.Error("listener stopped; it restarts within five minutes", "repo", key.Repo, "class", key.Class, "err", err)
 	}
@@ -1030,10 +1091,15 @@ func (a *Agent) listen(ctx context.Context, key scheduler.Key) error {
 		return err
 	}
 	class, _ := a.Config.Class(key.Class)
-	return listener.Run(ctx, listener.Config{
+	c := listener.Config{
 		ScaleSet: key, ScaleSetID: ss.ID, Owner: a.Config.Box, Capacity: class.Max,
 		Worker: a.Worker, Queue: a.queue, Events: a.events, Log: a.Log,
-	})
+	}
+	if worker.IsOrg(key.Repo) {
+		c.Accept = func(j queue.Job) bool { return a.accept(key.Class, j.FullName(key.Repo)) }
+		c.Refused = func(j queue.Job) { a.refuse(key, j) }
+	}
+	return listener.Run(ctx, c)
 }
 
 func hasEntries(path string) bool {

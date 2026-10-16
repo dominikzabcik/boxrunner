@@ -195,6 +195,7 @@ describe('GET /dashboard.json', () => {
 			dollarsPerMinute: 0.006,
 			repos: null,
 			forkPullRequests: {},
+			organization: null,
 			classes: ['boxrunner', 'boxrunner-light'],
 			classesProblem: null,
 			paused: [],

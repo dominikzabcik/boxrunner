@@ -304,6 +304,11 @@ type fakeGitHub struct {
 	runner string
 	list   string
 	tags   map[string]string
+	// org, when set, is the organization the Worker serves; it then lists
+	// octo/site and octo/docs, the private repositories its runner group admits.
+	org string
+	// acquired are the bodies of the acquire calls, the jobs the agent took.
+	acquired []string
 }
 
 const (
@@ -339,6 +344,14 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			paused := append([]string{}, g.paused...)
 			g.mu.Unlock()
 			serving := slices.DeleteFunc([]string{"boxrunner", "boxrunner-light"}, func(c string) bool { return slices.Contains(paused, c) })
+			if g.org != "" {
+				json.NewEncoder(w).Encode(map[string]any{
+					"repos":   []map[string]any{{"name": "octo/site", "id": 123}, {"name": "octo/docs", "id": 124}},
+					"classes": serving, "paused": paused,
+					"organization": map[string]string{"name": g.org, "group": "boxrunner", "problem": ""},
+				})
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{"repos": []map[string]any{{"name": "octo/site", "id": 123}}, "classes": serving, "paused": paused})
 		case r.URL.Path == "/v1/scalesets":
 			io.WriteString(w, `{"id":7,"name":"boxrunner"}`)
@@ -369,6 +382,9 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 		case strings.HasPrefix(r.URL.Path, "/queue/7/"):
 			w.WriteHeader(204)
 		case r.URL.Path == "/acquire":
+			g.mu.Lock()
+			g.acquired = append(g.acquired, string(body))
+			g.mu.Unlock()
 			fmt.Fprintf(w, `{"count":1,"value":%s}`, body)
 		case r.URL.Path == "/releases/latest":
 			http.Redirect(w, r, "/releases/tag/v"+cmp.Or(g.runner, "2.338.0"), http.StatusFound)
@@ -617,6 +633,70 @@ func TestJobLifecycle(t *testing.T) {
 		Queued: time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC), Started: time.Date(2026, 10, 13, 21, 0, 8, 0, time.UTC), Finished: time.Date(2026, 10, 13, 21, 3, 0, 0, time.UTC)}
 	if len(jobs) != 1 || !reflect.DeepEqual(jobs[0], wantJob) {
 		t.Errorf("job log = %+v", jobs)
+	}
+}
+
+// An organization scale set is offered the jobs of every repository its
+// runner group admits; the agent takes only those of repositories both the
+// Worker and the class serve, and records each job under its own repository.
+func TestOrganizationScaleSet(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) {
+		h.github.org = "octo"
+		c.Repos = []string{"octo/site", "octo/secret"}
+	})
+	h.github.queue <- message(1, 1,
+		`{"messageType":"JobAvailable","runnerRequestId":501,"repositoryName":"site","ownerName":"octo","queueTime":"2026-10-13T21:00:00Z"}`,
+		`{"messageType":"JobAvailable","runnerRequestId":502,"repositoryName":"docs","ownerName":"octo","jobDisplayName":"lint"}`,
+		`{"messageType":"JobAvailable","runnerRequestId":503,"repositoryName":"secret","ownerName":"octo"}`)
+	// GitHub offers a job it could not place again; the agent counts it once.
+	h.github.queue <- message(2, 1, `{"messageType":"JobAvailable","runnerRequestId":502,"repositoryName":"docs","ownerName":"octo","jobDisplayName":"lint"}`)
+
+	var name string
+	waitFor(t, "a running job container", func() bool {
+		for n, c := range h.docker.snapshot() {
+			name = n
+			return c.State == "running"
+		}
+		return false
+	})
+	h.waitLog(t, "was offered a job of a repository this box does not serve", "repo=octo/docs", "job=lint")
+	h.github.queue <- message(3, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"repositoryName":"site","ownerName":"octo"}`, name))
+	h.github.queue <- message(4, 0, fmt.Sprintf(`{"messageType":"JobCompleted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"result":"succeeded","jobDisplayName":"test",
+		"repositoryName":"site","ownerName":"octo","queueTime":"2026-10-13T21:00:00Z","runnerAssignTime":"2026-10-13T21:00:08Z","finishTime":"2026-10-13T21:03:00Z"}`, name))
+	waitFor(t, "the finished job's container to go", func() bool { return len(h.docker.snapshot()) == 0 })
+	waitFor(t, "the second offer of octo/docs's job", func() bool {
+		snap, err := status.Fetch(context.Background(), h.socket)
+		return err == nil && len(snap.ScaleSets) == 1 && snap.ScaleSets[0].Assigned == 0
+	})
+	snap, err := status.Fetch(context.Background(), h.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.stop(t)
+
+	wantCalls := []string{
+		"GET /v1/repos",
+		`POST /v1/scalesets {"class":"boxrunner","org":"octo"}`,
+		`POST /v1/sessions {"org":"octo","owner":"box-1","scaleSetId":7}`,
+		fmt.Sprintf(`POST /v1/runners {"name":%q,"org":"octo","scaleSetId":7}`, name),
+		"DELETE /v1/sessions/s1?org=octo&scaleSetId=7",
+	}
+	if got := h.github.workerCalls(); !reflect.DeepEqual(got, wantCalls) {
+		t.Errorf("worker calls =\n%q\nwant\n%q", got, wantCalls)
+	}
+	if got := h.github.acquired; !reflect.DeepEqual(got, []string{"[501]"}) {
+		t.Errorf("acquired %q, want only octo/site's job", got)
+	}
+	wantSets := []status.ScaleSet{{Repo: "octo", Class: "boxrunner", Refused: map[string]int{"octo/docs": 1, "octo/secret": 1}}}
+	if !reflect.DeepEqual(snap.ScaleSets, wantSets) {
+		t.Errorf("scale sets = %+v, want %+v", snap.ScaleSets, wantSets)
+	}
+	if want := (&status.Organization{Name: "octo", Group: "boxrunner"}); !reflect.DeepEqual(snap.Organization, want) {
+		t.Errorf("organization = %+v, want %+v", snap.Organization, want)
+	}
+	jobs, _ := status.Recent(h.jobs, 10)
+	if len(jobs) != 1 || jobs[0].Repo != "octo/site" {
+		t.Errorf("job log = %+v; want the job under octo/site", jobs)
 	}
 }
 
