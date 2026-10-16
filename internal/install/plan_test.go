@@ -4,6 +4,8 @@ import (
 	"io/fs"
 	"net/netip"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
@@ -197,7 +199,7 @@ func TestPlanDocker(t *testing.T) {
 			desired: desired,
 			observe: func(o *Observed) {
 				withDockerClass(o)
-				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), firewall.Current
+				o.Mirror, o.FirewallOpen = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), map[firewall.Services]firewall.State{{Mirror: true}: firewall.Current}
 			},
 			want: nil,
 		},
@@ -206,7 +208,7 @@ func TestPlanDocker(t *testing.T) {
 			desired: desired,
 			observe: func(o *Observed) {
 				withDockerClass(o)
-				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), firewall.Current
+				o.Mirror, o.FirewallOpen = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000")), map[firewall.Services]firewall.State{{Mirror: true}: firewall.Current}
 				o.Mirror.Running = false
 			},
 			want: []string{startMirror},
@@ -216,7 +218,7 @@ func TestPlanDocker(t *testing.T) {
 			desired: desired,
 			observe: func(o *Observed) {
 				withDockerClass(o)
-				o.Mirror, o.FirewallMirror = mirror.Current(netip.MustParseAddrPort("172.19.0.1:5000")), firewall.Stale
+				o.Mirror, o.FirewallOpen = mirror.Current(netip.MustParseAddrPort("172.19.0.1:5000")), map[firewall.Services]firewall.State{{Mirror: true}: firewall.Stale}
 			},
 			want: []string{startMirror, mirrorFirewall},
 		},
@@ -455,5 +457,57 @@ func TestPlanUninstall(t *testing.T) {
 	clean := Observed{DockerBinary: true, DockerUp: true, CgroupV2: true, Paths: map[string]File{}}
 	if got := PlanUninstall(clean); len(got) != 0 {
 		t.Errorf("uninstall on a clean box plans %q", names(got))
+	}
+}
+
+func TestPlanCache(t *testing.T) {
+	withCache := func(o *Observed, docker bool) {
+		cfg := config.Default(desired.Worker, desired.Box, desired.Host, docker)
+		cfg = strings.Replace(cfg, "[[class]]\nname = \"boxrunner\"\n", "cache = \"20GB\"\n\n[[class]]\nname = \"boxrunner\"\ncache = true\n", 1)
+		o.Paths[layout.ConfigPath] = File{[]byte(cfg), 0o644}
+	}
+	cases := []struct {
+		name    string
+		observe func(*Observed)
+		want    []string
+	}{
+		{
+			name:    "the cache turned on",
+			observe: func(o *Observed) { withCache(o, false) },
+			want:    []string{"apply the firewall rules for boxrunner0, which let jobs reach the Actions cache"},
+		},
+		{
+			name: "the cache with its rules in place",
+			observe: func(o *Observed) {
+				withCache(o, false)
+				o.FirewallOpen = map[firewall.Services]firewall.State{{Cache: true}: firewall.Current}
+			},
+			want: nil,
+		},
+		{
+			name: "the cache and a docker class",
+			observe: func(o *Observed) {
+				withCache(o, true)
+				o.Sysbox = true
+				o.Mirror = mirror.Current(netip.MustParseAddrPort("172.18.0.1:5000"))
+				o.FirewallOpen = map[firewall.Services]firewall.State{{Mirror: true}: firewall.Current, {Cache: true}: firewall.Stale}
+			},
+			want: []string{"apply the firewall rules for boxrunner0, which let jobs reach the registry mirror and the Actions cache"},
+		},
+		{
+			name: "the cache turned off",
+			observe: func(o *Observed) {
+				o.Firewall = firewall.Stale
+				o.FirewallOpen = map[firewall.Services]firewall.State{{Cache: true}: firewall.Current}
+			},
+			want: []string{"apply the firewall rules for boxrunner0"},
+		},
+	}
+	for _, c := range cases {
+		o := installed()
+		c.observe(&o)
+		if got := names(Plan(desired, o)); !slices.Equal(got, c.want) {
+			t.Errorf("%s: Plan =\n%s\nwant\n%s", c.name, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+		}
 	}
 }

@@ -135,6 +135,8 @@ type Class struct {
 	// is always Sysbox.
 	Docker    bool
 	Isolation Isolation
+	// Cache sends the class's actions/cache steps to the box's cache server.
+	Cache bool
 }
 
 type Config struct {
@@ -145,6 +147,8 @@ type Config struct {
 	// Metrics is where the agent serves Prometheus metrics; the zero value
 	// serves none.
 	Metrics netip.AddrPort
+	// Cache is the most the box's Actions cache keeps; 0 runs no cache server.
+	Cache Bytes
 }
 
 func (c Config) Class(name string) (Class, bool) {
@@ -163,6 +167,7 @@ const (
 	maxRunnerName = 64
 	nameSuffix    = 8
 	minMemory     = 256 * MiB
+	minCache      = 1 * GiB
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -173,6 +178,7 @@ type rawConfig struct {
 	DiskFloor     string     `toml:"disk_floor"`
 	Metrics       string     `toml:"metrics"`
 	MetricsPublic bool       `toml:"metrics_public"`
+	Cache         string     `toml:"cache"`
 	Classes       []rawClass `toml:"class"`
 }
 
@@ -192,6 +198,7 @@ type rawClass struct {
 	MaxDuration string   `toml:"max_duration"`
 	Docker      bool     `toml:"docker"`
 	Isolation   string   `toml:"isolation"`
+	Cache       bool     `toml:"cache"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -230,6 +237,14 @@ func Parse(data []byte, hostname string) (Config, error) {
 		errs = append(errs, err)
 	}
 
+	if raw.Cache != "" {
+		if cfg.Cache, err = ParseBytes(raw.Cache); err != nil {
+			errs = append(errs, fmt.Errorf("cache: %w", err))
+		} else if cfg.Cache < minCache {
+			errs = append(errs, fmt.Errorf("cache: %s is less than %s", cfg.Cache, minCache))
+		}
+	}
+
 	if len(raw.Classes) == 0 {
 		errs = append(errs, errors.New("no [[class]]: at least one is needed"))
 	}
@@ -248,6 +263,14 @@ func Parse(data []byte, hostname string) (Config, error) {
 			errs = append(errs, fmt.Errorf("%s: %w", label, e))
 		}
 		cfg.Classes = append(cfg.Classes, class)
+	}
+
+	cached := slices.ContainsFunc(cfg.Classes, func(c Class) bool { return c.Cache })
+	switch {
+	case raw.Cache != "" && !cached:
+		errs = append(errs, errors.New("cache: no class has cache = true, so no job would use it"))
+	case raw.Cache == "" && cached:
+		errs = append(errs, errors.New(`cache: a class has cache = true but the box has no cache; set its size at the top, such as cache = "20GB"`))
 	}
 
 	if err := errors.Join(errs...); err != nil {
@@ -298,6 +321,7 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 		Image:    rc.Image,
 		Shm:      DefaultShm,
 		Docker:   rc.Docker,
+		Cache:    rc.Cache,
 	}
 	switch {
 	case rc.Name == "":

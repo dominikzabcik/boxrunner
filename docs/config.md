@@ -35,6 +35,7 @@ max = 2
 | `disk_floor` | `10GB` | No runner starts while Docker's data directory, or Sysbox's `/var/lib/sysbox` when it sits on another filesystem, has less free space than this. Below half of it, the agent stops the job container that wrote the most, counting the images and containers of a job's own Docker. |
 | `metrics` | none | An IP address and port, such as `127.0.0.1:9464`, where the agent serves [Prometheus metrics](#metrics). |
 | `metrics_public` | `false` | Allows `metrics` to be an address other machines can reach. |
+| `cache` | none | The most the box's [Actions cache](#actions-cache) keeps, such as `20GB`. At least 1 GiB. Set it together with `cache = true` in a class. |
 
 The box token lives in `/etc/boxrunner/token`, readable by root only.
 
@@ -59,6 +60,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `warm` | none | Keeps one idle runner of this class ready for each of these repositories, as `["owner/name", …]`, so their jobs skip the cold start. Each must be one the class serves. A warm runner counts toward `max` and is never removed for being idle; when it takes a job, another starts once no other job is waiting for the place. Name fewer repositories than `max`, unless `repos` lists only warm repositories, so the class's other repositories always have a place. |
 | `isolation` | `sysbox` when Docker has Sysbox's runtime, else `runc` | How the class's jobs are kept from the box; see below. |
 | `docker` | `false` | Gives each job its own Docker daemon; see below. Needs `isolation = "sysbox"`, which it implies. |
+| `cache` | `false` | Keeps the class's [Actions cache](#actions-cache) entries on the box. Needs `cache` at the top. |
 
 Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
 
@@ -121,6 +123,52 @@ Every job starts with an empty Docker, so it pulls each image it uses again. Ima
 
 The job image has Docker Compose, so `docker compose up` works in these jobs.
 
+## Actions cache
+
+With `cache` at the top and `cache = true` in a class, the class's `actions/cache` steps keep their archives on the box instead of uploading them to GitHub. So does every action built on `@actions/cache`, such as `actions/setup-node` with `cache: npm`. A restore reads the box's disk instead of downloading over the internet, and GitHub's 10 GB per repository does not apply. Workflows stay as they are.
+
+```toml
+cache = "20GB"
+
+[[class]]
+name = "boxrunner"
+cpus = 4
+memory = "6GiB"
+max = 1
+cache = true
+```
+
+The agent serves GitHub's cache service on port 5001 of the `boxrunner0` bridge's own address, which only job containers can reach, and keeps the archives in `/var/lib/boxrunner/cache`. The runner gives each JavaScript action the address of GitHub's results service, which carries both caches and artifacts. In a class with `cache = true`, the runner's `node` is a wrapper from the job image: when an action starts and the box's cache answers, the wrapper gives the action the cache's address instead. The cache answers the cache's calls itself and passes every other call, such as an artifact upload, on to GitHub unchanged.
+
+Entries follow GitHub's rules ([GitHub's docs](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)):
+
+- **Per repository.** A job never sees another repository's entries.
+- **Per branch.** A job writes to its own ref, such as `refs/heads/main` or `refs/pull/7/merge`, and restores from its own ref first, then from the base and default branch. A pull request cannot write an entry that `main` would restore.
+- **What the token allows.** GitHub writes each job's cache access into the runtime token it gives the job: what `cache-mode` asks for, and read-only access to the default branch's entries for runs from low-trust triggers such as `issue_comment`. The box's cache follows the token.
+- **Write once.** An entry with the same key and version stays as the first job saved it.
+- **Matching.** The key itself, then the newest entry whose key starts with it, then the newest entry for each restore key in turn.
+
+Entries and the uploads in progress together stay within `cache`, and the cache stops writing before the filesystem that holds `/var/lib/boxrunner/cache` has less than `disk_floor` free. An upload counts as it is written, and joining its blocks counts the block being copied. When a write does not fit, the cache removes the least recently restored entry of the repository that holds the most, uploads and the write included, so a repository's saves remove its own entries before those of a repository that holds less. When the repository that holds the most is the writer's and it has no entries left, the write fails rather than remove more of other repositories' entries. A write that would not fit even with every entry gone, such as one larger than `cache`, fails before it removes any. When a write fails, so does the save. While free space is below `disk_floor`, because jobs took it, the cache removes entries until the space is back, or until none are left, and drops the uploads in progress, so it gives the disk back to jobs.
+
+The cache also holds these limits:
+
+- 10,000 entries per repository; a new one removes the repository's least recently restored.
+- 16 uploads in progress per repository and 64 in all. An upload is dropped after ten minutes without a write.
+- 4,000 blocks per upload: 125 GiB with `actions/cache`'s 32 MiB blocks.
+- 256 connections at once, and 64 from one container: more wait, and a container's 65th is closed. A request's body or a download that stops for 30 seconds is cut off, whether or not the cache reads the body.
+
+Sizes count the bytes written. The filesystem stores each file in whole blocks, 4 KiB on most, so an upload of many tiny blocks takes more disk than it counts for: at most about 1 GiB more in all, with 64 uploads of 4,000 blocks. `disk_floor` is checked against the filesystem's free space, so it holds regardless.
+
+When the cache does not answer within two seconds as an action starts, such as while the agent is stopped, that action talks to GitHub as it would without the cache. A failed cache call is only a warning in `actions/cache`. An artifact upload or download that is in progress when the agent stops can fail its step, since the cache passes those calls on: on stop, the agent keeps the cache serving until its other work is done and gives calls in flight ten seconds. To restart or upgrade the agent with no such risk, drain the box first ([upgrading](upgrading.md#rebooting-the-box)).
+
+What it does not cover:
+
+- **Container jobs and Docker container actions.** In a `container:` job, actions run in the job's own container, which gets no cache address, and Docker container actions get the results service from the runner directly. Both use GitHub's cache.
+- **After the runner updates itself.** A job whose runner updated before it started runs the new runner's `node`, without the wrapper, and uses GitHub's cache. The agent rebuilds the job image for each runner release within a day.
+- **Other boxes.** Each box keeps its own cache.
+
+`sudo boxrunner doctor` runs the wrapper in a job container and says whether actions there reach the cache. `uninstall` deletes the cache with the rest of `/var/lib/boxrunner`.
+
 ## Extending the job image
 
 The job image is GitHub's official runner image plus common build tools. A class that needs more, such as browsers for end-to-end tests, gets its own Dockerfile:
@@ -165,7 +213,7 @@ The values come from the same snapshot as `sudo boxrunner status`, which the age
 
 The endpoint has no authentication, and the metrics name your repositories, classes, box and versions. So `metrics` must be a loopback address unless the config also sets `metrics_public = true`. Before you set it, prefer a scraper on the box that forwards the samples, or an SSH tunnel to `127.0.0.1:9464`. If another machine must scrape the port directly, listen on the one address it reaches, such as a VPN address, rather than `0.0.0.0`, and let only that machine in through the host's firewall. boxrunner does not open the port in any firewall.
 
-Jobs cannot reach the port, whatever the address. boxrunner's firewall drops everything the host receives from the job bridge, on every address and port, except DNS and the [registry mirror](#docker-inside-jobs), and a job's `127.0.0.1` is its own container. `sudo boxrunner doctor` tries the metrics port from a job container and fails if anything answers.
+Jobs cannot reach the port, whatever the address. boxrunner's firewall drops everything the host receives from the job bridge, on every address and port, except DNS, the [registry mirror](#docker-inside-jobs) and the [Actions cache](#actions-cache), and a job's `127.0.0.1` is its own container. `sudo boxrunner doctor` tries the metrics port from a job container and fails if anything answers.
 
 ### The metrics
 

@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/cache"
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/disk"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
@@ -65,6 +68,10 @@ type Options struct {
 	HeartbeatEvery time.Duration
 	SysboxDir      string
 	CgroupDir      string
+	CacheDir       string
+	// CacheAddr is where the Actions cache listens; zero means the job
+	// network's gateway.
+	CacheAddr netip.AddrPort
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
@@ -78,6 +85,9 @@ type Agent struct {
 	sysbox bool
 	// mirror is the registry mirror's URL for those jobs, "" when no class has Docker.
 	mirror string
+	// cache is the Actions cache's URL for classes with cache = true, "" when
+	// it does not serve.
+	cache  string
 	queue  *queue.Client
 	events chan scheduler.Event
 	// stopped closes when the scheduler loop no longer reads events.
@@ -122,6 +132,7 @@ func Run(ctx context.Context, o Options) error {
 	o.HeartbeatEvery = cmp.Or(o.HeartbeatEvery, heartbeatEvery)
 	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
 	o.CgroupDir = cmp.Or(o.CgroupDir, layout.CgroupDir)
+	o.CacheDir = cmp.Or(o.CacheDir, layout.CacheDir)
 	a := &Agent{
 		Options: o,
 		queue:   &queue.Client{HTTP: &http.Client{Timeout: 90 * time.Second}, UserAgent: "boxrunner/" + o.Version},
@@ -141,6 +152,10 @@ func Run(ctx context.Context, o Options) error {
 	if err := a.converge(ctx); err != nil {
 		return err
 	}
+	// The cache outlives the rest of the agent's shutdown, so that a job
+	// whose step talks to it while the agent stops gets its answer.
+	cacheDone := a.serveCache(context.WithoutCancel(ctx))
+	defer cacheDone()
 	if err := os.MkdirAll(filepath.Dir(a.JobsLog), 0o755); err != nil {
 		return err
 	}
@@ -208,22 +223,74 @@ func (a *Agent) converge(ctx context.Context) error {
 			return fmt.Errorf("creating network %s: %w", layout.Network, err)
 		}
 	}
+	services := firewall.Services{
+		Mirror: slices.ContainsFunc(a.Config.Classes, func(c config.Class) bool { return c.Docker }),
+		Cache:  a.Config.Cache > 0,
+	}
 	rules := firewall.Rules{Bridge: layout.Bridge}
-	if slices.ContainsFunc(a.Config.Classes, func(c config.Class) bool { return c.Docker }) {
-		addr, err := mirror.Find(ctx, a.Docker)
+	if services != (firewall.Services{}) {
+		gateway, err := a.Docker.Gateway(ctx, layout.Network)
 		if err != nil {
 			return err
 		}
-		// Without the mirror, a job's Docker pulls from Docker Hub itself.
-		if err := mirror.Ensure(ctx, a.Docker, addr); err != nil {
-			a.Log.Error("starting the registry mirror failed; jobs pull from Docker Hub directly", "err", err)
+		rules = services.Rules(gateway)
+		if services.Mirror {
+			addr := mirror.Addr(gateway)
+			// Without the mirror, a job's Docker pulls from Docker Hub itself.
+			if err := mirror.Ensure(ctx, a.Docker, addr); err != nil {
+				a.Log.Error("starting the registry mirror failed; jobs pull from Docker Hub directly", "err", err)
+			}
+			a.mirror = mirror.URL(addr)
 		}
-		rules.Mirror, a.mirror = addr, mirror.URL(addr)
+		if services.Cache && !a.CacheAddr.IsValid() {
+			a.CacheAddr = cache.Addr(gateway)
+		}
 	}
 	if err := firewall.Apply(ctx, a.Run, rules); err != nil {
 		return fmt.Errorf("firewall: %w", err)
 	}
 	return nil
+}
+
+// serveCache starts the Actions cache when the config has one, and returns
+// a function that stops it. Without it, jobs use GitHub's cache.
+func (a *Agent) serveCache(ctx context.Context) func() {
+	if a.Config.Cache == 0 {
+		return func() {}
+	}
+	store := &cache.Store{
+		Dir: a.CacheDir, Max: int64(a.Config.Cache), Floor: int64(a.Config.DiskFloor),
+		Free: func() (int64, error) { return disk.Free(a.CacheDir) },
+	}
+	err := store.Open()
+	var l net.Listener
+	if err == nil {
+		l, err = net.Listen("tcp", a.CacheAddr.String())
+	}
+	if err != nil {
+		a.Log.Error("serving the Actions cache failed; jobs use GitHub's cache", "addr", a.CacheAddr, "err", err)
+		return func() {}
+	}
+	upstream, _ := url.Parse(cache.Upstream)
+	srv := &cache.Server{
+		Store: store, Base: cache.URL(a.CacheAddr), Upstream: upstream, Log: a.Log, Now: time.Now,
+		Keys: &cache.Keys{URL: cache.KeysURL, Issuer: cache.Issuer, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: a.Log},
+	}
+	a.cache = srv.Base
+	size, entries := store.Size()
+	a.Log.Info("serving the Actions cache", "url", srv.Base, "entries", entries, "bytes", size, "max", a.Config.Cache.String())
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := srv.Serve(ctx, l); err != nil {
+			a.Log.Error("serving the Actions cache", "err", err)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // idleSlice starts the idle slice and sets its cpu.idle to 1. systemd does
@@ -378,8 +445,9 @@ func runnerName(box, class string) string {
 // network, no mounts and no Docker socket. The runner config travels in the
 // environment, never on a command line. A class isolated by Sysbox runs under
 // sysbox-runc. A class with Docker also starts its own daemon, which pulls
-// through mirror when one is given.
-func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror string) docker.ContainerSpec {
+// through mirror when one is given. A class with a cache gets the cache's URL
+// when the box serves one.
+func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror, cache string) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  r.Name,
 		Image: class.Image,
@@ -410,6 +478,9 @@ func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror 
 			spec.Env = append(spec.Env, layout.EnvMirror+"="+mirror)
 		}
 	}
+	if class.Cache && cache != "" {
+		spec.Env = append(spec.Env, layout.EnvCache+"="+cache)
+	}
 	return spec
 }
 
@@ -431,7 +502,7 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	if class.Priority == config.Idle {
 		a.idleSlice(ctx)
 	}
-	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror))
+	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror, a.cache))
 	if err == nil {
 		err = a.Docker.Start(ctx, id)
 	}

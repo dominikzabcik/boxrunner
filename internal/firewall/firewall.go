@@ -1,5 +1,6 @@
 // Package firewall keeps job containers away from the host and private
-// networks, except for the registry mirror, which serves jobs alone. The rules live in two chains of their own, filled atomically with
+// networks, except for the services on the host that serve jobs alone: the
+// registry mirror and the Actions cache. The rules live in two chains of their own, filled atomically with
 // iptables-restore and reached by jumps tagged with a comment, so applying them
 // again replaces them and uninstall removes exactly them.
 package firewall
@@ -11,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/dominikzabcik/boxrunner/internal/layout"
 )
 
 const (
@@ -22,9 +25,41 @@ const (
 // Rules are what boxrunner's chains hold for one bridge.
 type Rules struct {
 	Bridge string
-	// Mirror is the registry mirror: the one host address and port jobs may
-	// reach, and that nothing else may reach. The zero value means none.
-	Mirror netip.AddrPort
+	// Open are the services that serve jobs alone, such as the registry
+	// mirror: the host addresses and ports jobs may reach, and that nothing
+	// else may reach.
+	Open []netip.AddrPort
+}
+
+// Services are the host's services that a box's jobs may reach, each at its
+// port on the bridge's gateway.
+type Services struct {
+	Mirror bool
+	Cache  bool
+}
+
+// Rules are boxrunner's rules with the services open at gateway.
+func (s Services) Rules(gateway netip.Addr) Rules {
+	r := Rules{Bridge: layout.Bridge}
+	if s.Mirror {
+		r.Open = append(r.Open, netip.AddrPortFrom(gateway, layout.MirrorPort))
+	}
+	if s.Cache {
+		r.Open = append(r.Open, netip.AddrPortFrom(gateway, layout.CachePort))
+	}
+	return r
+}
+
+// String names the open services, such as "the registry mirror and the Actions cache".
+func (s Services) String() string {
+	var names []string
+	if s.Mirror {
+		names = append(names, "the registry mirror")
+	}
+	if s.Cache {
+		names = append(names, "the Actions cache")
+	}
+	return strings.Join(names, " and ")
 }
 
 type Family struct {
@@ -59,18 +94,21 @@ type Chain struct {
 }
 
 // Chains is the content of boxrunner's own chains for a family. Everything
-// the host receives passes the input chain, so that the mirror answers only
-// the bridge; traffic from elsewhere returns to the host's own rules.
+// the host receives passes the input chain, so that the open services answer
+// only the bridge; traffic from elsewhere returns to the host's own rules.
 func (f Family) Chains(r Rules) []Chain {
-	var input, mirror [][]string
-	if r.Mirror.IsValid() && f.Is(r.Mirror.Addr()) {
-		host := netip.PrefixFrom(r.Mirror.Addr(), r.Mirror.Addr().BitLen()).String()
-		port := strconv.Itoa(int(r.Mirror.Port()))
+	var input, open [][]string
+	for _, addr := range r.Open {
+		if !addr.IsValid() || !f.Is(addr.Addr()) {
+			continue
+		}
+		host := netip.PrefixFrom(addr.Addr(), addr.Addr().BitLen()).String()
+		port := strconv.Itoa(int(addr.Port()))
 		input = append(input, []string{"-d", host, "!", "-i", r.Bridge, "-p", "tcp", "-m", "tcp", "--dport", port, "-j", "DROP"})
-		mirror = append(mirror, []string{"-d", host, "-p", "tcp", "-m", "tcp", "--dport", port, "-j", "ACCEPT"})
+		open = append(open, []string{"-d", host, "-p", "tcp", "-m", "tcp", "--dport", port, "-j", "ACCEPT"})
 	}
 	input = append(input, []string{"!", "-i", r.Bridge, "-j", "RETURN"})
-	input = append(append(append(input, dns...), mirror...), []string{"-j", "DROP"})
+	input = append(append(append(input, dns...), open...), []string{"-j", "DROP"})
 	forward := append([][]string{}, dns...)
 	for _, cidr := range f.Blocked {
 		forward = append(forward, []string{"-d", cidr, "-j", "DROP"})

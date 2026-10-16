@@ -2,7 +2,17 @@
 # Runs the container's command as runner. With BOXRUNNER_DOCKER=1, the job
 # runs under Sysbox and first gets a Docker daemon of its own, which pulls
 # Docker Hub images through the box's registry mirror at BOXRUNNER_MIRROR.
+# With BOXRUNNER_CACHE, the runner's node becomes node.boxrunner, which sends
+# the cache calls of JavaScript actions to the box's Actions cache.
 set -eu
+
+if [ -n "${BOXRUNNER_CACHE:-}" ]; then
+	for bin in /home/runner/externals/node*/bin; do
+		if [ -e "$bin/node.boxrunner" ] && ! ln -sfn node.boxrunner "$bin/node" 2>/dev/null; then
+			echo "boxrunner: cannot link $bin/node to the cache's node wrapper; this job uses GitHub's cache" >&2
+		fi
+	done
+fi
 
 if [ "$(id -u)" != 0 ]; then
 	if [ "${BOXRUNNER_DOCKER:-}" = 1 ]; then

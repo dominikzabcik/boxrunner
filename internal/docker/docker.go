@@ -330,6 +330,19 @@ func (c *Client) Network(ctx context.Context, name string) (Network, bool, error
 	return out, err == nil, err
 }
 
+// Gateway returns a network's IPv4 gateway, the host's address on it.
+func (c *Client) Gateway(ctx context.Context, name string) (netip.Addr, error) {
+	n, ok, err := c.Network(ctx, name)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	gateway, found := n.Gateway()
+	if !ok || !found {
+		return netip.Addr{}, fmt.Errorf("the Docker network %s has no IPv4 gateway", name)
+	}
+	return gateway, nil
+}
+
 // NetworkSpec is a bridge network with its own bridge name.
 type NetworkSpec struct {
 	Name   string

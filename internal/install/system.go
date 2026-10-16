@@ -70,7 +70,6 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	}
 
 	o.Firewall = firewall.Check(ctx, run, firewall.Rules{Bridge: layout.Bridge})
-	o.FirewallMirror = firewall.Stale
 	_, err = run(ctx, "", "systemctl", "is-enabled", "--quiet", layout.UnitName)
 	o.UnitEnabled = err == nil
 	_, err = run(ctx, "", "systemctl", "is-active", "--quiet", layout.UnitName)
@@ -95,7 +94,10 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 		o.Network = Network{Exists: true}
 		if gateway, ok := n.Gateway(); ok {
 			o.Network.Gateway = gateway
-			o.FirewallMirror = firewall.Check(ctx, run, firewall.Rules{Bridge: layout.Bridge, Mirror: mirror.Addr(gateway)})
+			o.FirewallOpen = map[firewall.Services]firewall.State{}
+			for _, svc := range []firewall.Services{{Mirror: true}, {Cache: true}, {Mirror: true, Cache: true}} {
+				o.FirewallOpen[svc] = firewall.Check(ctx, run, svc.Rules(gateway))
+			}
 		}
 		if n.Driver != "bridge" || n.Options["com.docker.network.bridge.name"] != layout.Bridge || n.Options["com.docker.network.bridge.enable_icc"] != "false" {
 			o.Network.Problem = fmt.Sprintf("a Docker network named %s exists but is not boxrunner's (driver %q, bridge %q, icc %q); remove it with `docker network rm %s` and run install again",
@@ -211,7 +213,7 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		return d, d.CreateNetwork(ctx, docker.NetworkSpec{Name: layout.Network, Bridge: layout.Bridge})
 	case ApplyFirewall:
 		rules := firewall.Rules{Bridge: layout.Bridge}
-		if s.Mirror {
+		if s.Services != (firewall.Services{}) {
 			if err := needDocker(); err != nil {
 				return d, err
 			}
@@ -219,7 +221,7 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 			if err != nil {
 				return d, err
 			}
-			rules.Mirror = addr
+			rules = s.Services.Rules(addr.Addr())
 		}
 		return d, firewall.Apply(ctx, run, rules)
 	case StartMirror:

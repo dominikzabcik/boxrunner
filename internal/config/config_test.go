@@ -409,3 +409,28 @@ func TestParseMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestParseCache(t *testing.T) {
+	file := func(top, class string) string {
+		return top + "\nworker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n" + class +
+			"[[class]]\nname = \"light\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	}
+	got, err := Parse([]byte(file(`cache = "20GiB"`, "cache = true\n")), "")
+	if err != nil || got.Cache != 20*GiB || !got.Classes[0].Cache || got.Classes[1].Cache {
+		t.Errorf("Parse with a cache = %s, classes %v %v, %v; want 20GiB, true false", got.Cache, got.Classes[0].Cache, got.Classes[1].Cache, err)
+	}
+	if got, err := Parse([]byte(file("", "")), ""); err != nil || got.Cache != 0 {
+		t.Errorf("Parse without a cache = %s, %v; want 0", got.Cache, err)
+	}
+	for _, c := range []struct{ top, class, want string }{
+		{`cache = "20GiB"`, "", "cache: no class has cache = true, so no job would use it"},
+		{"", "cache = true\n", `cache: a class has cache = true but the box has no cache; set its size at the top, such as cache = "20GB"`},
+		{`cache = "512MiB"`, "cache = true\n", "cache: 512MiB is less than 1GiB"},
+		{`cache = "lots"`, "cache = true\n", `cache: "lots" is not a size like 6GiB or 10GB`},
+	} {
+		_, err := Parse([]byte(file(c.top, c.class)), "")
+		if want := "config:\n" + c.want; err == nil || err.Error() != want {
+			t.Errorf("Parse(%s, %s) error = %v\nwant %s", c.top, c.class, err, want)
+		}
+	}
+}

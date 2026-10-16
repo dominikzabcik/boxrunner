@@ -58,9 +58,11 @@ done
 expect "$work/worker.log" '^POST /v1/heartbeat 200$'
 systemctl is-active --quiet boxrunner.service || fail "boxrunner.service is not active"
 
-step "the agent serves metrics on every address, and doctor shows jobs cannot reach them"
+step "the agent serves metrics on every address and the Actions cache to every class"
 sudo sed -i '1i metrics_public = true' /etc/boxrunner/config.toml
 sudo sed -i '1i metrics = "0.0.0.0:9464"' /etc/boxrunner/config.toml
+sudo sed -i '1i cache = "2GB"' /etc/boxrunner/config.toml
+sudo sed -i 's/^\(name = ".*"\)$/\1\ncache = true/' /etc/boxrunner/config.toml
 sudo systemctl restart boxrunner.service
 for _ in $(seq 60); do
 	curl -fsS -o "$work/metrics.txt" http://127.0.0.1:9464/metrics 2>/dev/null &&
@@ -76,6 +78,7 @@ sudo boxrunner doctor | tee "$work/doctor.txt" || fail "doctor exited with $?"
 expect "$work/doctor.txt" '^ok +idle slice +container runs in /boxrunner_idle.slice, cpu.idle 1$' '^ok +config ' '^ok +cgroup driver +systemd' '^ok +firewall rules +in place for IPv4 and IPv6' \
 	'^ok +host +the host at .* is unreachable from jobs' '^ok +metadata +169.254.169.254 is unreachable from jobs' \
 	'^ok +private ' '^ok +metrics +the metrics port at [0-9.]+:9464 is unreachable from jobs$' '^ok +github ' "^ok +worker +$worker accepts the token; 0 repositories, classes boxrunner, boxrunner-light$" \
+	'^ok +actions cache +actions in a job reach the cache at http://[0-9.]+:5001$' \
 	"^ok +isolation boxrunner +$isolation" "^ok +isolation boxrunner-light +$isolation"
 if [ "$mode" = docker ]; then
 	expect "$work/doctor.txt" '^ok +sysbox ' '^ok +docker in jobs ' '^ok +registry mirror '
@@ -86,6 +89,45 @@ fi
 expect "$work/doctor.txt" '^ok +runner image +sha256:[0-9a-f]{64}, which boxrunner.s CI verified$'
 if grep -vE "^(ok  |warn  (release|worker release|runner release) )" "$work/doctor.txt"; then
 	fail "doctor printed the lines above"
+fi
+
+# The workflow hands over its own runtime token, which GitHub signs, so the
+# cache checks it as it would a job's.
+if [ -n "${RUNTIME_TOKEN_FILE:-}" ]; then
+	step "a job saves to the Actions cache and the next restores it; artifacts go on to GitHub"
+	gateway=$(sudo docker network inspect boxrunner --format '{{(index .IPAM.Config 0).Gateway}}')
+	results=$(cat "$RESULTS_URL_FILE")
+	key="e2e-cache-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$mode-$(uname -m)-$(lsb_release -rs)"
+	{
+		echo "BOXRUNNER_CACHE=http://$gateway:5001"
+		echo "ACTIONS_RESULTS_URL=$results"
+		echo "ACTIONS_RUNTIME_TOKEN=$(cat "$RUNTIME_TOKEN_FILE")"
+		echo "ACTIONS_CACHE_SERVICE_V2=true"
+		echo "KEY=$key"
+	} >"$work/job.env"
+	chmod 600 "$work/job.env"
+	# job runs the script on stdin, cache-client.mjs, once per call in a job
+	# container, with the env the runner gives a JavaScript action.
+	job() {
+		sudo docker run -i --rm --network boxrunner --env-file "$work/job.env" boxrunner/runner:local bash -c '
+			set -euo pipefail
+			mkdir -p /tmp/job && cd /tmp/job && cat >client.mjs
+			npm install --silent --no-audit --no-fund @actions/cache@6.3.0 @actions/artifact@6.3.1 >/dev/null
+			export GITHUB_WORKSPACE=$PWD RUNNER_TEMP=/tmp
+			for call in "$@"; do node client.mjs "$call" "$KEY"; done' job "$@"
+	}
+	job save <scripts/e2e/cache-client.mjs | tee "$work/save.txt"
+	expect "$work/save.txt" "^results-url http://$gateway:5001/$" '^saved [1-9][0-9]*$'
+	job restore artifact <scripts/e2e/cache-client.mjs | tee "$work/restore.txt"
+	expect "$work/restore.txt" "^restored $key$" "^payload saved by $key$" '^artifact [1-9][0-9]*$'
+	sudo journalctl -u boxrunner.service --no-pager | tee "$work/agent.txt" >/dev/null
+	expect "$work/agent.txt" "msg=\"cache: saved\" repo=[0-9]+ scope=refs/[^ ]+ key=$key bytes=[1-9]"
+
+	step "with the agent stopped, a job's actions use GitHub's results service"
+	sudo systemctl stop boxrunner.service
+	job miss <scripts/e2e/cache-client.mjs | tee "$work/fallback.txt"
+	expect "$work/fallback.txt" "^results-url $results$" '^restored undefined$'
+	sudo systemctl start boxrunner.service
 fi
 
 step "the idle slice stays idle through a daemon-reload, and the agent makes a new one idle"
