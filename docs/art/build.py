@@ -611,7 +611,7 @@ def bench(theme):
         ("4-core x86 VPS", [1393, 1438, 6905], [0, 2, 4, 6], "s"),
     ]
     rows = [("Alone", None), ("Beside four idle jobs", "i"), ("Beside four normal jobs", "n")]
-    x0, bar_x, bar_w, right = 64, 440, 560, W - 64
+    x0, bar_x, bar_w, right = 64, 440, 500, W - 64
     body = [laid_paper(pal, W, 100, 10)]  # resized below
     inner = []
     p, w = text(display_italic, "Fig. 2.", 22, x0, 78, pal["ink2"])
@@ -830,21 +830,21 @@ def label(pal, x, y, title, sub, holds, color, anchor="start"):
     out = []
     p, _ = text(ui_bold, title, 24, x, y, pal["ink"], anchor=anchor)
     out.append(p)
-    p, _ = text(mono, sub, 15, x, y + 26, pal["dim"], anchor=anchor)
+    p, _ = text(mono, sub, 16.5, x, y + 28, pal["dim"], anchor=anchor)
     out.append(p)
-    p, w = text(mono_bold, holds, 15, x, y + 52, pal[color], anchor=anchor)
+    p, w = text(mono_bold, holds, 16.5, x, y + 56, pal[color], anchor=anchor)
     mark = x - w - 18 if anchor == "end" else x
-    out.append(f'<circle cx="{num(mark + 6)}" cy="{num(y + 47)}" r="5" fill="{pal[color]}"/>')
+    out.append(f'<circle cx="{num(mark + 6)}" cy="{num(y + 51)}" r="5.5" fill="{pal[color]}"/>')
     px = x if anchor == "end" else x + 18
-    p, _ = text(mono_bold, holds, 15, px, y + 52, pal[color], anchor=anchor)
+    p, _ = text(mono_bold, holds, 16.5, px, y + 56, pal[color], anchor=anchor)
     out.append(p)
     return "".join(out)
 
 
-def caption(pal, lines, x, y, anchor="start", size=17):
+def caption(pal, lines, x, y, anchor="start", size=19):
     out = []
     for i, line in enumerate(lines):
-        p, _ = text(ui, line, size, x, y + i * 22, pal["ink2"], anchor=anchor)
+        p, _ = text(ui, line, size, x, y + i * 24, pal["ink2"], anchor=anchor)
         out.append(p)
     return "".join(out)
 
@@ -901,12 +901,12 @@ def flow(theme):
     body.append(caption(pal, ["open a session", "with the box token"], mx(routes[0])[0] - 28, mx(routes[0])[1] - 16, "end"))
     body.append(caption(pal, ["create the scale set", "with the App key"], mx(routes[1])[0], mx(routes[1])[1] + 44, "middle"))
     body.append(caption(pal, ["long-poll the queue with a session token"], mx(routes[2])[0], mx(routes[2])[1] + 44, "middle"))
-    body.append(caption(pal, ["fetch one runner config", "and start a container"], mx(routes[3])[0] - 70, mx(routes[3])[1] + 46))
+    body.append(caption(pal, ["fetch one runner config", "and start a container"], mx(routes[3])[0] - 62, mx(routes[3])[1] + 54))
     body.append(caption(pal, ["run exactly one job,", "then it is removed"], mx(routes[4])[0] + 28, mx(routes[4])[1] - 6))
 
-    p, w = text(display_italic, "Fig. 3.", 20, 64, H - 28, pal["ink2"])
+    p, w = text(display_italic, "Fig. 3.", 22, 64, H - 26, pal["ink2"])
     body.append(p)
-    p, _ = text(display_italic, "How a job reaches your box. The key stays in the Worker; the box holds only a token.", 20, 64 + w + 8, H - 28, pal["ink2"])
+    p, _ = text(display_italic, "How a job reaches your box. The key stays in the Worker; the box holds only a token.", 22, 64 + w + 8, H - 26, pal["ink2"])
     body.append(p)
     style = figure_style(pal) + ".tok{display:inline}@media (prefers-reduced-motion:reduce){.tok{display:none}}"
     desc = "How a job reaches your box. 1: the agent on your box opens a session with the Worker, using the box token. 2: the Worker, which holds the GitHub App key, creates the scale set and session on GitHub. 3: the agent long-polls GitHub's queue with a session token. 4: when a job waits, the agent fetches one runner config from the Worker and starts a container. 5: the container runs exactly one job and is then removed."
