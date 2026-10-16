@@ -16,6 +16,8 @@ const (
 	heartbeatJobs  = 50
 	// The Worker refuses a heartbeat with more scale sets than this.
 	heartbeatScaleSets = 128
+	// The Worker refuses an image longer than this.
+	heartbeatImage = 128
 	// The Worker refuses bodies over 16 KB; the margin covers headers it counts.
 	heartbeatLimit = 15 * 1024
 )
@@ -74,13 +76,24 @@ func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 		Jobs:     []worker.HeartbeatJob{},
 		Draining: snap.Draining,
 	}
+	// The Worker shows the image as text of up to 128 characters, so the
+	// digest and the build in progress ride along without a new field. The
+	// digest gives way when all of it would not fit.
+	img := snap.Image
 	switch {
+	case img.Building != "" && (img.Built == "" || img.Built == img.Building):
+		hb.Image = "building " + img.Building
 	case hb.Image == "":
 		hb.Image = "not built"
-	case snap.Image.Digest != "":
-		// The Worker shows the image as text of up to 128 characters, so the
-		// digest rides along without a new field.
-		hb.Image += " from " + snap.Image.Digest
+	default:
+		building := ""
+		if img.Building != "" {
+			building = ", building " + img.Building
+		}
+		if from := " from " + img.Digest; img.Digest != "" && len(hb.Image+from+building) <= heartbeatImage {
+			hb.Image += from
+		}
+		hb.Image += building
 	}
 	for _, c := range snap.Classes {
 		hb.Classes = append(hb.Classes, worker.HeartbeatClass{Name: c.Name, Priority: c.Priority, Max: c.Max, HeldUntil: c.HeldUntil})

@@ -94,6 +94,19 @@ boxrunner_heartbeat_last_success_timestamp_seconds 0
 	}
 }
 
+func TestWriteBuildingImage(t *testing.T) {
+	var got bytes.Buffer
+	Write(&got, status.Snapshot{Box: "box-1", Version: "0.7.0", Image: status.ImageStatus{Built: "2.337.0+e3cd41ebfb31", Building: "2.338.0+e3cd41ebfb31"}})
+	want := `boxrunner_runner_image_info{version="2.337.0+e3cd41ebfb31"} 1
+# HELP boxrunner_runner_image_building_info The job image the agent is building, or whose class images it is building, while it builds.
+# TYPE boxrunner_runner_image_building_info gauge
+boxrunner_runner_image_building_info{version="2.338.0+e3cd41ebfb31"} 1
+`
+	if !bytes.Contains(got.Bytes(), []byte(want)) {
+		t.Errorf("Write =\n%s\nwant the lines\n%s", got.String(), want)
+	}
+}
+
 func TestEscapesLabelValues(t *testing.T) {
 	var got bytes.Buffer
 	Write(&got, status.Snapshot{Box: "box-1", Version: "0.4.0 \"dev\"\\\n"})

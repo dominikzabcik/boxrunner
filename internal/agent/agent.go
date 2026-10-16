@@ -130,6 +130,9 @@ type Agent struct {
 	snapshot status.Snapshot
 	// imageDisk is what boxrunner's images take on disk after the last prune.
 	imageDisk atomic.Int64
+	// building is the job image the agent is building, or whose class images
+	// it is building, nil while it builds nothing.
+	building atomic.Pointer[string]
 	// latest is boxrunner's latest release, once checkRelease found it.
 	latest atomic.Pointer[string]
 	// heartbeatOK is when the Worker last took a heartbeat, in Unix nanoseconds.
@@ -616,6 +619,8 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	a.Log.Info("building the job image", "runner", version, "digest", digest)
+	a.building.Store(&version)
+	defer a.building.Store(nil)
 	err := runnerimage.Build(ctx, a.Docker, a.Runner, version, digest)
 	var mismatch *runnerdigests.Mismatch
 	switch {
@@ -629,6 +634,7 @@ func (a *Agent) build(ctx context.Context, version, digest string) {
 		return
 	}
 	a.ensureClasses(ctx)
+	a.building.Store(nil)
 	a.post(scheduler.ImageBuilt{Version: version, Digest: digest})
 }
 
@@ -740,7 +746,11 @@ func (a *Agent) checkImage(ctx context.Context) {
 		a.Log.Error("reading the job image", "err", err)
 	} else {
 		if built.Identity != "" {
+			// Runners wait for the class images, which a changed class or an
+			// interrupted build leaves to build now.
+			a.building.Store(&built.Identity)
 			a.ensureClasses(ctx)
+			a.building.Store(nil)
 		}
 		a.post(scheduler.ImageBuilt{Version: built.Identity, Digest: built.Digest})
 	}
@@ -804,6 +814,9 @@ func (a *Agent) publish(s scheduler.State) {
 	}
 	if latest := a.latest.Load(); latest != nil {
 		snap.Latest = *latest
+	}
+	if building := a.building.Load(); building != nil {
+		snap.Image.Building = *building
 	}
 	warm := scheduler.Warm(s)
 	active := map[string]int{}

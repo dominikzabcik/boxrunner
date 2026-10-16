@@ -61,6 +61,8 @@ type fakeDocker struct {
 	built string
 	// builds are the pulls, tags and builds the agent asked for.
 	builds []string
+	// holdBuild, when set, keeps every build waiting until it closes.
+	holdBuild chan struct{}
 	// nets are the networks of egress classes, by name.
 	nets map[string]*fakeNet
 	// subnet and gateway, when set, are those of every new egress network.
@@ -213,6 +215,11 @@ func (f *fakeDocker) serve(t *testing.T) string {
 			io.WriteString(w, `[]`)
 		case r.Method == http.MethodPost && (path == "/build" || path == "/images/create" || strings.HasSuffix(path, "/tag")):
 			f.builds = append(f.builds, r.Method+" "+path+"?"+r.URL.RawQuery)
+			if hold := f.holdBuild; hold != nil && path == "/build" {
+				f.mu.Unlock()
+				<-hold
+				f.mu.Lock()
+			}
 		case strings.HasPrefix(path, "/images/"):
 			io.WriteString(w, `{"Config":{"Labels":{"boxrunner.image":"`+cmp.Or(f.built, runnerimage.Identity("2.338.0"))+`"}}}`)
 		case path == "/containers/json":
@@ -1181,6 +1188,70 @@ func TestBuildsTheNewestListedRunner(t *testing.T) {
 	}; !reflect.DeepEqual(h.docker.builds, want) {
 		t.Errorf("Docker calls\n%q\nwant\n%q", h.docker.builds, want)
 	}
+}
+
+// While the agent builds a newer job image, status shows it beside the one
+// jobs keep using until the build is done.
+func TestJobImageBuilding(t *testing.T) {
+	hold := make(chan struct{})
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.docker.built = runnerimage.Identity("2.337.0")
+		h.docker.holdBuild = hold
+	})
+	var snap status.Snapshot
+	waitFor(t, "the build in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Building == runnerimage.Identity("2.338.0")
+	})
+	snap.Image.Disk = 0
+	want := status.ImageStatus{Built: runnerimage.Identity("2.337.0"), Latest: runnerimage.Identity("2.338.0"), Building: runnerimage.Identity("2.338.0")}
+	if snap.Image != want {
+		t.Errorf("image status while building = %+v, want %+v", snap.Image, want)
+	}
+	close(hold)
+	waitFor(t, "the built image in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Built == runnerimage.Identity("2.338.0")
+	})
+	h.stop(t)
+	if snap.Image.Building != "" {
+		t.Errorf("image status after the build = %+v, want nothing building", snap.Image)
+	}
+}
+
+// When the agent starts with a class image to build, as after a restart
+// interrupted a build, status says the image is building, not that there is none.
+func TestClassImagesBuilding(t *testing.T) {
+	hold := make(chan struct{})
+	h := startAgent(t, map[string]*container{}, nil, func(c *config.Class, h *harness) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("ARG BASE\nFROM $BASE\n"), 0o644)
+		c.Dockerfile, c.Image = filepath.Join(dir, "Dockerfile"), "boxrunner/class-boxrunner:local"
+		h.docker.holdBuild = hold
+	})
+	var snap status.Snapshot
+	waitFor(t, "the build in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Building != ""
+	})
+	if want := (status.ImageStatus{Building: runnerimage.Identity("2.338.0")}); snap.Image != want {
+		t.Errorf("image status while building = %+v, want %+v", snap.Image, want)
+	}
+	var b strings.Builder
+	status.Print(&b, snap, time.Now())
+	if want := "  image building " + runnerimage.Identity("2.338.0") + " (latest none)  "; !strings.Contains(b.String(), want) {
+		t.Errorf("status =\n%s\nwant it to contain %q", b.String(), want)
+	}
+	close(hold)
+	waitFor(t, "the built image in status", func() bool {
+		var err error
+		snap, err = status.Fetch(context.Background(), h.socket)
+		return err == nil && snap.Image.Built == runnerimage.Identity("2.338.0") && snap.Image.Building == ""
+	})
+	h.stop(t)
 }
 
 // The agent builds nothing when the tag points to another image than the one

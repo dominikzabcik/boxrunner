@@ -32,6 +32,10 @@ func Write(w io.Writer, s status.Snapshot) error {
 		b.family("boxrunner_runner_image_info", "gauge", "The Actions runner version the job image was built with.")
 		b.sample("boxrunner_runner_image_info", 1, "version", s.Image.Built)
 	}
+	if s.Image.Building != "" {
+		b.family("boxrunner_runner_image_building_info", "gauge", "The job image the agent is building, or whose class images it is building, while it builds.")
+		b.sample("boxrunner_runner_image_building_info", 1, "version", s.Image.Building)
+	}
 
 	b.family("boxrunner_class_runners", "gauge", "Runners of the class in each phase.")
 	for _, c := range s.Classes {

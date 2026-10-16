@@ -196,8 +196,8 @@ func Elsewhere(s status.Snapshot) []Result {
 }
 
 // RunnerImage says whether the job image is built from a runner image whose
-// digest boxrunner's CI verified, and fails while the agent refuses to build
-// a newer one.
+// digest boxrunner's CI verified, says when the agent builds one, and fails
+// while the agent refuses to build a newer one.
 func RunnerImage(img status.ImageStatus) []Result {
 	var results []Result
 	switch {
@@ -206,6 +206,9 @@ func RunnerImage(img status.ImageStatus) []Result {
 		results = append(results, Result{"runner image", false, "the job image was built before boxrunner built from the runner images its CI verified; the agent rebuilds it while no normal-priority job runs"})
 	default:
 		results = append(results, Result{"runner image", true, img.Digest + ", which boxrunner's CI verified"})
+	}
+	if img.Building != "" {
+		results = append(results, Result{"runner image", true, "the agent is building job image " + img.Building + " or its class images"})
 	}
 	if img.Refused != "" {
 		results = append(results, Result{"runner image", false, "refused to build: " + img.Refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"})

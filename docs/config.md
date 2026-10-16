@@ -317,6 +317,7 @@ Jobs cannot reach the port, whatever the address. boxrunner's firewall drops eve
 | `boxrunner_disk_floor_bytes` | gauge | | The `disk_floor`. |
 | `boxrunner_images_bytes` | gauge | | What the job, class and runner images take after the last prune; absent until measured. |
 | `boxrunner_runner_image_info` | gauge | `version` | 1, with the Actions runner version the job image was built from; absent until built. |
+| `boxrunner_runner_image_building_info` | gauge | `version` | 1, with the job image the agent is building, or whose class images it is building; absent while it builds nothing. |
 | `boxrunner_agent_info` | gauge | `box`, `version` | 1, with the agent's version. |
 | `boxrunner_worker_info` | gauge | `version` | 1, with the Worker's version; absent until the Worker answers with one. |
 | `boxrunner_draining` | gauge | | 1 while the box drains after `sudo boxrunner drain`, else 0. |

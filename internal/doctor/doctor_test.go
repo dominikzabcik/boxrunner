@@ -204,6 +204,14 @@ func TestRunnerImage(t *testing.T) {
 			[]Result{{"runner image", false, "the job image was built before boxrunner built from the runner images its CI verified; the agent rebuilds it while no normal-priority job runs"}},
 		},
 		{
+			"the first job image building", status.ImageStatus{Building: "2.338.0+3f9a2c0b1d4e"},
+			[]Result{{"runner image", true, "the agent is building job image 2.338.0+3f9a2c0b1d4e or its class images"}},
+		},
+		{
+			"a newer image building", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807", Building: "2.339.0+3f9a2c0b1d4e"},
+			[]Result{verified, {"runner image", true, "the agent is building job image 2.339.0+3f9a2c0b1d4e or its class images"}},
+		},
+		{
 			"a newer image refused", status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Digest: "sha256:4ffadc0002b2581327e06101fc8c06cd189232baf79fe561fac9caeb76f5e807", Refused: refused},
 			[]Result{verified, {"runner image", false, "refused to build: " + refused + "; jobs keep the current image, and the agent tries again in an hour; see journalctl -u boxrunner"}},
 		},
