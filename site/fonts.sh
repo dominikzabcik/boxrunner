@@ -22,9 +22,11 @@ make() { # source-path output axes...
 }
 
 mkdir -p fonts
-make "bricolagegrotesque/BricolageGrotesque%5Bopsz,wdth,wght%5D.ttf" bricolage-grotesque.woff2 wght=500:800 wdth=100
-make "geist/Geist%5Bwght%5D.ttf" geist.woff2 wght=400:600
+make "castoro/Castoro%5Bwght%5D.ttf" castoro.woff2 wght=400
+make "castoro/Castoro-Italic%5Bwght%5D.ttf" castoro-italic.woff2 wght=400
+make "instrumentsans/InstrumentSans%5Bwdth,wght%5D.ttf" instrument-sans.woff2 wght=400:600 wdth=100
 make "geistmono/GeistMono%5Bwght%5D.ttf" geist-mono.woff2 wght=400:500
-curl -fsSL "$raw/bricolagegrotesque/OFL.txt" -o fonts/OFL-bricolage-grotesque.txt
-curl -fsSL "$raw/geist/OFL.txt" -o fonts/OFL-geist.txt
+curl -fsSL "$raw/castoro/OFL.txt" -o fonts/OFL-castoro.txt
+curl -fsSL "$raw/instrumentsans/OFL.txt" -o fonts/OFL-instrument-sans.txt
+curl -fsSL "$raw/geistmono/OFL.txt" -o fonts/OFL-geist-mono.txt
 ls -l fonts

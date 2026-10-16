@@ -11,9 +11,9 @@ bun run build
 
 `build.ts` writes `dist/`:
 
-- `index.html`, `docs/<name>/index.html` for each doc (Quickstart at `docs/index.html`) and `404.html`. The docs and 404 pages reuse the landing page's tokens, fonts, nav and footer line: the build takes the stylesheet up to the "shared" marker in `index.html` and adds `docs.css`.
-- `fonts/`, each `.woff2` renamed with a content hash so it can be cached for a year.
-- `og.png`, rendered in Chromium from the landing page's headline and its hero box (drawn with reduced motion, so the image is the same on every build). Mermaid diagrams become inline SVG the same way.
+- `index.html`, `docs/<name>/index.html` for each doc (Quickstart at `docs/index.html`) and `404.html`. The docs and 404 pages reuse the landing page's tokens, fonts, nav and footer line: the build takes the stylesheet up to the "shared" marker in `index.html` and adds `docs.css`. Everything uses the Paper design: laid paper, Castoro for display type, Instrument Sans for text, and a light and a dark theme that follow `prefers-color-scheme`.
+- `fonts/`, each `.woff2` renamed with a content hash so it can be cached for a year, and `paper.svg`, the grain behind the page.
+- `og.png`, rendered in Chromium from the landing page's headline and its engraved hero plate (drawn with reduced motion, so the image is the same on every build). Mermaid diagrams become inline SVG the same way, once for each theme.
 - `_headers` with a Content-Security-Policy that allows each inline `<script>` and `<style>` by its SHA-256 hash, plus `robots.txt` and `sitemap.xml`.
 
 The build needs Chromium for Playwright 1.63: `bunx playwright-core@1.63.0 install chromium` once, if it is not installed yet.
@@ -26,11 +26,11 @@ Inline `style="…"` attributes and inline event handlers are blocked by the CSP
 bun run check
 ```
 
-Builds, serves `dist/` with `serve.ts` (which applies `_headers` and answers like Workers static assets) and checks every page at 1280 and 390px wide in Chromium: no console errors or warnings, no CSP violations, nothing wider than a phone screen, every internal link and fragment resolves, the hero canvas draws, and the landing page stays under its byte budget (see `check.ts`). It also confirms that the CSP actually blocks an injected script. `bun run serve` serves the last build at http://127.0.0.1:8788.
+Builds, serves `dist/` with `serve.ts` (which applies `_headers` and answers like Workers static assets) and checks every page at 1280 and 390px wide, in the light and the dark theme, in Chromium: no console errors or warnings, no CSP violations, nothing wider than a phone screen, every internal link and fragment resolves, no headline runs past two lines at 390 and 360px, the hero canvas draws, and the landing page stays under its byte budget (see `check.ts`). It also confirms that the CSP actually blocks an injected script. `bun run serve` serves the last build at http://127.0.0.1:8788.
 
 ## Fonts
 
-Bricolage Grotesque, Geist and Geist Mono, all under the SIL Open Font License (`fonts/OFL-*.txt`). `fonts.sh` rebuilds them from Google Fonts' sources at a pinned commit: the latin subset plus the Czech letters and the symbols the page uses, limited to the weights the site sets. It needs Python with `fonttools` and `brotli`.
+Castoro (regular and italic), Instrument Sans and Geist Mono, all under the SIL Open Font License (`fonts/OFL-*.txt`). `fonts.sh` rebuilds them from Google Fonts' sources at a pinned commit: the latin subset plus the Czech letters and the symbols the page uses, limited to the weights the site sets (Castoro at 400 only). It needs Python with `fonttools` and `brotli`.
 
 ## Deploy (later)
 
