@@ -1,13 +1,13 @@
 <p align="center">
-  <a href="https://boxrunner.zabcik.me"><img src="docs/art/hero.svg" width="100%" alt="boxrunner. CI on the box you already pay for. Every job gets a fresh container, and your GitHub App key never touches the box. Beside the words, a box drawn in particles holds four job containers, one normal-priority and three idle, each forming, running and dissolving."></a>
+  <a href="https://boxrunner.zabcik.me"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/art/hero-dark.svg"><img src="docs/art/hero-light.svg" width="100%" alt="boxrunner. CI on the box you already pay for. Every job gets a fresh container, and your GitHub App key never touches the box. Beside the words, an engraving of a box holds one normal-priority job container and five idle ones, each forming out of ink dots, running and dissolving again."></picture></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/dominikzabcik/boxrunner/releases/latest"><img src="https://img.shields.io/github/v/release/dominikzabcik/boxrunner?style=flat-square&labelColor=0c1119&color=5aa7ff&label=release" alt="Latest release"></a>
-  <a href="https://github.com/dominikzabcik/boxrunner/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dominikzabcik/boxrunner/ci.yml?branch=main&style=flat-square&labelColor=0c1119&label=ci" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/linux-amd64%20%7C%20arm64-45d48a?style=flat-square&labelColor=0c1119" alt="Runs on Linux, amd64 and arm64">
-  <a href="worker"><img src="https://img.shields.io/badge/worker-Cloudflare%20free%20plan-f5b54a?style=flat-square&labelColor=0c1119" alt="The Worker fits Cloudflare's free plan"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/dominikzabcik/boxrunner?style=flat-square&labelColor=0c1119&color=8c99ab" alt="License"></a>
+  <a href="https://github.com/dominikzabcik/boxrunner/releases/latest"><img src="https://img.shields.io/github/v/release/dominikzabcik/boxrunner?style=flat-square&labelColor=241c14&color=2c69ad&label=release" alt="Latest release"></a>
+  <a href="https://github.com/dominikzabcik/boxrunner/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dominikzabcik/boxrunner/ci.yml?branch=main&style=flat-square&labelColor=241c14&label=ci" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/linux-amd64%20%7C%20arm64-26794a?style=flat-square&labelColor=241c14" alt="Runs on Linux, amd64 and arm64">
+  <a href="worker"><img src="https://img.shields.io/badge/worker-Cloudflare%20free%20plan-93620f?style=flat-square&labelColor=241c14" alt="The Worker fits Cloudflare's free plan"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/dominikzabcik/boxrunner?style=flat-square&labelColor=241c14&color=66584a" alt="License"></a>
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 **GitHub Actions runners on the Linux box you already pay for.** Every job gets a fresh container that is gone when the job ends. Your GitHub App key stays in a Cloudflare Worker and never touches the box. Your main CI job keeps the box's full speed while lighter jobs use only the cores it leaves idle.
 
-<img src="docs/art/bench.svg" width="100%" alt="boxrunner bench, 4 threads of CPU work in a normal-priority job, median of 3 runs. On a 4-core ARM VPS: 428 ms alone, 429 ms beside 4 busy idle-priority jobs (+0%), 2.10 s beside 4 busy normal-priority jobs (+390%). On a 4-core x86 VPS: 1.39 s alone, 1.44 s beside idle jobs (+3%), 6.91 s beside normal jobs (+396%).">
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/art/bench-dark.svg"><img src="docs/art/bench-light.svg" width="100%" alt="boxrunner bench, 4 threads of CPU work in a normal-priority job, median of 3 runs. On a 4-core ARM VPS: 428 ms alone, 429 ms beside 4 busy idle-priority jobs (+0%), 2.10 s beside 4 busy normal-priority jobs (+390%). On a 4-core x86 VPS: 1.39 s alone, 1.44 s beside idle jobs (+3%), 6.91 s beside normal jobs (+396%)."></picture>
 
 ## Quickstart
 
@@ -108,7 +108,7 @@ A personal website ran Lighthouse, Playwright and CodeQL on every pull request a
 
 ## How it works
 
-<img src="docs/art/flow.svg" width="100%" alt="How a job reaches your box. 1: the agent on your box opens a session with the Worker, using the box token. 2: the Worker, which holds the GitHub App key, creates the scale set and session on GitHub. 3: the agent long-polls GitHub's queue with a session token. 4: when a job waits, the agent fetches one runner config from the Worker and starts a container. 5: the container runs exactly one job and is then removed.">
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/art/flow-dark.svg"><img src="docs/art/flow-light.svg" width="100%" alt="How a job reaches your box. 1: the agent on your box opens a session with the Worker, using the box token. 2: the Worker, which holds the GitHub App key, creates the scale set and session on GitHub. 3: the agent long-polls GitHub's queue with a session token. 4: when a job waits, the agent fetches one runner config from the Worker and starts a container. 5: the container runs exactly one job and is then removed."></picture>
 
 <details>
 <summary>The same flow as a sequence diagram</summary>
