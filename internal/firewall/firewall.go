@@ -250,6 +250,9 @@ func Remove(ctx context.Context, run Run, bridge string) error {
 			}
 		}
 		deleteAll(ctx, run, f, legacyInput(bridge))
+		if err := removeEgress(ctx, run, f); err != nil {
+			return err
+		}
 		for _, chain := range []string{InputChain, ForwardChain} {
 			if _, err := run(ctx, "", f.Command, "-w", "-S", chain); err != nil {
 				continue

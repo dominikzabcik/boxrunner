@@ -18,6 +18,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 )
 
@@ -137,6 +138,9 @@ type Class struct {
 	Isolation Isolation
 	// Cache sends the class's actions/cache steps to the box's cache server.
 	Cache bool
+	// Egress, when set, closes the class's network to everything but what its
+	// entries allow; nil leaves the class open.
+	Egress *egress.Policy
 }
 
 type Config struct {
@@ -199,6 +203,8 @@ type rawClass struct {
 	Docker      bool     `toml:"docker"`
 	Isolation   string   `toml:"isolation"`
 	Cache       bool     `toml:"cache"`
+	// Egress is a pointer so that a missing key differs from an empty list.
+	Egress *[]string `toml:"egress"`
 }
 
 // Parse reads a config file. hostname names the box when the file does not.
@@ -263,6 +269,17 @@ func Parse(data []byte, hostname string) (Config, error) {
 			errs = append(errs, fmt.Errorf("%s: %w", label, e))
 		}
 		cfg.Classes = append(cfg.Classes, class)
+	}
+
+	bridges := map[string]string{}
+	for _, c := range cfg.Classes {
+		if c.Egress == nil {
+			continue
+		}
+		if other, ok := bridges[egress.NetOf(c.Name).Bridge]; ok {
+			errs = append(errs, fmt.Errorf("class %q: its egress network collides with class %q's; rename one of them", c.Name, other))
+		}
+		bridges[egress.NetOf(c.Name).Bridge] = c.Name
 	}
 
 	cached := slices.ContainsFunc(cfg.Classes, func(c Class) bool { return c.Cache })
@@ -426,6 +443,14 @@ func parseClass(rc rawClass, box string) (Class, []error) {
 		errs = append(errs, fmt.Errorf("warm: %d repositories need more idle runners than max (%d)", len(c.Warm), c.Max))
 	case len(c.Warm) == c.Max && !onlyWarm:
 		errs = append(errs, fmt.Errorf("warm: the warm runners fill max (%d) and leave no place for the class's other repositories; raise max or list only the warm repositories in repos", c.Max))
+	}
+	if rc.Egress != nil {
+		policy, err := egress.Parse(*rc.Egress)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("egress: %w", err))
+		} else {
+			c.Egress = &policy
+		}
 	}
 	switch {
 	case rc.Dockerfile != "" && rc.Image != "":

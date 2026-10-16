@@ -155,3 +155,34 @@ func TestServe(t *testing.T) {
 		t.Error("the listener still answers after Serve returned")
 	}
 }
+
+func TestWriteEgress(t *testing.T) {
+	s := snapshot()
+	s.Egress = []status.Egress{
+		{Class: "agent", Entries: []string{"github"}, Packets: 12, Lookups: 1},
+		{Class: "coder", Entries: []string{"github"}, Problem: "nft is missing"},
+	}
+	var got bytes.Buffer
+	if err := Write(&got, s); err != nil {
+		t.Fatal(err)
+	}
+	want := `# HELP boxrunner_egress_ready 1 while the agent serves the class with its egress allowlist in force, 0 when it does not.
+# TYPE boxrunner_egress_ready gauge
+boxrunner_egress_ready{class="agent"} 1
+boxrunner_egress_ready{class="coder"} 0
+# HELP boxrunner_egress_blocked_total Packets dropped and lookups refused by the class's egress allowlist since the agent started.
+# TYPE boxrunner_egress_blocked_total counter
+boxrunner_egress_blocked_total{class="agent",kind="packet"} 12
+boxrunner_egress_blocked_total{class="agent",kind="lookup"} 1
+boxrunner_egress_blocked_total{class="coder",kind="packet"} 0
+boxrunner_egress_blocked_total{class="coder",kind="lookup"} 0
+`
+	if !bytes.Contains(got.Bytes(), []byte(want)) {
+		t.Errorf("Write =\n%s\nwant it to contain\n%s", got.String(), want)
+	}
+	var without bytes.Buffer
+	Write(&without, snapshot())
+	if bytes.Contains(without.Bytes(), []byte("egress")) {
+		t.Error("a box without an egress class writes egress metrics")
+	}
+}

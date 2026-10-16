@@ -27,7 +27,9 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/cache"
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/disk"
+	"github.com/dominikzabcik/boxrunner/internal/dnsfwd"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/listener"
@@ -72,6 +74,22 @@ type Options struct {
 	// CacheAddr is where the Actions cache listens; zero means the job
 	// network's gateway.
 	CacheAddr netip.AddrPort
+	// EgressListen opens the sockets of an egress class's DNS forwarder; nil
+	// listens on port 53 of the class network's gateway.
+	EgressListen func(egress.Net) (net.PacketConn, net.Listener, error)
+	// OpenPackets reads what the egress rules log; nil opens the NFLOG group.
+	OpenPackets func(group uint16) (PacketSource, error)
+	// EgressUpstream answers the names an egress class allows; nil asks the
+	// box's own resolvers.
+	EgressUpstream dnsfwd.Upstream
+	// EgressCountEvery is how often the rules' counters are read, and
+	// EgressGuardEvery how often the table is checked; 0 means five and ten seconds.
+	EgressCountEvery time.Duration
+	EgressGuardEvery time.Duration
+	// EgressRetry is how long an egress class's forwarder and the reader of
+	// the rules' log first wait to start again after they stop; 0 means a
+	// second. The wait doubles up to a minute.
+	EgressRetry time.Duration
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
@@ -87,7 +105,9 @@ type Agent struct {
 	mirror string
 	// cache is the Actions cache's URL for classes with cache = true, "" when
 	// it does not serve.
-	cache  string
+	cache string
+	// egress is what the agent keeps for the classes with an allowlist.
+	egress *egressState
 	queue  *queue.Client
 	events chan scheduler.Event
 	// stopped closes when the scheduler loop no longer reads events.
@@ -141,6 +161,7 @@ func Run(ctx context.Context, o Options) error {
 		stopped: make(chan struct{}),
 		fatal:   make(chan error, 1),
 		resync:  make(chan struct{}, 1),
+		egress:  &egressState{enforcer: &egress.Enforcer{Run: o.Run}, ledger: &egress.Ledger{}},
 	}
 	info, err := a.Docker.Info(ctx)
 	if err != nil {
@@ -156,6 +177,9 @@ func Run(ctx context.Context, o Options) error {
 	// whose step talks to it while the agent stops gets its answer.
 	cacheDone := a.serveCache(context.WithoutCancel(ctx))
 	defer cacheDone()
+	// Jobs that run while the agent stops keep their DNS until it exits.
+	egressDone := a.serveEgress(context.WithoutCancel(ctx))
+	defer egressDone()
 	if err := os.MkdirAll(filepath.Dir(a.JobsLog), 0o755); err != nil {
 		return err
 	}
@@ -228,9 +252,10 @@ func (a *Agent) converge(ctx context.Context) error {
 		Cache:  a.Config.Cache > 0,
 	}
 	rules := firewall.Rules{Bridge: layout.Bridge}
+	var gateway netip.Addr
 	if services != (firewall.Services{}) {
-		gateway, err := a.Docker.Gateway(ctx, layout.Network)
-		if err != nil {
+		var err error
+		if gateway, err = a.Docker.Gateway(ctx, layout.Network); err != nil {
 			return err
 		}
 		rules = services.Rules(gateway)
@@ -249,6 +274,7 @@ func (a *Agent) converge(ctx context.Context) error {
 	if err := firewall.Apply(ctx, a.Run, rules); err != nil {
 		return fmt.Errorf("firewall: %w", err)
 	}
+	a.convergeEgress(ctx, services, gateway)
 	return nil
 }
 
@@ -446,8 +472,9 @@ func runnerName(box, class string) string {
 // environment, never on a command line. A class isolated by Sysbox runs under
 // sysbox-runc. A class with Docker also starts its own daemon, which pulls
 // through mirror when one is given. A class with a cache gets the cache's URL
-// when the box serves one.
-func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror, cache string) docker.ContainerSpec {
+// when the box serves one. A class with an allowlist runs on its own network
+// and resolves names through its forwarder.
+func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror, cache string, net *egress.Net) docker.ContainerSpec {
 	spec := docker.ContainerSpec{
 		Name:  r.Name,
 		Image: class.Image,
@@ -481,6 +508,14 @@ func Spec(box string, class config.Class, r scheduler.Runner, jitConfig, mirror,
 	if class.Cache && cache != "" {
 		spec.Env = append(spec.Env, layout.EnvCache+"="+cache)
 	}
+	if net != nil {
+		// The job's resolver forwards to the class's forwarder, and so does
+		// the daemon of a job that has its own Docker.
+		spec.Network, spec.DNS = net.Name, []string{net.Gateway.String()}
+		if class.Docker {
+			spec.Env = append(spec.Env, layout.EnvDNS+"="+net.Gateway.String())
+		}
+	}
 	return spec
 }
 
@@ -489,6 +524,22 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	defer cancel()
 	log := a.Log.With("runner", r.Name, "repo", r.ScaleSet.Repo)
 	class, _ := a.Config.Class(r.ScaleSet.Class)
+	var egressNet *egress.Net
+	if class.Egress != nil {
+		// A job of an egress class never starts on a box whose rules are gone.
+		if err := a.verifyEgress(ctx, true); err != nil {
+			log.Error("the egress rules are not in place; not starting a runner", "class", class.Name, "err", err)
+			a.post(scheduler.StartFailed{Runner: r.Name})
+			return
+		}
+		// Nor on the job network, which its rules do not cover.
+		if egressNet = a.egressNet(class.Name); egressNet == nil {
+			problem, _ := a.egressProblem(class.Name)
+			log.Error("the class's egress allowlist is not in force; not starting a runner", "class", class.Name, "problem", problem)
+			a.post(scheduler.StartFailed{Runner: r.Name})
+			return
+		}
+	}
 	minted, err := a.Worker.MintRunner(ctx, r.ScaleSet.Repo, r.ScaleSetID, r.Name)
 	if err != nil {
 		log.Error("minting a runner config failed", "err", err)
@@ -502,7 +553,7 @@ func (a *Agent) start(ctx context.Context, r scheduler.Runner) {
 	if class.Priority == config.Idle {
 		a.idleSlice(ctx)
 	}
-	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror, a.cache))
+	id, err := a.Docker.Create(ctx, Spec(a.Config.Box, class, r, minted.JITConfig, a.mirror, a.cache, egressNet))
 	if err == nil {
 		err = a.Docker.Start(ctx, id)
 	}
@@ -602,7 +653,9 @@ func (a *Agent) ensureClasses(ctx context.Context) {
 }
 
 // shutdown removes runners that have not taken a job, so GitHub hands their
-// jobs to the next session. Jobs that are running keep running.
+// jobs to the next session. Jobs that are running keep running, except those
+// of egress classes: with the agent gone nobody puts their rules back, so
+// they are stopped, and their jobs cancelled, as the forwarder still answers.
 func (a *Agent) shutdown(s scheduler.State) {
 	ctx, cancel := context.WithTimeout(context.Background(), stopBudget)
 	defer cancel()
@@ -611,6 +664,12 @@ func (a *Agent) shutdown(s scheduler.State) {
 		if r.Phase == scheduler.Starting {
 			wg.Go(func() { a.remove(ctx, r, true, false) })
 		}
+	}
+	a.egress.mu.Lock()
+	egressClasses := len(a.egress.classes) > 0 || len(a.egress.ruleset.Classes) > 0
+	a.egress.mu.Unlock()
+	if egressClasses {
+		wg.Go(func() { a.stopEgressJobs(ctx, stopGrace, "the agent is stopping") })
 	}
 	wg.Wait()
 }
@@ -763,6 +822,7 @@ func (a *Agent) publish(s scheduler.State) {
 	for key, box := range s.HeldBy {
 		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box})
 	}
+	snap.Egress = a.egressView()
 	slices.SortFunc(snap.Elsewhere, func(x, y status.Elsewhere) int {
 		return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Class, y.Class))
 	})
@@ -898,6 +958,10 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 		}
 		if !slices.Contains(repos.Classes, c.Name) {
 			a.Log.Error("class is not one of the Worker's classes; not serving it", "class", c.Name, "workerClasses", repos.Classes)
+			continue
+		}
+		if !a.egressServes(c) {
+			a.Log.Error("class has an egress allowlist that is not in force; not serving it", "class", c.Name)
 			continue
 		}
 		if c.Isolation == config.Sysbox && !a.sysbox {

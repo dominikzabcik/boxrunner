@@ -43,6 +43,11 @@ const (
 	CacheDir = "/var/lib/boxrunner/cache"
 	// EnvCache gives jobs of a class with cache = true the cache's URL.
 	EnvCache = "BOXRUNNER_CACHE"
+	// EnvDNS gives the Docker daemon of a job in an egress class the address
+	// of the class's DNS forwarder.
+	EnvDNS = "BOXRUNNER_DNS"
+	// NFLogGroup is where the egress rules log the connections they drop.
+	NFLogGroup = 4137
 
 	LabelBox        = "boxrunner.box"
 	LabelRunner     = "boxrunner.runner"
@@ -59,6 +64,8 @@ const (
 	// LabelMirror marks the registry mirror's container and volume; on the
 	// container it holds the mirror's identity: image and address.
 	LabelMirror = "boxrunner.mirror"
+	// LabelEgress marks the network of an egress class; it holds the class's name.
+	LabelEgress = "boxrunner.egress"
 
 	// ExitConfig is the exit status for a problem a restart cannot fix (a wrong
 	// token, an agent too old for its Worker); the unit does not restart on it.

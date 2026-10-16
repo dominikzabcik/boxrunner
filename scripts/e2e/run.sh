@@ -7,6 +7,7 @@
 #   scripts/e2e/run.sh runc|sysbox|docker
 #
 # runc installs without flags, sysbox with --sysbox and docker with --docker.
+# scripts/e2e/egress.sh adds an egress allowlist to one class and checks it.
 set -euo pipefail
 
 mode=${1:?usage: scripts/e2e/run.sh runc|sysbox|docker}
@@ -40,7 +41,15 @@ scripts/build-release.sh "$version"
 go build -o "$work/stub-worker" ./scripts/e2e/stub-worker
 "$work/stub-worker" -version "$version" >"$work/worker.log" 2>&1 &
 stub=$!
-trap 'kill $stub; printf "\n### the stub Worker saw\n"; sort "$work/worker.log" | uniq -c' EXIT
+cleanup() {
+	kill $stub
+	sudo docker rm -f e2e-inner e2e-held >/dev/null 2>&1
+	sudo ip netns pids e2e-svc 2>/dev/null | xargs -r sudo kill
+	sudo ip netns del e2e-svc 2>/dev/null
+	printf "\n### the stub Worker saw\n"
+	sort "$work/worker.log" | uniq -c
+}
+trap cleanup EXIT
 for _ in $(seq 50); do
 	curl -fsS -o /dev/null -H 'Authorization: Bearer test' "$worker/v1/repos" 2>/dev/null && break
 	sleep 0.1
@@ -130,6 +139,9 @@ if [ -n "${RUNTIME_TOKEN_FILE:-}" ]; then
 	sudo systemctl start boxrunner.service
 fi
 
+# shellcheck source=scripts/e2e/egress.sh
+. scripts/e2e/egress.sh
+
 step "the idle slice stays idle through a daemon-reload, and the agent makes a new one idle"
 idle=/sys/fs/cgroup/boxrunner_idle.slice/cpu.idle
 sudo systemctl daemon-reload
@@ -151,7 +163,8 @@ expect "$work/installed.txt" '^path /usr/local/bin/boxrunner$' '^path /etc/boxru
 	'^ip6tables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT$' \
 	'^iptables -A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$' \
 	'^ip6tables -A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$' \
-	'^link boxrunner0$' '^network boxrunner$' '^image boxrunner/runner:local$'
+	'^iptables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS$' '^nft table inet boxrunner$' \
+	'^link boxrunner0$' '^link boxrunner-[0-9a-f]{5}$' '^network boxrunner$' '^network boxrunner-boxrunner-light$' '^image boxrunner/runner:local$'
 if [ "$mode" = docker ]; then
 	expect "$work/installed.txt" '^container boxrunner-mirror$' '^volume boxrunner-mirror$'
 fi

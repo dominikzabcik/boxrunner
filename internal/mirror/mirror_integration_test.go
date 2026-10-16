@@ -44,7 +44,7 @@ func TestSecondJobPullsFromTheMirror(t *testing.T) {
 	class := config.Class{Name: "t", NanoCPUs: 2e9, Memory: 3 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Idle, Image: layout.Image, Docker: true}
 	pull := func(name string) (time.Duration, string) {
 		started := time.Now()
-		spec := agent.Spec("box-1", class, scheduler.Runner{Name: name, ScaleSet: scheduler.Key{Repo: "octo/site", Class: "t"}}, "unused", mirror.URL(addr), "")
+		spec := agent.Spec("box-1", class, scheduler.Runner{Name: name, ScaleSet: scheduler.Key{Repo: "octo/site", Class: "t"}}, "unused", mirror.URL(addr), "", nil)
 		spec.Labels = nil
 		spec.Tty = true
 		spec.Cmd = []string{"bash", "-c", `until docker info >/dev/null 2>&1; do sleep 1; done

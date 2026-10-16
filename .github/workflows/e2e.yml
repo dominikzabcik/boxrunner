@@ -12,6 +12,9 @@ on:
       - internal/install/**
       - internal/firewall/**
       - internal/doctor/**
+      - internal/dnsfwd/**
+      - internal/egress/**
+      - internal/nflog/**
       - internal/layout/**
       - image/**
       - install.sh

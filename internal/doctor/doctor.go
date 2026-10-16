@@ -105,10 +105,20 @@ func (c Checks) All(ctx context.Context) []Result {
 		firewall.Absent:  "missing; restart boxrunner or run install",
 	}[state])
 
+	// A stopped agent has no sessions, held classes or refusals to report; the
+	// other checks say what is wrong.
+	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var snap *status.Snapshot
+	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
+		snap = &s
+	}
+
 	if d != nil {
 		results = append(results, c.probe(ctx, d, services.Cache)...)
 		if c.ConfigErr == nil {
 			results = append(results, isolation(ctx, d, c.Config.Classes, sysbox)...)
+			results = append(results, c.egressChecks(ctx, d, services, gateway, sysbox, snap)...)
 		}
 		if services.Mirror {
 			var addr netip.AddrPort
@@ -144,14 +154,11 @@ func (c Checks) All(ctx context.Context) []Result {
 			}
 		}
 	}
-	// A stopped agent has no sessions or held classes to report; the other checks say what is wrong.
-	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if s, err := status.Fetch(sctx, layout.Socket); err == nil {
-		results = append(results, Draining(s)...)
-		results = append(results, Held(s, time.Now())...)
-		results = append(results, Elsewhere(s)...)
-		results = append(results, RunnerImage(s.Image)...)
+	if snap != nil {
+		results = append(results, Draining(*snap)...)
+		results = append(results, Held(*snap, time.Now())...)
+		results = append(results, Elsewhere(*snap)...)
+		results = append(results, RunnerImage(snap.Image)...)
 	}
 	return results
 }

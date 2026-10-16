@@ -154,6 +154,9 @@ type ContainerSpec struct {
 	Restart string
 	// Volumes mounts named volumes: volume name to path in the container.
 	Volumes map[string]string
+	// DNS are the resolvers behind the container's own: Docker's resolver
+	// forwards what it does not know to them, from the container's address.
+	DNS []string
 }
 
 type restartPolicy struct {
@@ -177,6 +180,7 @@ type hostConfig struct {
 	Runtime       string         `json:"Runtime,omitempty"`
 	RestartPolicy *restartPolicy `json:"RestartPolicy,omitempty"`
 	Mounts        []mount        `json:"Mounts,omitempty"`
+	Dns           []string       `json:"Dns,omitempty"`
 }
 
 type createBody struct {
@@ -195,7 +199,7 @@ func (c *Client) Create(ctx context.Context, s ContainerSpec) (string, error) {
 		Image: s.Image, Cmd: s.Cmd, Env: s.Env, Labels: s.Labels, Tty: s.Tty,
 		HostConfig: hostConfig{
 			NanoCpus: s.NanoCPUs, Memory: s.Memory, MemorySwap: s.Memory, PidsLimit: s.PidsLimit,
-			ShmSize: s.ShmSize, CgroupParent: s.CgroupParent, NetworkMode: s.Network, Runtime: s.Runtime,
+			ShmSize: s.ShmSize, CgroupParent: s.CgroupParent, NetworkMode: s.Network, Runtime: s.Runtime, Dns: s.DNS,
 		},
 	}
 	if s.Restart != "" {
@@ -302,12 +306,66 @@ type Network struct {
 	Name    string            `json:"Name"`
 	Driver  string            `json:"Driver"`
 	Options map[string]string `json:"Options"`
+	Labels  map[string]string `json:"Labels"`
 	IPAM    struct {
 		Config []struct {
 			Subnet  string `json:"Subnet"`
 			Gateway string `json:"Gateway"`
 		} `json:"Config"`
 	} `json:"IPAM"`
+	// Containers are the endpoints on the network, by container id.
+	Containers map[string]Endpoint `json:"Containers"`
+}
+
+// Endpoint is a container's place on a network.
+type Endpoint struct {
+	Name string `json:"Name"`
+	// IPv4Address is the container's address with its prefix length.
+	IPv4Address string `json:"IPv4Address"`
+}
+
+// Addr is the container's IPv4 address, if it has one.
+func (e Endpoint) Addr() (netip.Addr, bool) {
+	prefix, err := netip.ParsePrefix(e.IPv4Address)
+	return prefix.Addr(), err == nil
+}
+
+// Subnet is the network's IPv4 subnet.
+func (n Network) Subnet() (netip.Prefix, bool) {
+	for _, c := range n.IPAM.Config {
+		if p, err := netip.ParsePrefix(c.Subnet); err == nil && p.Addr().Is4() {
+			return p, true
+		}
+	}
+	return netip.Prefix{}, false
+}
+
+// Networks lists the networks that carry a label (key or key=value), or every
+// network when label is empty.
+func (c *Client) Networks(ctx context.Context, label string) ([]Network, error) {
+	q := url.Values{}
+	if label != "" {
+		filters, _ := json.Marshal(map[string][]string{"label": {label}})
+		q.Set("filters", string(filters))
+	}
+	var list []struct {
+		Name string `json:"Name"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/networks?"+q.Encode(), "", nil, &list); err != nil {
+		return nil, err
+	}
+	// The listing leaves out the endpoints, so each network is read again.
+	var out []Network
+	for _, l := range list {
+		n, ok, err := c.Network(ctx, l.Name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 // Gateway is the network's IPv4 gateway: the host's address on its bridge.
@@ -350,6 +408,10 @@ type NetworkSpec struct {
 	// ICC allows traffic between containers on the network.
 	ICC    bool
 	Labels map[string]string
+	// Subnet and Gateway, when valid, are the network's; otherwise Docker
+	// takes a subnet from its address pools.
+	Subnet  netip.Prefix
+	Gateway netip.Addr
 }
 
 func (c *Client) CreateNetwork(ctx context.Context, s NetworkSpec) error {
@@ -361,6 +423,9 @@ func (c *Client) CreateNetwork(ctx context.Context, s NetworkSpec) error {
 			"com.docker.network.bridge.enable_icc": strconv.FormatBool(s.ICC),
 		},
 		"Labels": s.Labels,
+	}
+	if s.Subnet.IsValid() && s.Gateway.IsValid() {
+		body["IPAM"] = map[string]any{"Config": []map[string]string{{"Subnet": s.Subnet.String(), "Gateway": s.Gateway.String()}}}
 	}
 	return c.call(ctx, http.MethodPost, "/networks/create", "application/json", body, nil)
 }

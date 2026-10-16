@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -95,6 +96,12 @@ func (t tables) run(_ context.Context, stdin, name string, args ...string) (stri
 		chains[chain] = append([]string{rule(3)}, rules...)
 	case "-D":
 		i := slices.Index(rules, rule(2))
+		if n, err := strconv.Atoi(args[2]); err == nil && len(args) == 3 {
+			i = n - 1
+			if i >= len(rules) {
+				return "", errNo
+			}
+		}
 		if i < 0 {
 			return "", errNo
 		}

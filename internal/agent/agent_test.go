@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
+	"github.com/dominikzabcik/boxrunner/internal/dnsfwd"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
+	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
@@ -59,6 +61,28 @@ type fakeDocker struct {
 	built string
 	// builds are the pulls, tags and builds the agent asked for.
 	builds []string
+	// nets are the networks of egress classes, by name.
+	nets map[string]*fakeNet
+	// subnet and gateway, when set, are those of every new egress network.
+	subnet, gateway string
+	// failInspect makes the nth inspection of a network, by name, fail.
+	failInspect map[string]int
+	inspected   map[string]int
+	// failRemove names the containers that cannot be removed, and
+	// failNetwork makes creating an egress network fail.
+	failRemove  map[string]bool
+	failNetwork bool
+	// stopped names the containers that were stopped.
+	stopped []string
+}
+
+// fakeNet is an egress class's network.
+type fakeNet struct {
+	Bridge string
+	Labels map[string]string
+	Subnet string
+	// Gateway is the network's address on the host.
+	Gateway string
 }
 
 // matches applies a containers/json label filter, key or key=value.
@@ -95,14 +119,81 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				runtimes[r] = map[string]string{"path": "/usr/bin/" + r}
 			}
 			json.NewEncoder(w).Encode(map[string]any{"DockerRootDir": root, "CgroupDriver": "systemd", "CgroupVersion": "2", "Runtimes": runtimes})
+		case path == "/networks" && r.Method == http.MethodGet:
+			var filters map[string][]string
+			json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
+			list := []map[string]string{}
+			for name, n := range f.nets {
+				if labels := filters["label"]; len(labels) == 0 {
+					list = append(list, map[string]string{"Name": name})
+				} else if _, ok := n.Labels[strings.Split(labels[0], "=")[0]]; ok {
+					list = append(list, map[string]string{"Name": name})
+				}
+			}
+			if len(filters["label"]) == 0 && f.network {
+				list = append(list, map[string]string{"Name": "boxrunner"})
+			}
+			json.NewEncoder(w).Encode(list)
+		case strings.HasPrefix(path, "/networks/") && f.nets[strings.TrimPrefix(path, "/networks/")] != nil && r.Method == http.MethodGet:
+			name := strings.TrimPrefix(path, "/networks/")
+			n := f.nets[name]
+			if f.inspected == nil {
+				f.inspected = map[string]int{}
+			}
+			if f.inspected[name]++; f.inspected[name] == f.failInspect[name] {
+				http.Error(w, `{"message":"docker is busy"}`, 500)
+				return
+			}
+			endpoints := map[string]any{}
+			for _, c := range f.containers {
+				if mode, _ := c.Body["HostConfig"].(map[string]any)["NetworkMode"].(string); mode == name {
+					endpoints[c.Name] = map[string]string{"Name": c.Name, "IPv4Address": "172.30.0.7/16"}
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"Name": name, "Driver": "bridge", "Labels": n.Labels, "Containers": endpoints,
+				"Options": map[string]string{"com.docker.network.bridge.name": n.Bridge},
+				"IPAM":    map[string]any{"Config": []map[string]string{{"Subnet": n.Subnet, "Gateway": n.Gateway}}},
+			})
+		case strings.HasPrefix(path, "/networks/") && r.Method == http.MethodDelete:
+			delete(f.nets, strings.TrimPrefix(path, "/networks/"))
+			w.WriteHeader(204)
 		case path == "/networks/boxrunner":
 			if !f.network {
 				http.Error(w, `{"message":"no such network"}`, 404)
 				return
 			}
 			io.WriteString(w, `{"Name":"boxrunner","IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}`)
+		case strings.HasPrefix(path, "/networks/") && r.Method == http.MethodGet:
+			http.Error(w, `{"message":"no such network"}`, 404)
 		case path == "/networks/create":
-			f.network = true
+			var body struct {
+				Name    string
+				Options map[string]string
+				Labels  map[string]string
+				IPAM    struct {
+					Config []struct{ Subnet, Gateway string }
+				}
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if body.Name == "boxrunner" {
+				f.network = true
+				break
+			}
+			if f.failNetwork {
+				http.Error(w, `{"message":"Pool overlaps with other one on this address space"}`, http.StatusForbidden)
+				return
+			}
+			if f.nets == nil {
+				f.nets = map[string]*fakeNet{}
+			}
+			n := &fakeNet{Bridge: body.Options["com.docker.network.bridge.name"], Labels: body.Labels,
+				Subnet:  cmp.Or(f.subnet, fmt.Sprintf("172.%d.0.0/16", 30+len(f.nets))),
+				Gateway: cmp.Or(f.gateway, fmt.Sprintf("172.%d.0.1", 30+len(f.nets)))}
+			if len(body.IPAM.Config) == 1 {
+				n.Subnet, n.Gateway = body.IPAM.Config[0].Subnet, body.IPAM.Config[0].Gateway
+			}
+			f.nets[body.Name] = n
 		case path == "/volumes/create":
 			var body struct{ Name string }
 			json.NewDecoder(r.Body).Decode(&body)
@@ -146,12 +237,22 @@ func (f *fakeDocker) serve(t *testing.T) string {
 		case len(parts) == 3 && parts[2] == "start":
 			f.containers[parts[1]].State = map[bool]string{false: "running", true: "exited"}[f.exitOnStart]
 			w.WriteHeader(204)
+		case len(parts) == 3 && parts[2] == "stop":
+			if c, ok := f.containers[parts[1]]; ok {
+				c.State = "exited"
+			}
+			f.stopped = append(f.stopped, parts[1])
+			w.WriteHeader(204)
 		case len(parts) == 3 && parts[2] == "logs":
 			f.logs = append(f.logs, parts[1])
 			io.WriteString(w, "\x02\x00\x00\x00\x00\x00\x00\x12exec format error\n")
 		case r.Method == http.MethodDelete && parts[0] == "containers":
 			if _, ok := f.containers[parts[1]]; !ok {
 				http.Error(w, `{"message":"no such container"}`, 404)
+				return
+			}
+			if f.failRemove[parts[1]] {
+				http.Error(w, `{"message":"removal of container is already in progress"}`, http.StatusConflict)
 				return
 			}
 			delete(f.containers, parts[1])
@@ -306,6 +407,16 @@ type harness struct {
 	done   chan error
 	// cgroup holds the idle slice's cpu.idle, 0 at first.
 	cgroup string
+	// run, when set, answers the commands the agent runs, except systemctl.
+	run func(stdin, name string, args ...string) (string, error)
+	// egressListen, openPackets and upstream stand in for the egress classes' sockets, log and resolver.
+	egressListen func(egress.Net) (net.PacketConn, net.Listener, error)
+	openPackets  func(uint16) (PacketSource, error)
+	upstream     dnsfwd.Upstream
+	// guardEvery is how often the egress rules are checked, 50 ms when zero.
+	guardEvery time.Duration
+	// logs is what the agent logged.
+	logs *logBuffer
 	// metrics is where the agent serves metrics, none when zero.
 	metrics netip.AddrPort
 	// cache is the Actions cache's size, none when zero, served at cacheAddr.
@@ -327,6 +438,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
 		cgroup: t.TempDir(),
+		logs:   &logBuffer{},
 	}
 	os.Mkdir(filepath.Join(h.cgroup, "boxrunner_idle.slice"), 0o755)
 	os.WriteFile(filepath.Join(h.cgroup, "boxrunner_idle.slice", "cpu.idle"), []byte("0\n"), 0o644)
@@ -346,7 +458,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	}
 	u, _ := url.Parse(srv.URL)
 	cfg.Worker = u
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := slog.New(slog.NewTextHandler(h.logs, nil))
 	var ctx context.Context
 	ctx, h.cancel = context.WithCancel(context.Background())
 	t.Cleanup(h.cancel)
@@ -354,14 +466,24 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		h.done <- Run(ctx, Options{
 			Config: cfg, Docker: d, Version: "0.1.0", Log: log,
 			Worker: worker.New(worker.Options{URL: u, Token: "box-token", Version: "0.1.0", Log: log}),
-			Run: func(_ context.Context, _, name string, args ...string) (string, error) {
+			Run: func(_ context.Context, stdin, name string, args ...string) (string, error) {
 				if name == "systemctl" {
 					h.mu.Lock()
 					h.systemctl = append(h.systemctl, strings.Join(args, " "))
 					h.mu.Unlock()
+					return "", nil
+				}
+				if h.run != nil {
+					return h.run(stdin, name, args...)
 				}
 				return "", nil
 			},
+			EgressListen:         h.egressListen,
+			OpenPackets:          h.openPackets,
+			EgressUpstream:       h.upstream,
+			EgressCountEvery:     50 * time.Millisecond,
+			EgressGuardEvery:     cmp.Or(h.guardEvery, 50*time.Millisecond),
+			EgressRetry:          50 * time.Millisecond,
 			JobsLog:              h.jobs,
 			DrainFile:            h.drain,
 			Socket:               h.socket,
@@ -388,6 +510,41 @@ func (h *harness) stop(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the agent did not stop")
 	}
+}
+
+// logBuffer keeps what the agent logs, and passes it on to stderr.
+type logBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	l.b.Write(p)
+	l.mu.Unlock()
+	return os.Stderr.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// waitLog waits for the agent to log a line that has every part.
+func (h *harness) waitLog(t *testing.T, parts ...string) string {
+	t.Helper()
+	var found string
+	waitFor(t, "a log line with "+strings.Join(parts, " and "), func() bool {
+		for _, line := range strings.Split(h.logs.String(), "\n") {
+			if !slices.ContainsFunc(parts, func(p string) bool { return !strings.Contains(line, p) }) {
+				found = line
+				return true
+			}
+		}
+		return false
+	})
+	return found
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
@@ -708,7 +865,7 @@ func TestIdleSlice(t *testing.T) {
 func TestSpecIdleClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner-light", NanoCPUs: 4e9, Memory: 2 << 30, Pids: 512, Shm: 1 << 30, Priority: config.Idle, Image: "boxrunner/runner:local"}
 	r := scheduler.Runner{Name: "box-1-boxrunner-light-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner-light"}, ScaleSetID: 8, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001", nil)
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-light-3f9a2c", Image: "boxrunner/runner:local",
 		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"},
@@ -725,7 +882,7 @@ func TestSpecIdleClass(t *testing.T) {
 func TestSpecDockerClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Docker: true, Isolation: config.Sysbox}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001", nil)
 	want := docker.ContainerSpec{
 		Name: "box-1-boxrunner-3f9a2c", Image: "boxrunner/runner:local",
 		Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit", "BOXRUNNER_DOCKER=1", "BOXRUNNER_MIRROR=http://172.18.0.1:5000"},
@@ -752,7 +909,7 @@ func TestSpecCacheClass(t *testing.T) {
 		{false, "http://172.18.0.1:5001", []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}},
 	} {
 		class.Cache = c.cache
-		if got := Spec("box-1", class, r, "jit", "", c.url); !reflect.DeepEqual(got.Env, c.want) {
+		if got := Spec("box-1", class, r, "jit", "", c.url, nil); !reflect.DeepEqual(got.Env, c.want) {
 			t.Errorf("Spec with cache = %v and the cache at %q: env %q; want %q", c.cache, c.url, got.Env, c.want)
 		}
 	}
@@ -800,7 +957,7 @@ func TestCache(t *testing.T) {
 func TestSpecSysboxClass(t *testing.T) {
 	class := config.Class{Name: "boxrunner", NanoCPUs: 2e9, Memory: 4 << 30, Pids: 4096, Shm: 1 << 30, Priority: config.Normal, Image: "boxrunner/runner:local", Isolation: config.Sysbox}
 	r := scheduler.Runner{Name: "box-1-boxrunner-3f9a2c", ScaleSet: scheduler.Key{Repo: "octo/site", Class: "boxrunner"}, ScaleSetID: 7, ID: 41}
-	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001")
+	got := Spec("box-1", class, r, "jit", "http://172.18.0.1:5000", "http://172.18.0.1:5001", nil)
 	if got.Runtime != "sysbox-runc" || !reflect.DeepEqual(got.Env, []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=jit"}) {
 		t.Errorf("Spec runtime %q, env %q; want sysbox-runc and no Docker of the job's own", got.Runtime, got.Env)
 	}

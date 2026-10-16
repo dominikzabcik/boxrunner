@@ -53,7 +53,7 @@ The agent stops listening to the paused class's scale sets, which closes their s
 sudo boxrunner install --token <new token>
 ```
 
-It writes the token to `/etc/boxrunner/token` and restarts the agent; jobs that are running keep running. The old token stops working at once, so every box stops reaching the Worker until it has the new one: run the command on each.
+It writes the token to `/etc/boxrunner/token` and restarts the agent; jobs that are running keep running, except those of classes with an [egress allowlist](config.md#when-the-agent-stops-and-when-the-rules-go). The old token stops working at once, so every box stops reaching the Worker until it has the new one: run the command on each.
 
 The form's answer is a redirect (303) to `/box-token/{id}`, so a reload loads that page again instead of posting the form again and replacing the token a second time. The id is random and says nothing about the token. The Worker keeps the new token for one view of that page within a minute, in the Durable Object's memory and never in its storage, then keeps only the token's hash. A reload, a second visit or a visit after the minute answers 410 with a link back to the button, and replaces nothing. If the Worker restarts within that minute, the page cannot show the token either: replace it again. `POST /setup/token` does the same with the setup secret instead of a session, and shows the new token at `/setup/token/{id}`.
 

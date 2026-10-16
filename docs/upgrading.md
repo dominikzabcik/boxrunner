@@ -18,7 +18,7 @@ sudo boxrunner upgrade 0.2.2     # one release
 1. The installer checks the agent's binary against the checksums written into it and, with gh signed in, the binary's build attestation. If either does not match, nothing is installed.
 2. It installs the binary and runs `boxrunner install`, which keeps the box's configuration and token, makes any change the new release needs, and restarts the service on the new binary.
 
-Running jobs keep running through the restart. `upgrade` refuses an older release than the one installed unless you pass `--downgrade`.
+Running jobs keep running through the restart, except those of classes with an [egress allowlist](config.md#when-the-agent-stops-and-when-the-rules-go), which it stops; drain first to let them finish. `upgrade` refuses an older release than the one installed unless you pass `--downgrade`.
 
 An agent from before `upgrade` existed upgrades the same way with the install command, without `--worker` and `--token`:
 

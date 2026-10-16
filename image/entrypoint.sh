@@ -1,7 +1,9 @@
 #!/bin/sh
 # Runs the container's command as runner. With BOXRUNNER_DOCKER=1, the job
 # runs under Sysbox and first gets a Docker daemon of its own, which pulls
-# Docker Hub images through the box's registry mirror at BOXRUNNER_MIRROR.
+# Docker Hub images through the box's registry mirror at BOXRUNNER_MIRROR and
+# resolves names through BOXRUNNER_DNS, the forwarder of a class whose
+# network is closed to what its allowlist leaves out.
 # With BOXRUNNER_CACHE, the runner's node becomes node.boxrunner, which sends
 # the cache calls of JavaScript actions to the box's Actions cache.
 set -eu
@@ -23,7 +25,7 @@ fi
 
 if [ "${BOXRUNNER_DOCKER:-}" = 1 ]; then
 	rm -f /usr/local/bin/docker
-	dockerd --group docker ${BOXRUNNER_MIRROR:+"--registry-mirror=$BOXRUNNER_MIRROR"} >/var/log/dockerd.log 2>&1 &
+	dockerd --group docker ${BOXRUNNER_MIRROR:+"--registry-mirror=$BOXRUNNER_MIRROR"} ${BOXRUNNER_DNS:+"--dns=$BOXRUNNER_DNS"} >/var/log/dockerd.log 2>&1 &
 	dockerd=$!
 	waited=0
 	until docker info >/dev/null 2>&1; do
