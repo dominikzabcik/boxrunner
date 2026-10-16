@@ -321,13 +321,16 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		// The Worker names itself in every answer, the heartbeat's included.
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			w.Header().Set("Boxrunner-Protocol", "1")
+			w.Header().Set("Boxrunner-Worker-Version", "0.1.0")
+		}
 		// Heartbeats run on their own clock, so the call lists below leave them out.
 		if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/heartbeat" {
 			g.mu.Lock()
 			g.calls = append(g.calls, strings.TrimSpace(fmt.Sprintf("%s %s %s", r.Method, r.URL.RequestURI(), body)))
 			g.mu.Unlock()
-			w.Header().Set("Boxrunner-Protocol", "1")
-			w.Header().Set("Boxrunner-Worker-Version", "0.1.0")
 		}
 		session := fmt.Sprintf(`{"sessionId":"s1","queueUrl":"%s/queue/7","queueToken":"q1","acquireJobsUrl":"%s/acquire","statistics":{"totalAssignedJobs":0}}`, srv.URL, srv.URL)
 		switch {
