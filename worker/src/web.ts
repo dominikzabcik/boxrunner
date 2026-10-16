@@ -54,6 +54,13 @@ function dashboardJson(box: Box, session: Session, now: number) {
 	return { ...data, html: renderLive(data, session.csrf) };
 }
 
+/** Who may open the dashboard: an organization that owns the App cannot sign in, so then only ADMINS can. */
+function whoMayOpen(box: Box, app: App) {
+	if (!box.ownedByOrganization(app)) return 'Only the account that owns this Worker’s GitHub App, and the accounts in its ADMINS variable, can open the dashboard.';
+	const nobody = box.admins().length === 0 ? ' ADMINS is empty, so nobody can open it until you set it and deploy the Worker again.' : '';
+	return `This Worker’s GitHub App belongs to the organization ${app.owner}, which cannot sign in, so only the accounts in its ADMINS variable can open the dashboard.${nobody}`;
+}
+
 function landingPage(box: Box, app: App, origin: string, status: number) {
 	if (box.canSignIn(app)) {
 		return page({
@@ -62,7 +69,7 @@ function landingPage(box: Box, app: App, origin: string, status: number) {
 			body: `<h1>boxrunner</h1>
 <p>This Worker runs your GitHub Actions jobs on your own box. Its dashboard shows the box, its runners and recent jobs.</p>
 <p><a class="button" href="/login">Sign in with GitHub</a></p>
-<p class="hint">Only the account that owns the GitHub App, and the accounts in the Worker’s ADMINS variable, can open it.</p>`,
+<p class="hint">${escape(whoMayOpen(box, app))}</p>`,
 		});
 	}
 	return page({
@@ -124,7 +131,7 @@ async function callback(box: Box, app: App, request: Request, origin: string, ke
 		return messagePage(
 			403,
 			'This account may not open the dashboard',
-			`You signed in to GitHub as ${login}. Only the account that owns this Worker’s GitHub App, and the accounts in its ADMINS variable, may open the dashboard. To use another account, sign out of GitHub first.`,
+			`You signed in to GitHub as ${login}. ${whoMayOpen(box, app)} To use another account, sign out of GitHub first.`,
 			undefined,
 			clearLogin,
 		);

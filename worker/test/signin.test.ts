@@ -123,6 +123,23 @@ describe('GET /login/callback', () => {
 		expect(await response.text()).toContain('<p>You signed in to GitHub as mallory. Only the account that owns this Worker’s GitHub App');
 	});
 
+	it('says that only ADMINS can sign in when an organization owns the App', async () => {
+		const github = await ready();
+		const hint = async () => /<p class="hint">(.*?)<\/p>/.exec(await (await send('/')).text())?.[1];
+		await withEnv({ APP_OWNER: 'octo' }, async () => {
+			const owned = 'This Worker’s GitHub App belongs to the organization octo, which cannot sign in, so only the accounts in its ADMINS variable can open the dashboard.';
+			expect(await hint()).toBe(owned);
+			const { response } = await signIn(github, 'mallory');
+			expect(response.status).toBe(403);
+			expect(await response.text()).toContain(`<p>You signed in to GitHub as mallory. ${owned} To use another account, sign out of GitHub first.</p>`);
+			expect((await signIn(github, 'mona')).response.status).toBe(200);
+			await withEnv({ ADMINS: '' }, async () => {
+				expect(await hint()).toBe(`${owned} ADMINS is empty, so nobody can open it until you set it and deploy the Worker again.`);
+			});
+		});
+		expect(await hint()).toBe('Only the account that owns this Worker’s GitHub App, and the accounts in its ADMINS variable, can open the dashboard.');
+	});
+
 	it('refuses a code GitHub does not accept', async () => {
 		const github = await ready();
 		const start = await send('/login');

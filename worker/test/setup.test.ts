@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agent, callback, fakeGitHub, origin, postForm, send, setUp, startSetup, time, tokenIn } from './harness';
+import { agent, callback, fakeGitHub, origin, postForm, send, setUp, startSetup, time, tokenIn, withEnv } from './harness';
 import { setupSecret } from './secret';
 
 afterEach(() => {
@@ -81,6 +81,77 @@ describe('POST /setup', () => {
 		const refused = await postForm('/setup', { secret: 'wrong', name: 'boxrunner-test', unserved: 'on' });
 		expect(await refused.text()).toContain('<input type="checkbox" name="unserved" value="on" checked aria-describedby="unserved-hint">');
 	});
+});
+
+describe('who owns the App', () => {
+	/** Where the setup page posts the manifest, without the state, and the permissions the manifest asks for. */
+	async function manifestFor(vars: Record<string, string>) {
+		let result: { status: number; action: string | undefined; permissions: unknown; form: string; text: string } | undefined;
+		await withEnv(vars, async () => {
+			const form = await send('/setup');
+			const formText = await form.text();
+			const response = await postForm('/setup', { secret: setupSecret, name: 'boxrunner-test' });
+			const html = await response.text();
+			const manifest = /name="manifest" value="([^"]+)"/.exec(html)?.[1];
+			result = {
+				status: response.status,
+				action: /<form id="manifest" method="post" action="([^"?]+)\?state=/.exec(html)?.[1],
+				permissions: manifest && (JSON.parse(manifest.replace(/&quot;/g, '"').replace(/&amp;/g, '&')) as { default_permissions: unknown }).default_permissions,
+				form: formText,
+				text: html,
+			};
+		});
+		return result!;
+	}
+
+	it('is the account that runs setup without APP_OWNER', async () => {
+		await fakeGitHub();
+		const { action, permissions, form } = await manifestFor({ APP_OWNER: '' });
+		expect(action).toBe('https://github.com/settings/apps/new');
+		expect(permissions).toEqual({ administration: 'write', metadata: 'read' });
+		expect(form).toContain('<p>This creates a private GitHub App under your account.');
+		expect(form).not.toContain('An organization cannot sign in');
+	});
+
+	it('is the organization in APP_OWNER, with the repository permissions, when ORG is empty', async () => {
+		await fakeGitHub();
+		const { action, permissions, form } = await manifestFor({ APP_OWNER: 'octo' });
+		expect(action).toBe('https://github.com/organizations/octo/settings/apps/new');
+		expect(permissions).toEqual({ administration: 'write', metadata: 'read' });
+		expect(form).toContain(
+			'<p>This creates a private GitHub App under the organization <strong>octo</strong>, with the permission Administration on the repositories you install it on. Only octo can install it. You need to be an owner of octo. GitHub sends its key',
+		);
+		expect(form).toContain('<p>An organization cannot sign in, so only the accounts in the Worker’s ADMINS variable can open the dashboard.</p>');
+	});
+
+	it('is ORG when APP_OWNER repeats it, in any case', async () => {
+		await fakeGitHub();
+		const { action, permissions } = await manifestFor({ ORG: 'octo', RUNNER_GROUP: 'boxrunner', APP_OWNER: 'Octo' });
+		expect(action).toBe('https://github.com/organizations/octo/settings/apps/new');
+		expect(permissions).toEqual({ organization_self_hosted_runners: 'write', metadata: 'read' });
+	});
+
+	for (const [name, vars, problem] of [
+		[
+			'APP_OWNER names another organization than ORG',
+			{ ORG: 'octo', RUNNER_GROUP: 'boxrunner', APP_OWNER: 'other' },
+			'APP_OWNER is "other", but the App of a Worker that serves an organization belongs to that organization, ORG "octo"',
+		],
+		['APP_OWNER is not a GitHub login', { APP_OWNER: 'octo/site' }, 'APP_OWNER is "octo/site", which is not a GitHub login'],
+		[
+			'an organization will own the App and ADMINS is empty',
+			{ APP_OWNER: 'octo', ADMINS: ' , ' },
+			'ADMINS is empty, and the App will belong to the organization octo, which cannot sign in to the dashboard. List the GitHub logins that may open it',
+		],
+	] as const) {
+		it(`is locked when ${name}`, async () => {
+			await fakeGitHub();
+			const { status, action, form, text } = await manifestFor(vars);
+			expect(status).toBe(503);
+			expect(action).toBeUndefined();
+			for (const html of [form, text]) expect(html).toContain(`The Worker’s ${problem.replace(/"/g, '&quot;')}. Fix the variable, then reload this page.`);
+		});
+	}
 });
 
 describe('GET /setup/callback', () => {

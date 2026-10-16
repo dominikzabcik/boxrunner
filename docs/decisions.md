@@ -193,6 +193,12 @@ A Worker serves either repositories or one organization, not both, so one set of
 
 None of this has run against a real organization: the tests use a fake built from actions/scaleset and GitHub's REST documentation. [Config](config.md#not-checked-against-github-yet) lists the probe that would check it, and the Free plan question decides whether it helps a small organization at all.
 
+## An organization can own a repository-mode App
+
+A private App can be installed only on the account that owns it, and setup used to create the App under whoever ran it, so per-repository scale sets could not serve an organization's repositories. Organization scale sets could, but their permission covers every repository of the organization. Repository Administration on the repositories the App is installed on reaches less, so the `APP_OWNER` variable makes setup post the manifest to the organization's settings and keeps the repository permissions.
+
+It is a variable, not a field on the setup form, so the setup page, the check against `ORG` and the sign-in page read one value, and the person who deploys the Worker decides who owns its key, as with `ORG`. An organization cannot sign in, and the Worker's only sign-in rule is "the App's owner or `ADMINS`", so setup refuses to create an App an organization owns while `ADMINS` is empty: the alternative was a Worker whose dashboard nobody can open. A public App, which any account can install, was ruled out: the Worker serves every private repository the App is installed on unless `REPOS` narrows it, so anyone who installed it would get the box.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

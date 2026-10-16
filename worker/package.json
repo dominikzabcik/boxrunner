@@ -33,6 +33,9 @@
 			"RUNNER_GROUP": {
 				"description": "Optional, required with `ORG`. The organization's runner group for the scale sets. It must admit only selected repositories and no public one."
 			},
+			"APP_OWNER": {
+				"description": "Optional. An organization that owns the GitHub App setup creates, so a Worker that serves repositories one by one can serve that organization's repositories. You must be an owner of it, and set `ADMINS`, since an organization cannot sign in. Leave empty for an App under your own account; see docs/config.md."
+			},
 			"ADMINS": {
 				"description": "Optional. GitHub logins (comma-separated) that may sign in to the dashboard besides the App's owner. Leave empty for the owner alone."
 			},

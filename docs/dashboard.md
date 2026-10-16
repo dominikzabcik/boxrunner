@@ -6,6 +6,8 @@ Your Worker serves a dashboard at its own address, so there is nothing else to d
 
 The account that owns the GitHub App, and the accounts listed in the optional `ADMINS` variable (GitHub logins, comma-separated, in `wrangler.jsonc` or the Cloudflare dashboard). Logins are compared case-insensitively. Anyone else who signs in gets a page saying which account they used and that it may not open the dashboard. The Worker checks the list on every request, so removing a login from `ADMINS` ends that account's session at once.
 
+An organization cannot sign in. When one owns the App, because the Worker's `ORG` or `APP_OWNER` names it, only the accounts in `ADMINS` can open the dashboard, and setup is locked until `ADMINS` lists at least one login. The sign-in page says so, and says when `ADMINS` is empty.
+
 Signing in uses the App's own OAuth client. Setup keeps its client id, client secret and owner, and its manifest registers `<worker>/login/callback` as the App's callback URL.
 
 ### An App set up before the Worker kept its client secret

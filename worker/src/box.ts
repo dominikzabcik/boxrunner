@@ -3,9 +3,11 @@ import { variable, type Alarms, type Watch } from './fallback';
 import * as github from './github';
 import { ApiError } from './http';
 import {
+	adminLogins,
 	groupProblem,
 	mayOpenDashboard,
 	parseAlerts,
+	parseAppOwner,
 	parseClasses,
 	parseFallback,
 	parseOrg,
@@ -14,6 +16,7 @@ import {
 	scopeName,
 	type AlertConfig,
 	type App,
+	type AppOwnerConfig,
 	type ClassName,
 	type Classes,
 	type FallbackConfig,
@@ -82,6 +85,24 @@ export class Box {
 
 	orgConfig(): OrgConfig {
 		return parseOrg(this.env.ORG, this.env.RUNNER_GROUP);
+	}
+
+	/** Who setup makes the App under: `ORG`, else `APP_OWNER`, else the account that runs setup. */
+	appOwner(): AppOwnerConfig {
+		const org = this.orgConfig();
+		return parseAppOwner(this.env.APP_OWNER, org.ok ? (org.org?.login ?? null) : null);
+	}
+
+	/** Whether the App belongs to the organization this Worker's variables name, which cannot sign in. */
+	ownedByOrganization(app: App): boolean {
+		const config = this.appOwner();
+		const owner = config.ok ? config.owner : null;
+		return owner !== null && app.owner?.toLowerCase() === owner.toLowerCase();
+	}
+
+	/** The logins in `ADMINS`. */
+	admins(): string[] {
+		return adminLogins(this.env.ADMINS);
 	}
 
 	/** The organization the Worker serves, as its last listing found it; null while it serves repositories one by one or before the first listing. */
