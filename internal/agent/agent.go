@@ -106,6 +106,8 @@ type Agent struct {
 	// cache is the Actions cache's URL for classes with cache = true, "" when
 	// it does not serve.
 	cache string
+	// jobRules are the job network's firewall rules, which the guard keeps.
+	jobRules firewall.Rules
 	// egress is what the agent keeps for the classes with an allowlist.
 	egress *egressState
 	queue  *queue.Client
@@ -277,6 +279,7 @@ func (a *Agent) converge(ctx context.Context) error {
 	if err := firewall.Apply(ctx, a.Run, rules); err != nil {
 		return fmt.Errorf("firewall: %w", err)
 	}
+	a.jobRules = rules
 	a.convergeEgress(ctx, services, gateway)
 	return nil
 }

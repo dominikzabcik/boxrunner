@@ -8,7 +8,8 @@
 # service it does not list, not a Docker network made after the agent
 # started, and not an address that a job forges as its own source. It then stops the agent and deletes the table, and the class stays
 # closed, and flushes the whole ruleset with the agent running, stopped and
-# killed: no job of the class outlives the rules. It uses $mode, $work,
+# killed: no job of the class outlives the rules, and the job network's rules
+# come back with them. It uses $mode, $work,
 # $isolation, $version, expect, fail and step.
 
 class=boxrunner-light
@@ -303,6 +304,9 @@ expect "$work/agent-crash.txt" 'msg="removed a job of an egress class" runner=e2
 
 step "nft flush ruleset with the agent running: the agent puts the rules back and removes the job that ran without them"
 held
+# A job of the other class, which has no allowlist, on the job network.
+sudo docker rm -f e2e-open >/dev/null 2>&1 || true
+sudo docker run -d --name e2e-open --network boxrunner boxrunner/runner:local sleep 900 >/dev/null
 since=$(date '+%F %T')
 sudo nft flush ruleset
 flushed=$(date +%s)
@@ -315,7 +319,16 @@ echo "the job was removed $(($(date +%s) - flushed)) s after the flush"
 backstop
 journal agent-flush.txt
 expect "$work/agent-flush.txt" 'msg="the egress rules were gone; put them back"' \
-	'msg="removed a job of an egress class" runner=e2e-held .*why="the egress rules were gone while it ran"'
+	'msg="removed a job of an egress class" runner=e2e-held .*why="the egress rules were gone while it ran"' \
+	'msg="the job network.s firewall rules were incomplete; put them back"'
+
+step "the agent put back the job network's rules too, so the other class still cannot reach the private service"
+sudo iptables-save | tee "$work/iptables-flush.txt" >/dev/null
+expect "$work/iptables-flush.txt" '^-A BOXRUNNER-FORWARD -d 10\.0\.0\.0/8 -j DROP$' \
+	'^-A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$'
+sudo docker exec e2e-open bash -c 'timeout 4 bash -c "exec 3<>/dev/tcp/10.20.0.2/5432" 2>/dev/null && echo open || echo closed' | tee "$work/open-class-flush.txt"
+expect "$work/open-class-flush.txt" '^closed$'
+sudo docker rm -f e2e-open >/dev/null
 
 step "Docker and the agent put back their own rules, which the flush took, and the class works again"
 sudo systemctl restart docker

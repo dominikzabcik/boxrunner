@@ -540,6 +540,44 @@ func TestEgressFlushRemovesJobs(t *testing.T) {
 	}
 }
 
+// TestJobRulesFlushed: on a box without egress classes, the guard puts the
+// job network's rules back after `nft flush ruleset` took them.
+func TestJobRulesFlushed(t *testing.T) {
+	host := &fakeHost{}
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) { h.run = host.run })
+	defer h.stop(t)
+	drop := "-A BOXRUNNER-FORWARD -d 10.0.0.0/8 -j DROP"
+	waitFor(t, "the job network's rules", func() bool { return slices.Contains(host.iptablesRules("BOXRUNNER-FORWARD"), drop) })
+	host.flushRuleset()
+	h.waitLog(t, `level=WARN msg="the job network's firewall rules were incomplete; put them back"`)
+	if !slices.Contains(host.iptablesRules("BOXRUNNER-FORWARD"), drop) {
+		t.Errorf("BOXRUNNER-FORWARD = %q, want the private ranges dropped", host.iptablesRules("BOXRUNNER-FORWARD"))
+	}
+	if got, want := host.iptablesRules("FORWARD"), []string{"-A FORWARD -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD"}; !slices.Equal(got, want) {
+		t.Errorf("FORWARD = %q, want %q", got, want)
+	}
+	if got, want := host.iptablesRules("INPUT"), []string{"-A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT"}; !slices.Equal(got, want) {
+		t.Errorf("INPUT = %q, want %q", got, want)
+	}
+}
+
+// TestEgressFlushJobRules: on a box with egress classes, the guard puts the
+// job network's rules back with the table after `nft flush ruleset`, and the
+// egress chain's jump stays ahead of theirs in INPUT.
+func TestEgressFlushJobRules(t *testing.T) {
+	host := &fakeHost{}
+	e := startEgress(t, host, map[string]*container{})
+	defer e.stop(t)
+	waitFor(t, "the first ruleset", func() bool { return len(host.applied()) == 1 })
+	host.flushRuleset()
+	e.waitLog(t, `level=WARN msg="the job network's firewall rules were incomplete; put them back"`)
+	if got := host.iptablesRules("BOXRUNNER-FORWARD"); !slices.Contains(got, "-A BOXRUNNER-FORWARD -d 192.168.0.0/16 -j DROP") {
+		t.Errorf("BOXRUNNER-FORWARD = %q, want the private ranges dropped", got)
+	}
+	want := []string{"-A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS", "-A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT"}
+	waitFor(t, "the egress chain's jump first in INPUT", func() bool { return slices.Equal(host.iptablesRules("INPUT"), want) })
+}
+
 // TestEgressBackstop: the guard puts back the host's backstop when only it is
 // gone. The table judged every packet meanwhile, so the job keeps running.
 func TestEgressBackstop(t *testing.T) {

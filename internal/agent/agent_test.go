@@ -414,7 +414,8 @@ type harness struct {
 	done   chan error
 	// cgroup holds the idle slice's cpu.idle, 0 at first.
 	cgroup string
-	// run, when set, answers the commands the agent runs, except systemctl.
+	// run answers the commands the agent runs, except systemctl; a fakeHost
+	// of its own when nil.
 	run func(stdin, name string, args ...string) (string, error)
 	// egressListen, openPackets and upstream stand in for the egress classes' sockets, log and resolver.
 	egressListen func(egress.Net) (net.PacketConn, net.Listener, error)
@@ -456,6 +457,9 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	for _, f := range change {
 		f(&cfg.Classes[0], h)
 	}
+	if h.run == nil {
+		h.run = (&fakeHost{}).run
+	}
 	cfg.Metrics, cfg.Cache = h.metrics, h.cache
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
@@ -480,10 +484,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 					h.mu.Unlock()
 					return "", nil
 				}
-				if h.run != nil {
-					return h.run(stdin, name, args...)
-				}
-				return "", nil
+				return h.run(stdin, name, args...)
 			},
 			EgressListen:         h.egressListen,
 			OpenPackets:          h.openPackets,
