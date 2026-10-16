@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.1
+
+**Setup**
+- An organization can own the App while the box serves repositories one by one: set the Worker's `APP_OWNER` to the organization's login, and setup creates the App under it with repository Administration on the repositories you install it on. Before, setup always created the App under the person who clicked, and a private App owned by a person cannot be installed on an organization's repositories (#104, docs/config.md).
+- When an organization owns the App, nobody signs in as its owner, so setup needs `ADMINS` and only those logins open the dashboard. This holds for `ORG` mode too; Workers already set up are unaffected.
+
 ## v0.8.0
 
 **Organization scale sets (not yet checked against a real organization)**
