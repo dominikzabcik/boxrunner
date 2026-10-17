@@ -124,7 +124,7 @@ var Presets = map[string][]string{
 		"objects.githubusercontent.com", "objects-origin.githubusercontent.com", "github-releases.githubusercontent.com",
 		"github-registry-files.githubusercontent.com", "release-assets.githubusercontent.com",
 		// GitHub Packages and the container registry.
-		"*.pkg.github.com", "pkg-containers.githubusercontent.com", "ghcr.io",
+		"*.pkg.github.com", "pkg-containers.githubusercontent.com", "pkg-npm.githubusercontent.com", "ghcr.io",
 		// Git LFS.
 		"github-cloud.githubusercontent.com", "github-cloud.s3.amazonaws.com",
 	}, resultsStorage()),
