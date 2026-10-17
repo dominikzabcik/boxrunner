@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.3
+
+**Fixes**
+- The `github` egress preset lets jobs download npm packages from GitHub Packages: `npm.pkg.github.com` redirects each download to `pkg-npm.githubusercontent.com`, which the preset did not list, so installing a private scoped package in an egress class failed (#109).
+
 ## v0.8.2
 
 **Fixes**
