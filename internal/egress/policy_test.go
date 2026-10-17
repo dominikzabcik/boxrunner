@@ -129,7 +129,7 @@ func TestGitHubPresetListsTheHostsGitHubDocuments(t *testing.T) {
 		"github.com", "api.github.com", "codeload.github.com", "pipelinesghubeus1.actions.githubusercontent.com",
 		"broker.actions.githubusercontent.com", "results-receiver.actions.githubusercontent.com",
 		"productionresultssa0.blob.core.windows.net", "objects.githubusercontent.com", "release-assets.githubusercontent.com",
-		"ghcr.io", "pkg-containers.githubusercontent.com", "npm.pkg.github.com", "github-cloud.githubusercontent.com",
+		"ghcr.io", "pkg-containers.githubusercontent.com", "npm.pkg.github.com", "pkg-npm.githubusercontent.com", "github-cloud.githubusercontent.com",
 	} {
 		if !p.AllowsName(host, 443) {
 			t.Errorf("the github preset does not allow %s:443", host)
