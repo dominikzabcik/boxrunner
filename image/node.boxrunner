@@ -1,4 +1,9 @@
-#!/bin/sh
+#!/bin/bash
+# bash, not sh: Ubuntu's sh is dash, which drops variables whose names are
+# not shell names from the environment it passes on, and the runner hands an
+# action's inputs over as INPUT_<NAME> with the input's own hyphens, such as
+# INPUT_ANALYSIS-KINDS, so a required input with a hyphen went missing.
+#
 # The node of JavaScript actions in a class with cache = true; the
 # entrypoint links the runner's node to it. While the box's Actions cache
 # answers, it points the action's ACTIONS_RESULTS_URL at the cache, which
