@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.8.4
+
+**Fixes**
+- Classes with `cache = true` pass hyphenated action inputs again. The node wrapper ran under `/bin/sh`, which is dash on Ubuntu and drops environment variables whose names are not shell names, so an action lost every input such as `INPUT_ANALYSIS-KINDS`: CodeQL's init failed with "Input required and not supplied: analysis-kinds" in every cache class since v0.6.0. Upgrade the agent; the job image is rebuilt with the fix (#111).
+
 ## v0.8.3
 
 **Fixes**
