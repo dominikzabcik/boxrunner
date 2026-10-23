@@ -7,13 +7,23 @@ import (
 	"slices"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
 
 const (
 	heartbeatEvery = 30 * time.Second
-	heartbeatJobs  = 50
+	// While the box shares a class with other boxes, a waiting job reaches the
+	// box that runs it within one heartbeat, so they come more often.
+	fleetHeartbeatEvery = 10 * time.Second
+	// A box that has not heard the Worker this many times in a row forgets its
+	// fleet shares and decides alone again.
+	fleetMisses = 2
+	// A new job on a scale set the box listens to sends a heartbeat at once,
+	// but not more often than this.
+	beatAtMost    = 2 * time.Second
+	heartbeatJobs = 50
 	// The Worker refuses a heartbeat with more scale sets than this.
 	heartbeatScaleSets = 128
 	// The Worker refuses an image longer than this.
@@ -28,6 +38,7 @@ const (
 func (a *Agent) heartbeat(ctx context.Context) {
 	failing := false
 	var paused []string
+	fleet, misses := false, 0
 	for {
 		jobs, err := status.Recent(a.JobsLog, heartbeatJobs)
 		if err != nil {
@@ -39,9 +50,22 @@ func (a *Agent) heartbeat(ctx context.Context) {
 			err = nil
 		} else {
 			var reply worker.HeartbeatReply
-			reply, err = a.Worker.SendHeartbeat(ctx, fitHeartbeat(heartbeatBody(snap, jobs), heartbeatLimit))
+			hb := heartbeatBody(snap, jobs)
+			hb.Rank = a.Config.Rank
+			for i, ss := range hb.ScaleSets {
+				hb.ScaleSets[i].Pending = a.pendingRepos(scheduler.Key{Repo: ss.Repo, Class: ss.Class})
+			}
+			reply, err = a.Worker.SendHeartbeat(ctx, fitHeartbeat(hb, heartbeatLimit))
 			if err == nil {
 				a.heartbeatOK.Store(time.Now().UnixNano())
+				misses = 0
+				if reply.Fleet != nil || fleet {
+					a.post(scheduler.Fleet{Shares: a.fleetShares(reply.Fleet)})
+				}
+				fleet = reply.Fleet != nil
+			} else if misses++; fleet && misses >= fleetMisses {
+				a.post(scheduler.Fleet{})
+				fleet = false
 			}
 			if err == nil && !slices.Equal(reply.Paused, paused) {
 				paused = reply.Paused
@@ -59,10 +83,20 @@ func (a *Agent) heartbeat(ctx context.Context) {
 			a.Log.Info("heartbeat to the Worker works again")
 			failing = false
 		}
+		every := a.HeartbeatEvery
+		if fleet {
+			every = min(every, fleetHeartbeatEvery)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(a.HeartbeatEvery):
+		case <-time.After(every):
+		case <-a.beat:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(beatAtMost):
+			}
 		}
 	}
 }
@@ -119,6 +153,24 @@ func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 		})
 	}
 	return hb
+}
+
+// fleetShares turns the Worker's shares into the scheduler's, and keeps the
+// repositories of an organization scale set's waiting jobs for the runners the
+// box mints for them.
+func (a *Agent) fleetShares(shares *[]worker.FleetShare) map[scheduler.Key]int {
+	if shares == nil {
+		return nil
+	}
+	out := map[scheduler.Key]int{}
+	for _, s := range *shares {
+		key := scheduler.Key{Repo: s.Repo, Class: s.Class}
+		out[key] = s.Jobs
+		if len(s.Repos) > 0 {
+			a.setPending(key, s.Repos)
+		}
+	}
+	return out
 }
 
 func optional(t time.Time) *time.Time {

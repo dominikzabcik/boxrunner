@@ -180,11 +180,18 @@ type Elsewhere struct {
 	Repo  string `json:"repo"`
 	Class string `json:"class"`
 	Box   string `json:"box"`
+	// Fleet is true while the Worker shares the scale set's jobs between the
+	// boxes, and Share is how many of them this box's runners should hold.
+	Fleet bool `json:"fleet,omitempty"`
+	Share int  `json:"share,omitempty"`
 }
 
 // Sentence says which box serves the repository and class, and how to fix it.
 func (e Elsewhere) Sentence() string {
-	return fmt.Sprintf("%s serves %s %s; this box takes its jobs only after %s stops. Give each box its own classes or repos (docs/config.md#several-boxes).", e.Box, e.Repo, e.Class, e.Box)
+	if e.Fleet {
+		return fmt.Sprintf("%s holds the session of %s %s, and the Worker shares its jobs between the boxes that serve %s: %d for this box.", e.Box, e.Repo, e.Class, e.Class, e.Share)
+	}
+	return fmt.Sprintf("%s serves %s %s; this box takes its jobs only after %s stops. A Worker from v0.9.0 shares them between the boxes (docs/config.md#one-class-on-several-boxes).", e.Box, e.Repo, e.Class, e.Box)
 }
 
 type Runner struct {

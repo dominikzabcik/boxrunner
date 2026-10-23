@@ -199,6 +199,14 @@ A private App can be installed only on the account that owns it, and setup used 
 
 It is a variable, not a field on the setup form, so the setup page, the check against `ORG` and the sign-in page read one value, and the person who deploys the Worker decides who owns its key, as with `ORG`. An organization cannot sign in, and the Worker's only sign-in rule is "the App's owner or `ADMINS`", so setup refuses to create an App an organization owns while `ADMINS` is empty: the alternative was a Worker whose dashboard nobody can open. A public App, which any account can install, was ruled out: the Worker serves every private repository the App is installed on unless `REPOS` narrows it, so anyone who installed it would get the box.
 
+## One class on several boxes
+
+GitHub lets one session at a time read a scale set's queue, so two boxes that served one repository and class did not share its jobs: the one that opened the session ran them all. A runner is not tied to the session, though. Its one-job config comes from the scale set, and actions-runner-controller runs its listener and its runners as separate pods, often on separate nodes. So one box holds the session and acquires the jobs, and any box with the box token can mint a runner of the same scale set that takes one.
+
+The Worker splits the jobs, because it already holds every box's latest heartbeat: the jobs the session holder reports, and each box's runners, classes and room. It splits them on every heartbeat, from those heartbeats alone, in a fixed order (rank, then name), so two boxes that ask a second apart get the same split and never both start a runner for one job. A runner that starts anyway takes no job and leaves after its idle timeout, as before. The Durable Object answers one heartbeat at a time, so no split interleaves with another.
+
+Two alternatives were set aside. The Worker could hold the session itself, but a Durable Object would then long-poll GitHub's queue all day, and every box would depend on it for every job, including a lone box. A workflow could pick a box's own class in `runs-on`, but then each workflow carries the routing, and a box that goes down after the pick strands the job.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

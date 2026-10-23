@@ -125,6 +125,11 @@ type Agent struct {
 	work    sync.WaitGroup
 	// resync asks supervise to list the repositories now, not at its next tick.
 	resync chan struct{}
+	// ids holds each scale set's id by scheduler.Key, so a box whose session is
+	// refused can still start runners for its fleet share.
+	ids sync.Map
+	// beat asks the heartbeat to report now: a scale set's jobs changed.
+	beat chan struct{}
 
 	// started, adoptedNone and finished belong to the scheduler goroutine.
 	started     time.Time
@@ -189,6 +194,7 @@ func Run(ctx context.Context, o Options) error {
 		stopped: make(chan struct{}),
 		fatal:   make(chan error, 1),
 		resync:  make(chan struct{}, 1),
+		beat:    make(chan struct{}, 1),
 		egress:  &egressState{enforcer: &egress.Enforcer{Run: o.Run}, ledger: &egress.Ledger{}},
 	}
 	info, err := a.Docker.Info(ctx)
@@ -430,6 +436,12 @@ func (a *Agent) schedule(ctx context.Context, state scheduler.State) error {
 				a.adoptedNone = len(o.Containers) == 0
 			}
 			if u, ok := e.(scheduler.Update); ok {
+				if len(u.Jobs) != len(state.ScaleSets[u.ScaleSet].Jobs) {
+					select {
+					case a.beat <- struct{}{}:
+					default:
+					}
+				}
 				for _, j := range u.Completed {
 					// A redelivered message must not log its job twice; a runner runs one job.
 					if !logged[j.RunnerName] {
@@ -884,7 +896,8 @@ func (a *Agent) publish(s scheduler.State) {
 	}
 	a.refusedMu.Unlock()
 	for key, box := range s.HeldBy {
-		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box})
+		share, fleet := s.Fleet[key]
+		snap.Elsewhere = append(snap.Elsewhere, status.Elsewhere{Repo: key.Repo, Class: key.Class, Box: box, Fleet: fleet, Share: share})
 	}
 	snap.Egress = a.egressView()
 	slices.SortFunc(snap.Elsewhere, func(x, y status.Elsewhere) int {
@@ -1115,7 +1128,7 @@ func (a *Agent) listenerExited(ctx context.Context, running map[scheduler.Key]co
 	delete(running, key)
 	heldBy := worker.HeldBy(err)
 	select {
-	case a.events <- scheduler.ScaleSetGone{ScaleSet: key, HeldBy: heldBy}:
+	case a.events <- scheduler.ScaleSetGone{ScaleSet: key, HeldBy: heldBy, ID: a.scaleSetID(key)}:
 	case <-ctx.Done():
 	}
 	switch {
@@ -1142,6 +1155,7 @@ func (a *Agent) listen(ctx context.Context, key scheduler.Key) error {
 		}
 		return err
 	}
+	a.ids.Store(key, ss.ID)
 	class, _ := a.Config.Class(key.Class)
 	c := listener.Config{
 		ScaleSet: key, ScaleSetID: ss.ID, Owner: a.Config.Box, Capacity: class.Max,
@@ -1155,6 +1169,13 @@ func (a *Agent) listen(ctx context.Context, key scheduler.Key) error {
 		c.Pending = func(repos []string) { a.setPending(key, repos) }
 	}
 	return listener.Run(ctx, c)
+}
+
+// scaleSetID is the id the Worker last gave the scale set; 0 before it did.
+func (a *Agent) scaleSetID(key scheduler.Key) int64 {
+	id, _ := a.ids.Load(key)
+	n, _ := id.(int64)
+	return n
 }
 
 func hasEntries(path string) bool {

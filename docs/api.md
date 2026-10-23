@@ -191,6 +191,12 @@ Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The ag
 { "paused": ["boxrunner-light"] }
 ```
 
+While another box that reported in the last 90 seconds serves one of the box's classes, the answer also carries `fleet`, the box's share of each scale set of such a class ([config](config.md#one-class-on-several-boxes)). `jobs` is how many of the scale set's jobs the box's runners should hold, those they took included; `repos` names the repositories of the waiting jobs of an organization scale set, for `jobRepos` in `POST /v1/runners`. A share of 0 tells the box to start nothing more. While it shares a class, the agent sends a heartbeat every 10 seconds, and the box holding the session also sends one as soon as its queue changes, at most every 2 seconds.
+
+```json
+{ "paused": [], "fleet": [{ "repo": "octo/site", "class": "boxrunner", "jobs": 1, "repos": [] }] }
+```
+
 A Worker from before pausing answers 204 with no body, which the agent reads as nothing paused.
 
 ```json
@@ -232,6 +238,8 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 | `disk.free`, `disk.floor` | Bytes, whole numbers of 0 or more |
 | `classes` | At most 32. `priority` is `normal` or `idle`; `max` is a whole number of 1 or more. Optional `heldUntil`: present while the class's runners fail before taking a job, so the box holds its starts until then and starts one at a time after |
 | `runners` | At most 128. `state` is `requested`, `starting`, `running`, `removing` or `exited`; `since` is when it entered that state. `repo` is an organization's login for a runner of an organization scale set, as it is in `scaleSets` |
+| `rank` | Optional, `0` when missing. The box's `rank`, from 0 to 1000 |
+| `scaleSets[].pending` | Optional, empty when missing. At most 128 repositories (`owner/name`) of an organization scale set's jobs that no runner took |
 | `draining` | Optional, `false` when missing. `true` while `boxrunner drain` keeps the box from serving |
 | `scaleSets` | Optional, empty when missing. At most 128: the scale sets the box listens to, those with jobs assigned first. `assigned` counts the jobs, including the ones runners already took. With `runners`, it tells the Worker which jobs wait with no runner, for [alerts](alerts.md#when-jobs-wait) and the dashboard |
 | `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it |

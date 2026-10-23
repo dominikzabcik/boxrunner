@@ -286,8 +286,11 @@ export type FinishedJob = {
 	finishedAt: number;
 };
 
-/** A scale set the box listens to and its assigned jobs, including those runners already took. */
-export type BoxScaleSet = { repo: RepoName; className: ClassName; assigned: number };
+/**
+ * A scale set the box listens to and its assigned jobs, including those runners already took.
+ * `pending` names the repositories of the jobs no runner took yet, for an organization scale set; other boxes of the fleet mint runners for them.
+ */
+export type BoxScaleSet = { repo: RepoName; className: ClassName; assigned: number; pending: RepoName[] };
 
 export type BoxStatus = {
 	box: BoxName;
@@ -303,6 +306,8 @@ export type BoxStatus = {
 	draining: boolean;
 	/** The scale sets the box listens to; empty from an agent too old to send them. */
 	scaleSets: BoxScaleSet[];
+	/** Where the box stands when several boxes serve a class: lower ranks get jobs first. 0 from an agent too old to send it. */
+	rank: number;
 };
 
 export type Heartbeat = BoxStatus & { jobs: FinishedJob[] };
@@ -310,7 +315,10 @@ export type Heartbeat = BoxStatus & { jobs: FinishedJob[] };
 /** The agent reports every 30 seconds; three missed heartbeats break its run. */
 export const heartbeatGapMs = 90_000;
 
-export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50, scaleSets: 128 } as const;
+export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50, scaleSets: 128, pending: 128 } as const;
+
+/** A rank is a whole number from 0 to 1000. */
+const rank = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1000 ? value : undefined);
 
 const dayMs = 86_400_000;
 /** The UTC day a time falls on, counted from the epoch. */
@@ -383,6 +391,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						since: need(instant(value.since), `${at}.since`),
 					};
 				}),
+				rank: body.rank === undefined ? 0 : need(rank(body.rank), 'rank'),
 				draining: body.draining === undefined ? false : need(typeof body.draining === 'boolean' ? body.draining : undefined, 'draining'),
 				scaleSets: list(body.scaleSets ?? [], 'scaleSets', heartbeatLimits.scaleSets).map((raw, i) => {
 					const at = `scaleSets[${i}]`;
@@ -391,6 +400,7 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						repo: need(parse.scope(value.repo), `${at}.repo`),
 						className: need(parse.className(value.class), `${at}.class`),
 						assigned: need(count(value.assigned), `${at}.assigned`),
+						pending: list(value.pending ?? [], `${at}.pending`, heartbeatLimits.pending).map((repo, j) => need(parse.repo(repo), `${at}.pending[${j}]`)),
 					};
 				}),
 				jobs: list(body.jobs, 'jobs', heartbeatLimits.jobs).map((raw, i) => {

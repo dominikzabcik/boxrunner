@@ -76,6 +76,55 @@ func TestDecide(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "a fleet share starts runners for a scale set another box's session holds",
+			state: func() State {
+				s := state(2, 2, map[Key]ScaleSet{})
+				s.HeldBy[siteMain], s.HeldIDs = "vm", map[Key]int64{siteMain: 7}
+				s.Fleet = map[Key]int{siteMain: 2}
+				return s
+			}(),
+			want: []Action{Start{siteMain}, Start{siteMain}},
+		},
+		{
+			name: "a fleet share counts the box's own runners",
+			state: func() State {
+				s := state(2, 2, map[Key]ScaleSet{}, Runner{Name: "r1", ScaleSet: siteMain, Phase: Starting, Since: at(9)})
+				s.HeldBy[siteMain], s.HeldIDs = "vm", map[Key]int64{siteMain: 7}
+				s.Fleet = map[Key]int{siteMain: 1}
+				return s
+			}(),
+			want: nil,
+		},
+		{
+			name: "the session holder starts only its share; other boxes run the rest",
+			state: func() State {
+				s := state(3, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(1, 2, 3, 4)}})
+				s.Fleet = map[Key]int{siteMain: 1}
+				return s
+			}(),
+			want: []Action{Start{siteMain}},
+		},
+		{
+			name: "a share of 0 starts nothing",
+			state: func() State {
+				s := state(2, 2, map[Key]ScaleSet{})
+				s.HeldBy[siteMain], s.HeldIDs = "vm", map[Key]int64{siteMain: 7}
+				s.Fleet = map[Key]int{siteMain: 0}
+				return s
+			}(),
+			want: nil,
+		},
+		{
+			name: "without a known id a held scale set starts nothing",
+			state: func() State {
+				s := state(2, 2, map[Key]ScaleSet{})
+				s.HeldBy[siteMain] = "vm"
+				s.Fleet = map[Key]int{siteMain: 1}
+				return s
+			}(),
+			want: nil,
+		},
+		{
 			name:  "no jobs, no runners",
 			state: state(1, 2, map[Key]ScaleSet{siteMain: {ID: 7}}),
 			want:  nil,
@@ -716,5 +765,23 @@ func TestWarmOrganizationScaleSet(t *testing.T) {
 	}
 	if got := Decide(warm(s, "octopus/site"), at(0)); got != nil {
 		t.Errorf("Decide with a repository of an owner that starts like the organization warm = %#v", got)
+	}
+}
+
+func TestFleetRunnerGetsTheHeldScaleSetsID(t *testing.T) {
+	s := state(1, 1, map[Key]ScaleSet{})
+	s = Apply(s, ScaleSetGone{ScaleSet: siteMain, HeldBy: "vm", ID: 7}, at(0))
+	s = Apply(s, Fleet{Shares: map[Key]int{siteMain: 1}}, at(0))
+	want := []Action{Start{siteMain}}
+	if got := Decide(s, at(0)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Decide = %v, want %v", got, want)
+	}
+	s = Apply(s, StartDispatched{Runner: "mac-boxrunner-1", ScaleSet: siteMain}, at(0))
+	if got := s.Runners["mac-boxrunner-1"].ScaleSetID; got != 7 {
+		t.Fatalf("ScaleSetID = %d, want 7", got)
+	}
+	s = Apply(s, Fleet{}, at(1))
+	if got := Decide(s, at(1)); got != nil {
+		t.Fatalf("after the fleet ends Decide = %v, want nil", got)
 	}
 }

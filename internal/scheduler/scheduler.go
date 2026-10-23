@@ -148,8 +148,14 @@ type State struct {
 	Classes   map[string]Class
 	ScaleSets map[Key]ScaleSet
 	// HeldBy names the other box whose session holds each scale set this box
-	// could not open.
-	HeldBy    map[Key]string
+	// could not open, and HeldIDs its id.
+	HeldBy  map[Key]string
+	HeldIDs map[Key]int64
+	// Fleet is this box's share of each scale set that several boxes serve: how
+	// many of its jobs the box's runners should hold. The Worker splits them,
+	// so a box that does not hold a scale set's session still starts runners
+	// for it. Nil while no class of the box has another box serving it.
+	Fleet     map[Key]int
 	Runners   map[string]Runner
 	DiskFloor int64
 	DiskFree  int64
@@ -168,6 +174,7 @@ func New(cfg config.Config) State {
 		Classes:   map[string]Class{},
 		ScaleSets: map[Key]ScaleSet{},
 		HeldBy:    map[Key]string{},
+		HeldIDs:   map[Key]int64{},
 		Runners:   map[string]Runner{},
 		DiskFloor: int64(cfg.DiskFloor),
 		Backoff:   map[string]Backoff{},
@@ -254,6 +261,26 @@ func Decide(s State, now time.Time) []Action {
 	return actions
 }
 
+// served returns the scale sets the box starts runners for. With a fleet share,
+// the box's runners hold that many of a scale set's jobs: the oldest ones of a
+// scale set whose session it holds, and of one another box holds, as many as
+// the share says, all queued alike.
+func served(s State) map[Key]ScaleSet {
+	if s.Fleet == nil {
+		return s.ScaleSets
+	}
+	out := maps.Clone(s.ScaleSets)
+	for key, n := range s.Fleet {
+		if ss, ok := out[key]; ok {
+			ss.Jobs = ss.Jobs[:min(n, len(ss.Jobs))]
+			out[key] = ss
+		} else if id := s.HeldIDs[key]; id != 0 {
+			out[key] = ScaleSet{ID: id, Jobs: make([]time.Time, n)}
+		}
+	}
+	return out
+}
+
 type waiting struct {
 	queued time.Time
 	key    Key
@@ -292,7 +319,7 @@ func starts(s State, now time.Time) []Action {
 		}
 		// Runners take a scale set's oldest jobs first, so its newest ones wait.
 		var queue []waiting
-		for key, ss := range s.ScaleSets {
+		for key, ss := range served(s) {
 			if key.Class != class {
 				continue
 			}
@@ -377,11 +404,16 @@ type Update struct {
 }
 
 // ScaleSetGone means the agent stopped listening to a scale set, with HeldBy
-// set when another box's session holds it.
+// set when another box's session holds it and ID the scale set's id.
 type ScaleSetGone struct {
 	ScaleSet Key
 	HeldBy   string
+	ID       int64
 }
+
+// Fleet is the box's share of the scale sets that several boxes serve, from
+// the Worker's answer to a heartbeat; nil Shares when there is none.
+type Fleet struct{ Shares map[Key]int }
 
 // Container is one labelled container as Docker lists it.
 type Container struct {
@@ -456,6 +488,7 @@ func (ImageBuilt) event()       {}
 func (BuildFailed) event()      {}
 func (LatestRunner) event()     {}
 func (Drain) event()            {}
+func (Fleet) event()            {}
 
 // Apply returns the state after an event. It never changes s.
 func Apply(s State, e Event, now time.Time) State {
@@ -463,6 +496,10 @@ func Apply(s State, e Event, now time.Time) State {
 	s.Runners = maps.Clone(s.Runners)
 	s.ScaleSets = maps.Clone(s.ScaleSets)
 	s.HeldBy = maps.Clone(s.HeldBy)
+	s.HeldIDs = maps.Clone(s.HeldIDs)
+	if s.HeldIDs == nil {
+		s.HeldIDs = map[Key]int64{}
+	}
 	s.Backoff = maps.Clone(s.Backoff)
 	if s.Backoff == nil {
 		s.Backoff = map[string]Backoff{}
@@ -507,12 +544,19 @@ func Apply(s State, e Event, now time.Time) State {
 		}
 		s.ScaleSets[e.ScaleSet] = ScaleSet{ID: e.ID, Jobs: e.Jobs}
 		delete(s.HeldBy, e.ScaleSet)
+		delete(s.HeldIDs, e.ScaleSet)
 	case ScaleSetGone:
 		delete(s.ScaleSets, e.ScaleSet)
 		delete(s.HeldBy, e.ScaleSet)
+		delete(s.HeldIDs, e.ScaleSet)
 		if e.HeldBy != "" {
 			s.HeldBy[e.ScaleSet] = e.HeldBy
+			if e.ID != 0 {
+				s.HeldIDs[e.ScaleSet] = e.ID
+			}
 		}
+	case Fleet:
+		s.Fleet = maps.Clone(e.Shares)
 	case Observed:
 		s.Observed = true
 		s.DiskFree = e.DiskFree
@@ -525,7 +569,7 @@ func Apply(s State, e Event, now time.Time) State {
 		}
 	case StartDispatched:
 		s.Runners[e.Runner] = Runner{
-			Name: e.Runner, ScaleSet: e.ScaleSet, ScaleSetID: s.ScaleSets[e.ScaleSet].ID,
+			Name: e.Runner, ScaleSet: e.ScaleSet, ScaleSetID: served(s)[e.ScaleSet].ID,
 			Phase: Requested, Since: now,
 		}
 	case RemoveDispatched:

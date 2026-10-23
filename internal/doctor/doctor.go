@@ -210,11 +210,12 @@ func Draining(s status.Snapshot) []Result {
 }
 
 // Elsewhere fails once for every repository and class the running agent
-// cannot serve because another box's session holds the scale set.
+// cannot serve because another box's session holds the scale set, unless the
+// Worker shares the scale set's jobs between the boxes.
 func Elsewhere(s status.Snapshot) []Result {
 	var results []Result
 	for _, e := range s.Elsewhere {
-		results = append(results, Result{"other box", false, e.Sentence()})
+		results = append(results, Result{"other box", e.Fleet, e.Sentence()})
 	}
 	return results
 }

@@ -297,6 +297,9 @@ type fakeGitHub struct {
 	paused []string
 	// heldBy, when set, is the other box whose session holds the scale set.
 	heldBy string
+	// fleet, when set, is the JSON the heartbeat's answer carries as the box's
+	// fleet shares.
+	fleet string
 	// runner is the runner's latest release, 2.338.0 when empty. list is
 	// runner-digests.json, which names digest338 for 2.338.0 when empty, and
 	// tags maps each tag to the digest the registry names, 2.338.0's to
@@ -424,7 +427,11 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			http.Redirect(w, r, "/dominikzabcik/boxrunner/releases/tag/v0.2.2", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
 			g.mu.Lock()
-			json.NewEncoder(w).Encode(map[string]any{"paused": append([]string{}, g.paused...)})
+			reply := map[string]any{"paused": append([]string{}, g.paused...)}
+			if g.fleet != "" {
+				reply["fleet"] = json.RawMessage(g.fleet)
+			}
+			json.NewEncoder(w).Encode(reply)
 			g.mu.Unlock()
 		default:
 			t.Errorf("fake github: unexpected %s %s", r.Method, r.URL)
@@ -1006,6 +1013,36 @@ func TestScaleSetHeldByAnotherBox(t *testing.T) {
 	}
 	if opened != 1 {
 		t.Errorf("%d session requests; want 1 until the next repository check", opened)
+	}
+}
+
+// A box whose session another box holds starts runners for the share the
+// Worker gives it, and none once the share is gone.
+func TestFleetShare(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.github.heldBy = "box-2"
+		h.github.fleet = `[{"repo":"octo/site","class":"boxrunner","jobs":1,"repos":[]}]`
+	})
+	defer h.stop(t)
+	minted := func() int {
+		n := 0
+		for _, c := range h.github.workerCalls() {
+			if strings.HasPrefix(c, "POST /v1/runners ") {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor(t, "a runner minted for the fleet share", func() bool { return minted() == 1 })
+	waitFor(t, "its container running", func() bool {
+		for _, c := range h.docker.snapshot() {
+			return c.State == "running"
+		}
+		return false
+	})
+	time.Sleep(300 * time.Millisecond)
+	if n := minted(); n != 1 {
+		t.Errorf("%d runners minted for a share of 1", n)
 	}
 }
 

@@ -14,7 +14,6 @@ boxrunner runs GitHub Actions jobs in fresh containers on a Linux box you alread
 
 - **Public repositories.** Anyone who can open a pull request can run code on a self-hosted runner, so the Worker refuses public repositories. There is no switch.
 - **Virtual-machine isolation.** Jobs share the host kernel. Firecracker and Kata need `/dev/kvm`, which common VPS plans do not offer.
-- **One label spread over several boxes.** Several boxes can share a Worker when each serves its own classes or repositories ([config](config.md#several-boxes)). Two boxes that serve the same repository and class do not share its jobs, because one session at a time holds a scale set.
 - **A hosted service.** Everyone runs their own Worker and their own box.
 
 ## Parts and what each one holds
