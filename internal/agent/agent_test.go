@@ -455,6 +455,8 @@ type harness struct {
 	done   chan error
 	// cgroup holds the idle slice's cpu.idle, 0 at first.
 	cgroup string
+	// sysbox stands in for /var/lib/sysbox.
+	sysbox string
 	// run answers the commands the agent runs, except systemctl; a fakeHost
 	// of its own when nil.
 	run func(stdin, name string, args ...string) (string, error)
@@ -489,6 +491,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		socket: filepath.Join(t.TempDir(), "s.sock"),
 		done:   make(chan error, 1),
 		cgroup: t.TempDir(),
+		sysbox: t.TempDir(),
 		logs:   &logBuffer{},
 	}
 	os.Mkdir(filepath.Join(h.cgroup, "boxrunner_idle.slice"), 0o755)
@@ -543,7 +546,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 			Tick:                 50 * time.Millisecond,
 			HeartbeatEvery:       50 * time.Millisecond,
 			ReposEvery:           h.reposEvery,
-			SysboxDir:            t.TempDir(),
+			SysboxDir:            h.sysbox,
 			CgroupDir:            h.cgroup,
 			CacheDir:             t.TempDir(),
 			CacheAddr:            h.cacheAddr,
@@ -1224,6 +1227,26 @@ func TestWithInnerDockerCountsSysboxData(t *testing.T) {
 	withInnerDocker(list, sysbox)
 	if got := []int64{list[0].SizeRw, list[1].SizeRw, list[2].SizeRw}; !reflect.DeepEqual(got, []int64{4096, 5, 1}) {
 		t.Errorf("sizes = %v", got)
+	}
+}
+
+func TestSysboxSweep(t *testing.T) {
+	live, gone := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	h := startAgent(t, map[string]*container{live: {Name: live, State: "running"}}, nil, func(c *config.Class, h *harness) {
+		c.Docker, c.Isolation = true, config.Sysbox
+		h.docker.runtimes = []string{"sysbox-runc"}
+		for _, dir := range []string{"docker/" + live, "docker/" + gone, "buildkit/" + gone, "docker/not-an-id"} {
+			os.MkdirAll(filepath.Join(h.sysbox, dir, "overlay2"), 0o755)
+		}
+	})
+	waitFor(t, "the removed container's directories gone", func() bool {
+		left, _ := filepath.Glob(filepath.Join(h.sysbox, "*", "*"))
+		return len(left) == 2
+	})
+	h.stop(t)
+	left, _ := filepath.Glob(filepath.Join(h.sysbox, "*", "*"))
+	if want := []string{filepath.Join(h.sysbox, "docker", live), filepath.Join(h.sysbox, "docker", "not-an-id")}; !reflect.DeepEqual(left, want) {
+		t.Errorf("left %q; want %q", left, want)
 	}
 }
 

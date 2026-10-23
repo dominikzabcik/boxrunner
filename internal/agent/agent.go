@@ -724,6 +724,9 @@ func (a *Agent) observe(ctx context.Context) {
 		paths = append(paths, a.SysboxDir)
 	}
 	for {
+		if a.sysbox {
+			a.sweepSysbox(ctx)
+		}
 		free, path, err := disk.Lowest(paths...)
 		if err != nil {
 			a.Log.Error("reading free disk", "path", path, "err", err)

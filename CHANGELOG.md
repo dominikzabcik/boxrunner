@@ -5,6 +5,9 @@
 **Security**
 - Built with Go 1.26.10, which fixes GO-2026-6809 in `crypto/x509`: the status server's TLS path reached the vulnerable certificate verification.
 
+**Fixes**
+- A box with Docker classes no longer runs out of disk with no job running. Sysbox keeps each job's own `/var/lib/docker` in `/var/lib/sysbox/docker/<container id>` and deletes it with the container, but it missed 13 of 198 containers in two days on one box, about 2.4 GB each, until free space fell below the disk floor and the box started no runner. The agent now deletes what Sysbox kept for any container Docker no longer has. Upgrade the agent; the first sweep frees what earlier jobs left.
+
 ## v0.8.4
 
 **Fixes**
