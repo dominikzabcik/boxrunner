@@ -94,7 +94,7 @@ export type StoredBox = { status: BoxStatus; seenAt: number };
 /** A status stored from an agent or Worker before draining, held classes and scale sets were reported lacks them. */
 function statusFrom(json: string): BoxStatus {
 	const status = JSON.parse(json) as BoxStatus;
-	return { ...status, draining: status.draining ?? false, scaleSets: status.scaleSets ?? [], classes: status.classes.map((c) => ({ ...c, heldUntil: c.heldUntil ?? null })) };
+	return { ...status, rank: status.rank ?? 0, draining: status.draining ?? false, scaleSets: (status.scaleSets ?? []).map((ss) => ({ ...ss, pending: ss.pending ?? [] })), classes: status.classes.map((c) => ({ ...c, heldUntil: c.heldUntil ?? null })) };
 }
 export type StoredJob = FinishedJob & { minutes: number };
 export type DayTotal = { day: number; jobs: number; minutes: number };

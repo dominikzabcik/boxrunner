@@ -147,7 +147,10 @@ type Config struct {
 	Worker    *url.URL
 	Box       string
 	DiskFloor Bytes
-	Classes   []Class
+	// Rank orders the boxes that serve one class: the Worker gives waiting
+	// jobs to lower ranks first. 0 to 1000.
+	Rank    int
+	Classes []Class
 	// Metrics is where the agent serves Prometheus metrics; the zero value
 	// serves none.
 	Metrics netip.AddrPort
@@ -165,6 +168,7 @@ func (c Config) Class(name string) (Class, bool) {
 
 const (
 	DefaultDiskFloor = 10 * GB
+	maxRank          = 1000
 	DefaultPids      = 4096
 	DefaultShm       = 1 * GiB
 	// A runner's name is "<box>-<class>-<6 hex>" and GitHub allows 64 characters.
@@ -180,6 +184,7 @@ type rawConfig struct {
 	Worker        string     `toml:"worker"`
 	Box           string     `toml:"box"`
 	DiskFloor     string     `toml:"disk_floor"`
+	Rank          int        `toml:"rank"`
 	Metrics       string     `toml:"metrics"`
 	MetricsPublic bool       `toml:"metrics_public"`
 	Cache         string     `toml:"cache"`
@@ -237,6 +242,11 @@ func Parse(data []byte, hostname string) (Config, error) {
 		if cfg.DiskFloor, err = ParseBytes(raw.DiskFloor); err != nil {
 			errs = append(errs, fmt.Errorf("disk_floor: %w", err))
 		}
+	}
+
+	cfg.Rank = raw.Rank
+	if raw.Rank < 0 || raw.Rank > maxRank {
+		errs = append(errs, fmt.Errorf("rank: %d is not between 0 and %d", raw.Rank, maxRank))
 	}
 
 	if cfg.Metrics, err = parseMetrics(raw.Metrics, raw.MetricsPublic); err != nil {

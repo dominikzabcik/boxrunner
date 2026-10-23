@@ -152,7 +152,7 @@ func TestPrint(t *testing.T) {
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
 		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
 		ScaleSets: []ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
-		Elsewhere: []Elsewhere{{"octo/docs", "boxrunner", "box-2"}},
+		Elsewhere: []Elsewhere{{Repo: "octo/docs", Class: "boxrunner", Box: "box-2"}},
 		Runners: []Runner{
 			{Name: "box-1-boxrunner-3f9a2c", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0},
 			{Name: "box-1-boxrunner-8e41b7", Repo: "octo/site", Class: "boxrunner", Phase: "starting", Since: t0.Add(time.Minute), Warm: true},
@@ -174,7 +174,7 @@ boxrunner-light  idle      0        2
 REPOSITORY  CLASS      ASSIGNED JOBS
 octo/site   boxrunner  1
 
-box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. Give each box its own classes or repos (docs/config.md#several-boxes).
+box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. A Worker from v0.9.0 shares them between the boxes (docs/config.md#one-class-on-several-boxes).
 
 RUNNER                  REPOSITORY  CLASS      STATE            FOR
 box-1-boxrunner-3f9a2c  octo/site   boxrunner  running          4m10s

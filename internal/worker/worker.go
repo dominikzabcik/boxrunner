@@ -246,6 +246,8 @@ type Heartbeat struct {
 	// runner, for its alerts. A Worker from before them ignores them.
 	Draining  bool                `json:"draining,omitempty"`
 	ScaleSets []HeartbeatScaleSet `json:"scaleSets,omitempty"`
+	// Rank orders the boxes that serve one class for the Worker's fleet shares.
+	Rank int `json:"rank,omitempty"`
 }
 
 type HeartbeatDisk struct {
@@ -268,6 +270,9 @@ type HeartbeatScaleSet struct {
 	Repo     string `json:"repo"`
 	Class    string `json:"class"`
 	Assigned int    `json:"assigned"`
+	// Pending names the repositories of an organization scale set's jobs that
+	// no runner took, which other boxes name when they mint runners for them.
+	Pending []string `json:"pending,omitempty"`
 }
 
 type HeartbeatRunner struct {
@@ -293,6 +298,19 @@ type HeartbeatJob struct {
 // pausing answers 204, which leaves it empty.
 type HeartbeatReply struct {
 	Paused []string `json:"paused"`
+	// Fleet is the box's share of each scale set of a class that another box
+	// serves too; nil while no class of the box has one, and from a Worker
+	// from before fleets.
+	Fleet *[]FleetShare `json:"fleet"`
+}
+
+// FleetShare is how many of a scale set's jobs the box's runners should
+// hold, and for an organization scale set the repositories of the waiting ones.
+type FleetShare struct {
+	Repo  string   `json:"repo"`
+	Class string   `json:"class"`
+	Jobs  int      `json:"jobs"`
+	Repos []string `json:"repos"`
 }
 
 // SendHeartbeat makes one attempt: the next heartbeat follows anyway.

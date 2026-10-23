@@ -175,7 +175,7 @@ func TestElsewhere(t *testing.T) {
 		ScaleSets: []status.ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
 		Elsewhere: []status.Elsewhere{{Repo: "octo/docs", Class: "boxrunner", Box: "box-2"}},
 	}
-	want := []Result{{"other box", false, "box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. Give each box its own classes or repos (docs/config.md#several-boxes)."}}
+	want := []Result{{"other box", false, "box-2 serves octo/docs boxrunner; this box takes its jobs only after box-2 stops. A Worker from v0.9.0 shares them between the boxes (docs/config.md#one-class-on-several-boxes)."}}
 	if got := Elsewhere(snap); !reflect.DeepEqual(got, want) {
 		t.Errorf("Elsewhere =\n%+v\nwant\n%+v", got, want)
 	}

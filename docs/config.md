@@ -33,6 +33,7 @@ max = 2
 | `worker` | required | Your Worker's URL. Must be HTTPS. |
 | `box` | the hostname's first label | Lower-case letters, digits and dashes. It names the box's runners and sessions at GitHub. |
 | `disk_floor` | `10GB` | No runner starts while Docker's data directory, or Sysbox's `/var/lib/sysbox` when it sits on another filesystem, has less free space than this. Below half of it, the agent stops the job container that wrote the most, counting the images and containers of a job's own Docker. |
+| `rank` | `0` | Where the box stands when [several boxes serve one class](#one-class-on-several-boxes): the Worker gives waiting jobs to lower ranks first. A whole number from 0 to 1000. |
 | `metrics` | none | An IP address and port, such as `127.0.0.1:9464`, where the agent serves [Prometheus metrics](#metrics). |
 | `metrics_public` | `false` | Allows `metrics` to be an address other machines can reach. |
 | `cache` | none | The most the box's [Actions cache](#actions-cache) keeps, such as `20GB`. At least 1 GiB. Set it together with `cache = true` in a class. |
@@ -106,9 +107,35 @@ repos = ["octo/docs"]
 
 A class only one box serves, such as `boxrunner-large` on a bigger machine, works the same way; add it to the Worker's `CLASSES`.
 
-The Worker makes one scale set per repository and class, and GitHub lets one session at a time read a scale set's queue. Two boxes that serve the same repository and class are not supported, not even with one of them kept as a standby, so `sudo boxrunner doctor` fails on the box that waits. If it happens anyway, the box that opens the session first runs all of the jobs. The other box tries again every five minutes and takes over only after the first one stops, and `sudo boxrunner status` on it names the box that serves the repository and class. Such a takeover is no failover: when a box dies, the jobs it had acquired stay queued, as in [replacing a box](architecture.md#replacing-a-box).
+### One class on several boxes
 
-One label spread over several boxes, so that both run jobs from the same `runs-on`, is not supported yet. GitHub can give two scale sets the same label, but which one gets a job, and whether a job waits for a box that is down, is untested.
+Two or more boxes can also serve the same class, so that the jobs of one `runs-on` spread over all of them. Give each box the class with its own `cpus`, `memory` and `max`, and a `rank`:
+
+```toml
+# /etc/boxrunner/config.toml on a server that is always on
+box = "vm"
+rank = 0
+
+[[class]]
+name = "boxrunner"
+max = 1
+```
+
+```toml
+# /etc/boxrunner/config.toml on a laptop that helps when the server is busy
+box = "laptop"
+rank = 10
+
+[[class]]
+name = "boxrunner"
+max = 2
+```
+
+GitHub lets one session at a time read a scale set's queue, so one box holds the session, acquires the jobs and reports how many it holds. The Worker splits them: each box's runners keep the jobs they took, and the waiting ones go to the boxes in rank order, then by name, each up to the room `max` leaves it. A box that drains, holds the class's starts, lacks disk or has not reported for 90 seconds gets none. Every box hears its share in the answer to its heartbeat, which comes every 10 seconds while it shares a class, and mints its runners as usual. The box holding the session sends a heartbeat as soon as its queue changes, so a waiting job reaches a free box within about 10 seconds. `sudo boxrunner status` on the other boxes names the box that holds the session and the share, and `doctor` passes.
+
+A box that stops reporting gets no new jobs. A job its runner had taken fails with the box, as on GitHub's own runners when the machine goes away. When the box holding the session stops, another box opens the session within five minutes; until then, its jobs wait. A box that has not heard the Worker twice in a row forgets its share and decides alone again, so a box holding the session keeps running jobs while the Worker is down.
+
+A runner on a box without the session never hears from the queue that its job started or how it ended. It counts as starting until GitHub refuses to remove it because it took a job, and the box's job log and the dashboard leave its job out.
 
 The boxes share the box token's request budget of about 1,800 requests an hour ([api.md](api.md#conventions)). A box's heartbeat alone takes 120 of them.
 
@@ -169,7 +196,7 @@ The agent lists an organization's repositories every minute, not every five minu
 
 `REPOS` is checked again by the Worker before each runner: the agent names the repositories of the jobs the scale set holds, and the Worker refuses the runner while one of them is not a repository it serves, as its listing says, at most a minute old. A runner takes whichever job its scale set holds, so such a job, acquired in the minute before a repository left `REPOS`, stops every new runner of the class until someone cancels it on GitHub. The agent logs that and holds the class's starts, backing off up to 30 minutes, rather than asking every few seconds.
 
-- **`repos`** narrows what a class acquires, as above. It cannot split one class over [several boxes](#several-boxes): a class has one scale set for the whole organization, and one session at a time reads it, so give each box its own classes instead.
+- **`repos`** narrows what a class acquires, as above. It cannot split one class's repositories over [several boxes](#several-boxes): a class has one scale set for the whole organization. Several boxes can still [share the class](#one-class-on-several-boxes), each running any of its jobs.
 - **`warm`** keeps one idle runner for the class's organization scale set when it names any repository of the organization, since that runner takes jobs of every repository.
 - **Fork pull requests.** Reading their settings takes the permission **Administration**, on the organization (`GET /orgs/{org}/actions/permissions/fork-pr-workflows-private-repos`) or on each repository, and the App has neither. So the dashboard does not warn about them, and `doctor` says it cannot check them and links the organization's setting, **Fork pull request workflows in private repositories**, under **Settings**, **Actions**, **General**. Check it there and in each served repository.
 - **Finished jobs** are recorded under their own repository; runners and assigned jobs under the organization, as `octo (organization)` in `status` and `organization="octo"`, `repository=""` in the metrics, as actions-runner-controller labels an organization scale set.
