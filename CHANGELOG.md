@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Security**
+- Built with Go 1.26.10, which fixes GO-2026-6809 in `crypto/x509`: the status server's TLS path reached the vulnerable certificate verification.
+
 ## v0.8.4
 
 **Fixes**
