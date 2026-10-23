@@ -223,7 +223,8 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
       "result": "succeeded",
       "queued": "2026-10-14T08:59:40Z",
       "started": "2026-10-14T09:00:05Z",
-      "finished": "2026-10-14T09:03:10Z"
+      "finished": "2026-10-14T09:03:10Z",
+      "usage": { "cpuSeconds": 412.6, "memoryPeak": 3221225472 }
     }
   ]
 }
@@ -242,7 +243,7 @@ A Worker from before pausing answers 204 with no body, which the agent reads as 
 | `scaleSets[].pending` | Optional, empty when missing. At most 128 repositories (`owner/name`) of an organization scale set's jobs that no runner took |
 | `draining` | Optional, `false` when missing. `true` while `boxrunner drain` keeps the box from serving |
 | `scaleSets` | Optional, empty when missing. At most 128: the scale sets the box listens to, those with jobs assigned first. `assigned` counts the jobs, including the ones runners already took. With `runners`, it tells the Worker which jobs wait with no runner, for [alerts](alerts.md#when-jobs-wait) and the dashboard |
-| `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it |
+| `jobs` | The most recently finished jobs, at most 50. `name` is 1 to 200 characters; `result` is GitHub's, in lower case (`succeeded`, `failed`, …); `started` is `null` for a job canceled before it started; `queued` is `null` when the agent did not record it; `usage`, when the agent measured it, is what the job's container used, read from its cgroup while it ran: `cpuSeconds` across all cores and `memoryPeak`, the most bytes it held at once, its own Docker included. The dashboard shows it with the box that ran the job |
 
 Times are RFC 3339. Repositories and classes are stored as the box sends them: the box is trusted with its own state, so the Worker does not check them against `GET /v1/repos` or `CLASSES`. Fields the Worker does not know are ignored, so a newer agent can add some. A malformed field gets `400 bad_request` naming it, as in `"runners[0].state" is missing or malformed.`
 

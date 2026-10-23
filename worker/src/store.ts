@@ -352,7 +352,7 @@ export class Store {
 		return this.sql
 			.exec<{ job: string; minutes: number }>('SELECT job, minutes FROM jobs ORDER BY finished_at DESC, runner LIMIT ?', limit)
 			.toArray()
-			.map((row) => ({ ...(JSON.parse(row.job) as FinishedJob), minutes: row.minutes }));
+			.map((row) => ({ box: null, usage: null, ...(JSON.parse(row.job) as Partial<FinishedJob>), minutes: row.minutes }) as StoredJob);
 	}
 
 	/** When GitHub's last signed webhook delivery arrived, kept beside the cache so a reset forgets it. */

@@ -47,6 +47,11 @@ export type Dashboard = {
 		waitSeconds: number | null;
 		durationSeconds: number;
 		minutes: number;
+		/** The box that ran it; null for a job stored before the Worker kept it. */
+		box: string | null;
+		/** CPU time across all cores and the most memory the job held, in bytes; null when its box did not measure them. */
+		cpuSeconds: number | null;
+		memoryPeak: number | null;
 	}[];
 	/** Queued jobs no box here will run, oldest first, from the App's `workflow_job` event; see docs/unserved-jobs.md. */
 	unserved: {
@@ -185,6 +190,9 @@ export function dashboardData(box: Box, now: number): Dashboard {
 			waitSeconds: job.startedAt === null || job.queuedAt === null ? null : secondsBetween(job.queuedAt, job.startedAt),
 			durationSeconds: job.startedAt === null ? 0 : secondsBetween(job.startedAt, job.finishedAt),
 			minutes: job.minutes,
+			box: job.box,
+			cpuSeconds: job.usage?.cpuSeconds ?? null,
+			memoryPeak: job.usage?.memoryPeak ?? null,
 		})),
 		unserved: store.queuedJobs(now).flatMap((job) => {
 			const reason = unservedReason(job, servedNow, now - job.queuedAt);
@@ -323,18 +331,24 @@ ${table(
 		{ title: 'Repository' },
 		{ title: 'Class' },
 		{ title: 'Job' },
+		{ title: 'Box' },
 		{ title: 'Result' },
 		{ title: 'Waited', number: true },
 		{ title: 'Took', number: true },
+		{ title: 'CPU', number: true },
+		{ title: 'Peak memory', number: true },
 		{ title: 'Finished' },
 	],
 	jobs.map((job) => [
 		escape(job.repo),
 		escape(job.class),
 		escape(job.name),
+		job.box === null ? 'Unknown' : escape(job.box),
 		job.result === 'failed' ? `<span class="alert">${escape(job.result)}</span>` : escape(job.result),
 		job.started === null ? 'Never started' : job.waitSeconds === null ? 'Unknown' : duration(job.waitSeconds),
 		duration(job.durationSeconds),
+		job.cpuSeconds === null ? 'Unknown' : duration(Math.round(job.cpuSeconds)),
+		job.memoryPeak === null ? 'Unknown' : gigabytes(job.memoryPeak),
 		time(job.finished, ago(job.secondsSinceFinished)),
 	]),
 	'No finished jobs in the last 30 days.',

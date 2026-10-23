@@ -12,7 +12,7 @@ async function ready() {
 	const github = await fakeGitHub();
 	const call = agent(await setUp(github));
 	const { cookie } = await signIn(github);
-	const finished = job('box-1-boxrunner-aaaaaa', '2026-10-14T09:50:00Z', '2026-10-14T09:50:20Z', '2026-10-14T09:53:05Z');
+	const finished = { ...job('box-1-boxrunner-aaaaaa', '2026-10-14T09:50:00Z', '2026-10-14T09:50:20Z', '2026-10-14T09:53:05Z'), usage: { cpuSeconds: 754.25, memoryPeak: 9812000768 } };
 	expect((await call('POST', '/v1/heartbeat', heartbeatBody({ jobs: [finished] }))).status).toBe(200);
 	time('2026-10-14T10:00:00Z');
 	const view = (path = '/') => send(path, { headers: { cookie: cookie! } });
@@ -38,7 +38,7 @@ describe('GET / signed in', () => {
 			'<tr><td>boxrunner</td><td>normal</td><td class="number">1</td><td class="number">0</td><td class="number">1</td></tr>',
 			'<tr><td>boxrunner-light</td><td>idle</td><td class="number">0</td><td class="number">1</td><td class="number">2</td></tr>',
 			'<tr><td>box-1-boxrunner-3f9a2c</td><td>octo/site</td><td>boxrunner</td><td>running</td><td class="number">4 min 30 s</td></tr>',
-			'<tr><td>octo/site</td><td>boxrunner</td><td>test</td><td>succeeded</td><td class="number">20 s</td><td class="number">2 min 45 s</td><td><time datetime="2026-10-14T09:53:05.000Z">6 minutes ago</time></td></tr>',
+			'<tr><td>octo/site</td><td>boxrunner</td><td>test</td><td>box-1</td><td>succeeded</td><td class="number">20 s</td><td class="number">2 min 45 s</td><td class="number">12 min 34 s</td><td class="number">9.8 GB</td><td><time datetime="2026-10-14T09:53:05.000Z">6 minutes ago</time></td></tr>',
 			'<tr><th scope="row">Today (UTC)</th><td class="number">1</td><td class="number">3</td><td class="number">$0.02</td></tr>',
 			'<p>The box has not asked for its repositories yet.</p>',
 			'<tr><td>boxrunner</td><td>Serving</td><td><form method="post" action="/classes/pause">',
@@ -187,6 +187,9 @@ describe('GET /dashboard.json', () => {
 					waitSeconds: 20,
 					durationSeconds: 165,
 					minutes: 3,
+					box: 'box-1',
+					cpuSeconds: 754.25,
+					memoryPeak: 9812000768,
 				},
 			],
 			unserved: [],
