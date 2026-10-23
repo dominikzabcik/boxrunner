@@ -785,3 +785,30 @@ func TestFleetRunnerGetsTheHeldScaleSetsID(t *testing.T) {
 		t.Fatalf("after the fleet ends Decide = %v, want nil", got)
 	}
 }
+
+func TestLimits(t *testing.T) {
+	s := state(3, 2, map[Key]ScaleSet{siteMain: {ID: 7, Jobs: jobs(1, 2, 3, 4)}},
+		Runner{Name: "r1", ScaleSet: siteMain, Phase: Running, TookJob: true, Since: at(1)},
+		Runner{Name: "r2", ScaleSet: siteMain, Phase: Starting, Since: at(8)},
+		Runner{Name: "r3", ScaleSet: siteMain, Phase: Starting, Since: at(9)},
+	)
+	s = Apply(s, Limits{Max: map[string]int{"boxrunner": 2}}, at(10))
+	want := []Action{Remove{Runner: "r3", Deregister: true, Reason: "over the limit set on the dashboard"}}
+	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide over the limit = %#v, want %#v", got, want)
+	}
+	s = Apply(s, Removed{Runner: "r3"}, at(10))
+	if got := Decide(s, at(10)); got != nil {
+		t.Errorf("Decide at the limit = %#v, want nil", got)
+	}
+	s = Apply(s, Limits{Max: map[string]int{"boxrunner": 0}}, at(10))
+	want = []Action{Remove{Runner: "r2", Deregister: true, Reason: "over the limit set on the dashboard"}}
+	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide with limit 0 = %#v, want %#v", got, want)
+	}
+	s = Apply(s, Limits{Max: map[string]int{"boxrunner": 9}}, at(10))
+	want = []Action{Start{ScaleSet: siteMain}}
+	if got := Decide(s, at(10)); !reflect.DeepEqual(got, want) {
+		t.Errorf("Decide with a limit above max = %#v, want %#v", got, want)
+	}
+}

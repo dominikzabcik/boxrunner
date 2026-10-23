@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -118,6 +119,9 @@ type Class struct {
 	// HeldUntil is set while the class's runners fail before taking a job:
 	// it starts no runner before then, and one at a time after.
 	HeldUntil time.Time `json:"heldUntil,omitzero"`
+	// Limit is the limit set for the class on this box on the Worker's
+	// dashboard, when there is one; the box runs at most the lower of the two.
+	Limit *int `json:"limit,omitempty"`
 }
 
 // NextTry says when a class that holds its starts tries again, or "" when
@@ -525,7 +529,11 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
 	for _, c := range s.Classes {
-		fmt.Fprintf(t, "%s\t%s\t%d\t%d\n", c.Name, c.Priority, c.Active, c.Max)
+		most := strconv.Itoa(c.Max)
+		if c.Limit != nil {
+			most += fmt.Sprintf(", limit %d on the dashboard", *c.Limit)
+		}
+		fmt.Fprintf(t, "%s\t%s\t%d\t%s\n", c.Name, c.Priority, c.Active, most)
 	}
 	t.Flush()
 	if len(s.Egress) > 0 {

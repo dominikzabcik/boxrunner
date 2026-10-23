@@ -206,6 +206,9 @@ export function groupProblem(org: string, group: RunnerGroup): string | null {
 /** A class paused on the dashboard: boxes start no new runners for it until someone resumes it. */
 export type Pause = { className: ClassName; since: number; by: Login };
 
+/** A cap set on the dashboard for one class on one box, below the class's max there; 0 starts none. */
+export type Limit = { box: BoxName; className: ClassName; max: number; since: number; by: Login };
+
 /** Splits the Worker's classes into those boxes serve now and those paused on the dashboard. */
 export function splitPaused(classes: readonly ClassName[], pauses: readonly Pause[]) {
 	const paused = new Set(pauses.map((pause) => pause.className));

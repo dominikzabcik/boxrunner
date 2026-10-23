@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Features**
+- A class can be limited on one box from the dashboard: its runners there are capped below the class's `max`, and 0 stops the box taking its jobs while the rest of the fleet goes on. The box hears its limits in the answer to its heartbeat, removes waiting runners over the limit and lets running jobs finish; the Worker gives the jobs the box no longer takes to the other boxes. `boxrunner status` shows the limit ([dashboard](docs/dashboard.md#limiting-a-class-on-one-box)). Upgrade the Worker and the boxes.
+
 ## v0.9.2
 
 **Features**

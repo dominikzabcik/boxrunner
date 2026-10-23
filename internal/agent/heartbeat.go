@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"time"
 
@@ -38,6 +39,7 @@ const (
 func (a *Agent) heartbeat(ctx context.Context) {
 	failing := false
 	var paused []string
+	var limits map[string]int
 	fleet, misses := false, 0
 	for {
 		jobs, err := status.Recent(a.JobsLog, heartbeatJobs)
@@ -59,6 +61,12 @@ func (a *Agent) heartbeat(ctx context.Context) {
 			if err == nil {
 				a.heartbeatOK.Store(time.Now().UnixNano())
 				misses = 0
+				// Before the fleet's shares, so a share never starts a runner the limits forbid.
+				if !maps.Equal(reply.Limits, limits) {
+					limits = reply.Limits
+					a.Log.Info("limits set on the dashboard", "limits", limits)
+					a.post(scheduler.Limits{Max: limits})
+				}
 				if reply.Fleet != nil || fleet {
 					a.post(scheduler.Fleet{Shares: a.fleetShares(reply.Fleet)})
 				}

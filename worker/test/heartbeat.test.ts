@@ -27,7 +27,7 @@ describe('POST /v1/heartbeat', () => {
 		const { call, dashboard } = await ready();
 		const response = await call('POST', '/v1/heartbeat', heartbeatBody());
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({ paused: [] });
+		expect(await response.json()).toEqual({ paused: [], limits: {} });
 		await call('POST', '/v1/heartbeat', heartbeatBody({ version: '0.2.1' }));
 		const { boxes } = await dashboard();
 		expect(boxes.map(({ name, online, version }) => ({ name, online, version }))).toEqual([

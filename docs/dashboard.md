@@ -47,6 +47,12 @@ Each action is a button that posts a form with the session's CSRF token, so it w
 
 The agent stops listening to the paused class's scale sets, which closes their sessions. The Worker names the paused classes in its answer to every heartbeat, so a box learns of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes, because `GET /v1/repos` leaves paused classes out of `classes` ([api.md](api.md#get-v1repos)); its log then says the class is not one of the Worker's.
 
+### Limiting a class on one box
+
+The **Limit** field next to each class in a box's section caps how many runners of that class the box keeps, below the class's `max` in its config. 0 stops the box taking the class's jobs while the other boxes of a [fleet](config.md#one-class-on-several-boxes) go on; that is how to take a laptop out of the fleet for an afternoon without logging in to it. Leave the field empty and press **Set** to remove the limit. The page shows who set each limit and when.
+
+The Worker sends the box its limits in the answer to every heartbeat, so the box applies a change within 30 seconds. Runners waiting for a job over the limit are removed, newest first, and running jobs finish. The Worker also counts the limit when it splits a fleet's jobs, so another box gets what the limited one no longer takes. Limits stay across restarts of the Worker; a restarted agent applies them with its first heartbeat. `boxrunner status` shows a class's limit next to its max. An agent from before limits ignores them.
+
 ### Replacing the box token
 
 **Replace the box token** makes a new token and sends the browser to a page that shows it once, with the command that puts it on a box:

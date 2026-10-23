@@ -185,16 +185,16 @@ The jobs a scale set may still acquire. GitHub offers a job in one message; this
 
 ## `POST /v1/heartbeat`
 
-Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The agent sends one every 30 seconds: 2,880 requests a day per box, 120 an hour of the token's 1,800, and under 3% of the free plan's 100,000 requests a day. Answers 200 with the classes paused on the dashboard, as in `GET /v1/repos`:
+Reports the box's state for the dashboard ([dashboard.md](dashboard.md)). The agent sends one every 30 seconds: 2,880 requests a day per box, 120 an hour of the token's 1,800, and under 3% of the free plan's 100,000 requests a day. Answers 200 with the classes paused on the dashboard, as in `GET /v1/repos`, and `limits`, the cap set for each of the box's classes on the dashboard ([dashboard.md](dashboard.md#limiting-a-class-on-one-box)); the box runs at most the lower of the limit and the class's `max`:
 
 ```json
-{ "paused": ["boxrunner-light"] }
+{ "paused": ["boxrunner-light"], "limits": { "boxrunner": 1 } }
 ```
 
 While another box that reported in the last 90 seconds serves one of the box's classes, the answer also carries `fleet`, the box's share of each scale set of such a class ([config](config.md#one-class-on-several-boxes)). `jobs` is how many of the scale set's jobs the box's runners should hold, those they took included; `repos` names the repositories of the waiting jobs of an organization scale set, for `jobRepos` in `POST /v1/runners`. A share of 0 tells the box to start nothing more. While it shares a class, the agent sends a heartbeat every 10 seconds, and the box holding the session also sends one as soon as its queue changes, at most every 2 seconds.
 
 ```json
-{ "paused": [], "fleet": [{ "repo": "octo/site", "class": "boxrunner", "jobs": 1, "repos": [] }] }
+{ "paused": [], "limits": {}, "fleet": [{ "repo": "octo/site", "class": "boxrunner", "jobs": 1, "repos": [] }] }
 ```
 
 A Worker from before pausing answers 204 with no body, which the agent reads as nothing paused.

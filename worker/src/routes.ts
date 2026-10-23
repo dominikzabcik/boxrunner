@@ -15,7 +15,8 @@ export type WebRoute =
 	| { name: 'web.token' }
 	| { name: 'web.showToken'; id: string }
 	| { name: 'web.pause' }
-	| { name: 'web.resume' };
+	| { name: 'web.resume' }
+	| { name: 'web.limit' };
 
 export type ApiRoute =
 	| { name: 'heartbeat' }
@@ -49,6 +50,7 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['GET', /^\/box-token\/([^/]+)$/, (id) => ({ name: 'web.showToken', id })],
 	['POST', /^\/classes\/pause$/, () => ({ name: 'web.pause' })],
 	['POST', /^\/classes\/resume$/, () => ({ name: 'web.resume' })],
+	['POST', /^\/boxes\/limit$/, () => ({ name: 'web.limit' })],
 	['POST', /^\/webhook$/, () => ({ name: 'webhook' })],
 	['POST', /^\/v1\/heartbeat$/, () => ({ name: 'heartbeat' })],
 	['GET', /^\/v1\/repos$/, () => ({ name: 'repos' })],

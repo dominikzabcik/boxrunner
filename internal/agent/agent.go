@@ -897,7 +897,11 @@ func (a *Agent) publish(s scheduler.State) {
 		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since, Warm: warm[r.Name]})
 	}
 	for _, c := range a.Config.Classes {
-		snap.Classes = append(snap.Classes, status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until})
+		class := status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until}
+		if limit, ok := s.Limits[c.Name]; ok {
+			class.Limit = &limit
+		}
+		snap.Classes = append(snap.Classes, class)
 	}
 	a.refusedMu.Lock()
 	for key, ss := range s.ScaleSets {

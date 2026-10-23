@@ -35,8 +35,8 @@ describe('GET / signed in', () => {
 			`<dt>Worker</dt><dd>${version}</dd>`,
 			'<dt>Image</dt><dd><code>2.338.0+3f9a2c0b1d4e</code></dd>',
 			'<dt>Disk</dt><dd>26.0 GB free, floor 10.0 GB</dd>',
-			'<tr><td>boxrunner</td><td>normal</td><td class="number">1</td><td class="number">0</td><td class="number">1</td></tr>',
-			'<tr><td>boxrunner-light</td><td>idle</td><td class="number">0</td><td class="number">1</td><td class="number">2</td></tr>',
+			'<tr><td>boxrunner</td><td>normal</td><td class="number">1</td><td class="number">0</td><td class="number">1</td><td><form method="post" action="/boxes/limit" class="inline">',
+			'<tr><td>boxrunner-light</td><td>idle</td><td class="number">0</td><td class="number">1</td><td class="number">2</td><td><form method="post" action="/boxes/limit" class="inline">',
 			'<tr><td>box-1-boxrunner-3f9a2c</td><td>octo/site</td><td>boxrunner</td><td>running</td><td class="number">4 min 30 s</td></tr>',
 			'<tr><td>octo/site</td><td>boxrunner</td><td>test</td><td>box-1</td><td>succeeded</td><td class="number">20 s</td><td class="number">2 min 45 s</td><td class="number">12 min 34 s</td><td class="number">9.8 GB</td><td><time datetime="2026-10-14T09:53:05.000Z">6 minutes ago</time></td></tr>',
 			'<tr><th scope="row">Today (UTC)</th><td class="number">1</td><td class="number">3</td><td class="number">$0.02</td></tr>',
@@ -156,8 +156,8 @@ describe('GET /dashboard.json', () => {
 					online: true,
 					disk: { free: 26_000_000_000, floor: 10_000_000_000 },
 					classes: [
-						{ name: 'boxrunner', priority: 'normal', max: 1, running: 1, starting: 0, paused: false },
-						{ name: 'boxrunner-light', priority: 'idle', max: 2, running: 0, starting: 1, paused: false },
+						{ name: 'boxrunner', priority: 'normal', max: 1, running: 1, starting: 0, paused: false, limit: null },
+						{ name: 'boxrunner-light', priority: 'idle', max: 2, running: 0, starting: 1, paused: false, limit: null },
 					],
 					runners: [
 						{ name: 'box-1-boxrunner-3f9a2c', repo: 'octo/site', class: 'boxrunner', state: 'running', since: '2026-10-14T09:55:00.000Z', seconds: 270 },
