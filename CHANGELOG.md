@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.9.1
+
+The tag v0.9.0 points at a commit before the version bump, so it has no release; v0.9.1 is the first release with these changes.
 
 **Features**
 - Several boxes can serve one class. One box holds the scale set's session and acquires the jobs; the Worker splits them between the boxes by `rank` and free room, and each box mints runners for its share, which it hears in the answer to its heartbeat. While a box shares a class it reports every 10 seconds, and the box holding the session reports as soon as its queue changes. `status` and `doctor` show the share instead of failing. Upgrade the Worker and every box ([config](docs/config.md#one-class-on-several-boxes)).
