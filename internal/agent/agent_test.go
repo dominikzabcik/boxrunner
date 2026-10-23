@@ -671,6 +671,39 @@ func TestJobLifecycle(t *testing.T) {
 	}
 }
 
+// The job log carries what the job's container used, read from its cgroup
+// while it ran: Docker removes the cgroup with the container.
+func TestJobUsage(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil)
+	h.github.queue <- message(1, 1, `{"messageType":"JobAvailable","runnerRequestId":501}`)
+	var name string
+	waitFor(t, "a running job container", func() bool {
+		for n, c := range h.docker.snapshot() {
+			name = n
+			return c.State == "running"
+		}
+		return false
+	})
+	scope := filepath.Join(h.cgroup, "system.slice", "docker-"+name+".scope")
+	os.MkdirAll(scope, 0o755)
+	os.WriteFile(filepath.Join(scope, "cpu.stat"), []byte("usage_usec 754250000\nuser_usec 700000000\nsystem_usec 54250000\n"), 0o644)
+	os.WriteFile(filepath.Join(scope, "memory.peak"), []byte("9812000768\n"), 0o644)
+	sampled := time.Now()
+	waitFor(t, "a few samples", func() bool { return time.Since(sampled) > 300*time.Millisecond })
+	os.RemoveAll(scope)
+
+	h.github.queue <- message(2, 1, fmt.Sprintf(`{"messageType":"JobStarted","runnerRequestId":501,"runnerId":41,"runnerName":%q}`, name))
+	h.github.queue <- message(3, 0, fmt.Sprintf(`{"messageType":"JobCompleted","runnerRequestId":501,"runnerId":41,"runnerName":%q,"result":"succeeded","jobDisplayName":"test",
+		"finishTime":"2026-10-13T21:03:00Z"}`, name))
+	waitFor(t, "the finished job's container to go", func() bool { return len(h.docker.snapshot()) == 0 })
+	h.stop(t)
+
+	jobs, _ := status.Recent(h.jobs, 10)
+	if len(jobs) != 1 || jobs[0].Usage == nil || *jobs[0].Usage != (status.Usage{CPUSeconds: 754.25, MemoryPeak: 9812000768}) {
+		t.Errorf("job log = %+v", jobs)
+	}
+}
+
 // An organization scale set is offered the jobs of every repository its
 // runner group admits; the agent takes only those of repositories both the
 // Worker and the class serve, names their repositories when it mints a

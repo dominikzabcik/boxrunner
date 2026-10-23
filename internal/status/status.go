@@ -248,6 +248,16 @@ type Job struct {
 	Queued   time.Time `json:"queued,omitzero"`
 	Started  time.Time `json:"started,omitzero"`
 	Finished time.Time `json:"finished"`
+	// Usage is nil when the agent saw no sample of the job's container.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage is what a job's container used, read from its cgroup while it ran:
+// CPU time across all cores, and the most memory it held at once, the
+// job's own Docker included.
+type Usage struct {
+	CPUSeconds float64 `json:"cpuSeconds"`
+	MemoryPeak int64   `json:"memoryPeak"`
 }
 
 // Wait is how long the job queued before a runner took it.
@@ -596,10 +606,15 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 		fmt.Fprintln(w, "No finished jobs yet.")
 		return
 	}
-	fmt.Fprintln(t, "FINISHED\tREPOSITORY\tCLASS\tJOB\tRESULT\tQUEUED FOR\tTOOK")
+	fmt.Fprintln(t, "FINISHED\tREPOSITORY\tCLASS\tJOB\tRESULT\tQUEUED FOR\tTOOK\tCPU\tPEAK MEMORY")
 	for _, j := range s.Jobs {
-		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.Finished.Local().Format("Jan 02 15:04"), j.Repo, j.Class,
-			orNone(j.Name), j.Result, waitText(j), j.Took().Round(time.Second))
+		cpu, memory := "?", "?"
+		if j.Usage != nil {
+			cpu = (time.Duration(j.Usage.CPUSeconds) * time.Second).String()
+			memory = gigabytes(j.Usage.MemoryPeak)
+		}
+		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.Finished.Local().Format("Jan 02 15:04"), j.Repo, j.Class,
+			orNone(j.Name), j.Result, waitText(j), j.Took().Round(time.Second), cpu, memory)
 	}
 	t.Flush()
 }

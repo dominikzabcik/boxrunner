@@ -128,6 +128,9 @@ type Agent struct {
 	// ids holds each scale set's id by scheduler.Key, so a box whose session is
 	// refused can still start runners for its fleet share.
 	ids sync.Map
+	// usage holds the last cgroup sample of each running job container, by
+	// runner name, for the job log.
+	usage sync.Map
 	// beat asks the heartbeat to report now: a scale set's jobs changed.
 	beat chan struct{}
 
@@ -657,6 +660,7 @@ func (a *Agent) remove(ctx context.Context, r scheduler.Runner, deregister, logs
 	if err := a.Docker.Remove(ctx, r.Name); err != nil {
 		a.Log.Warn("removing the container failed", "runner", r.Name, "err", err)
 	}
+	a.usage.Delete(r.Name)
 	a.post(scheduler.Removed{Runner: r.Name})
 }
 
@@ -749,6 +753,7 @@ func (a *Agent) observe(ctx context.Context) {
 			withInnerDocker(list, a.SysboxDir)
 		}
 		if err == nil {
+			a.sampleUsage(list)
 			a.post(scheduler.Observed{Containers: containers(list), DiskFree: free})
 		} else if ctx.Err() == nil {
 			a.Log.Error("listing containers", "err", err)
@@ -847,6 +852,10 @@ func (a *Agent) logJob(s scheduler.State, j queue.JobCompleted) {
 		Repo: repo, Class: r.ScaleSet.Class, Runner: r.Name,
 		Workflow: j.WorkflowRef, Name: j.DisplayName, Result: j.Result,
 		Queued: j.QueueTime, Started: j.RunnerAssignTime, Finished: finished,
+	}
+	if u, ok := a.usage.Load(r.Name); ok {
+		used := u.(status.Usage)
+		job.Usage = &used
 	}
 	a.finished = status.Count(a.finished, job)
 	if err := status.Append(a.JobsLog, job); err != nil {

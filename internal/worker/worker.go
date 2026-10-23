@@ -18,6 +18,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/backoff"
 	"github.com/dominikzabcik/boxrunner/internal/queue"
+	"github.com/dominikzabcik/boxrunner/internal/status"
 )
 
 // Code is the "error" field of a Worker error.
@@ -292,6 +293,9 @@ type HeartbeatJob struct {
 	Queued   *time.Time `json:"queued"`
 	Started  *time.Time `json:"started"`
 	Finished time.Time  `json:"finished"`
+	// Usage is what the job's container used; a Worker from before it
+	// ignores it.
+	Usage *status.Usage `json:"usage,omitempty"`
 }
 
 // HeartbeatReply is the Worker's answer to a heartbeat. A Worker from before

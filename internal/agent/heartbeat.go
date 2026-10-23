@@ -149,7 +149,7 @@ func heartbeatBody(snap status.Snapshot, jobs []status.Job) worker.Heartbeat {
 		}
 		hb.Jobs = append(hb.Jobs, worker.HeartbeatJob{
 			Runner: j.Runner, Repo: j.Repo, Class: j.Class, Name: name, Result: j.Result,
-			Queued: optional(j.Queued), Started: optional(j.Started), Finished: j.Finished,
+			Queued: optional(j.Queued), Started: optional(j.Started), Finished: j.Finished, Usage: j.Usage,
 		})
 	}
 	return hb

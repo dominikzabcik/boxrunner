@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Features**
+- Each finished job records what its container used: CPU time across all cores and its peak memory, the job's own Docker included. The agent reads them from the container's cgroup while it runs, since the cgroup goes with the container. `boxrunner status` and the dashboard show them, and the dashboard names the box that ran each job, so the boxes of a fleet can be told apart. Peak memory needs Linux 5.19.
+
 ## v0.9.1
 
 The tag v0.9.0 points at a commit before the version bump, so it has no release; v0.9.1 is the first release with these changes.

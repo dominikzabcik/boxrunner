@@ -274,8 +274,16 @@ export type Priority = 'normal' | 'idle';
 /** Times are milliseconds since the epoch. */
 export type BoxRunner = { name: RunnerName; repo: RepoName; className: ClassName; state: RunnerState; since: number };
 
-/** A job one of the box's runners finished; `startedAt` is null when it was canceled before it started, `queuedAt` when an older agent did not record it. */
+/** What a job's container used, from its cgroup: CPU time across all cores, and the most memory it held at once, in bytes. */
+export type JobUsage = { cpuSeconds: number; memoryPeak: number };
+
+/**
+ * A job one of the box's runners finished; `startedAt` is null when it was canceled before it started, `queuedAt` when an older agent did not record it.
+ * `box` is the box that ran it, null for a job stored before the Worker kept it. `usage` is null when the agent saw no sample of its container, or is older than it.
+ */
 export type FinishedJob = {
+	box: BoxName | null;
+	usage: JobUsage | null;
 	runner: RunnerName;
 	repo: RepoName;
 	className: ClassName;
@@ -352,6 +360,8 @@ const label = (max: number) => (value: unknown) =>
 
 const semver = (value: unknown) => (typeof value === 'string' && semverPattern.test(value) && value.length <= 64 ? value : undefined);
 
+const seconds = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : undefined);
+
 const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const instant = (value: unknown) => {
 	const time = typeof value === 'string' && rfc3339.test(value) ? Date.parse(value) : Number.NaN;
@@ -362,10 +372,11 @@ const instant = (value: unknown) => {
 export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heartbeat: Heartbeat } | { ok: false; field: string } {
 	try {
 		const disk = record(body.disk, 'disk');
+		const box = need(parse.boxName(body.box), 'box');
 		return {
 			ok: true,
 			heartbeat: {
-				box: need(parse.boxName(body.box), 'box'),
+				box,
 				version: need(semver(body.version), 'version'),
 				latest: body.latest === undefined || body.latest === null ? null : need(semver(body.latest), 'latest'),
 				image: need(label(128)(body.image), 'image'),
@@ -406,7 +417,13 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 				jobs: list(body.jobs, 'jobs', heartbeatLimits.jobs).map((raw, i) => {
 					const at = `jobs[${i}]`;
 					const value = record(raw, at);
+					const usage = value.usage === undefined || value.usage === null ? null : record(value.usage, `${at}.usage`);
 					return {
+						box,
+						usage:
+							usage === null
+								? null
+								: { cpuSeconds: need(seconds(usage.cpuSeconds), `${at}.usage.cpuSeconds`), memoryPeak: need(count(usage.memoryPeak), `${at}.usage.memoryPeak`) },
 						runner: need(parse.runnerName(value.runner), `${at}.runner`),
 						repo: need(parse.scope(value.repo), `${at}.repo`),
 						className: need(parse.className(value.class), `${at}.class`),
