@@ -1,11 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Connecting this Mac: the Worker's address, then the code to approve in the browser.
+/// Connecting this Mac, as a prompt: the Worker's address, then the code to
+/// approve in the browser.
 struct PairView: View {
 	@Bindable var state: AppState
 	@State private var worker = ""
 	@State private var copied = false
+	@FocusState private var focused: Bool
 	private let deviceName = Host.current().localizedName ?? "Mac"
 
 	var body: some View {
@@ -16,54 +18,62 @@ struct PairView: View {
 	}
 
 	private var connect: some View {
-		VStack(alignment: .leading, spacing: 10) {
-			VStack(alignment: .leading, spacing: 3) {
-				Text("Connect this Mac").font(.headline)
-				Text("See every box and job, and switch this Mac in and out of the fleet.")
-					.font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+		Block(title: "connect", accent: Console.accent) {
+			Text("pair this mac with your worker to see the fleet and switch this mac in and out of it.")
+				.foregroundStyle(Console.muted).font(Console.font(11))
+				.fixedSize(horizontal: false, vertical: true)
+			HStack(spacing: 6) {
+				Text("❯").foregroundStyle(Console.accent).bold()
+				TextField("", text: $worker, prompt: Text("https://your-worker.workers.dev").foregroundStyle(Console.faint))
+					.textFieldStyle(.plain)
+					.font(Console.font(12))
+					.focused($focused)
+					.onSubmit(start)
 			}
-			TextField("https://boxrunner.example.workers.dev", text: $worker)
-				.textFieldStyle(.roundedBorder)
-				.controlSize(.large)
-				.onSubmit(start)
-			Button(action: start) {
-				Text("Connect").frame(maxWidth: .infinity)
+			.padding(.horizontal, 8).padding(.vertical, 7)
+			.overlay(Rectangle().strokeBorder(focused ? Console.accent : Console.line, lineWidth: 1))
+			HStack {
+				Text("as \(deviceName)").foregroundStyle(Console.faint).font(Console.font(10)).lineLimit(1)
+				Spacer()
+				KeyButton(title: "connect", key: "⏎", tint: Console.accent, filled: true, action: start)
+					.disabled(worker.isEmpty)
+					.opacity(worker.isEmpty ? 0.5 : 1)
 			}
-			.buttonStyle(.borderedProminent)
-			.controlSize(.large)
-			.keyboardShortcut(.defaultAction)
-			.disabled(worker.isEmpty)
-			Text("Pairs as \(deviceName). You approve it on the dashboard.")
-				.font(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
 		}
-		.onAppear { worker = state.worker?.absoluteString ?? "" }
+		.onAppear {
+			worker = state.worker?.absoluteString ?? ""
+			focused = true
+		}
 	}
 
 	private func waiting(code: String, url: URL) -> some View {
-		VStack(spacing: 12) {
-			Text("Approve in your browser").font(.headline)
+		Block(title: "approve in your browser", accent: Console.accent) {
 			Text(code)
-				.font(.system(size: 30, weight: .semibold, design: .monospaced))
-				.tracking(3)
+				.font(Console.font(32, .bold))
+				.tracking(4)
+				.foregroundStyle(Console.accent)
 				.textSelection(.enabled)
-				.padding(.vertical, 12)
-			.frame(maxWidth: .infinity)
-			.panel(padding: 0)
-			HStack(spacing: 6) {
-				ProgressView().controlSize(.small)
-				Text("Waiting until you press Pair on the dashboard").font(.caption).foregroundStyle(.secondary)
+				.frame(maxWidth: .infinity)
+				.padding(.vertical, 8)
+			TimelineView(.periodic(from: .now, by: 0.12)) { context in
+				let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+				let i = Int(context.date.timeIntervalSinceReferenceDate / 0.12) % frames.count
+				(Text(frames[i]).foregroundColor(Console.accent) + Text(" waiting until you press pair on the dashboard").foregroundColor(Console.muted))
+					.font(Console.font(11))
 			}
-			HStack {
-				Button(copied ? "Copied" : "Copy code") {
+			HStack(spacing: 2) {
+				KeyButton(title: copied ? "copied" : "copy", key: "⌘C") {
 					NSPasteboard.general.clearContents()
 					NSPasteboard.general.setString(code, forType: .string)
 					copied = true
 				}
-				Button("Open page") { NSWorkspace.shared.open(url) }
+				.keyboardShortcut("c")
+				KeyButton(title: "open page", key: "⌘O") { NSWorkspace.shared.open(url) }
+					.keyboardShortcut("o")
 				Spacer()
-				Button("Cancel", role: .cancel) { state.cancelPairing() }
+				KeyButton(title: "cancel", key: "esc", tint: Console.muted) { state.cancelPairing() }
+					.keyboardShortcut(.cancelAction)
 			}
-			.controlSize(.small)
 		}
 	}
 
