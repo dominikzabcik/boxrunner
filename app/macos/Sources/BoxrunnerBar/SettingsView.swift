@@ -4,8 +4,6 @@ import SwiftUI
 /// Pairing and the few settings: the Worker, the fleet's name, this Mac's box.
 struct SettingsView: View {
 	@Bindable var state: AppState
-	@State private var worker = ""
-	@State private var deviceName = Host.current().localizedName ?? "Mac"
 	@State private var openAtLogin = SMAppService.mainApp.status == .enabled
 
 	var body: some View {
@@ -23,25 +21,8 @@ struct SettingsView: View {
 					}
 			}
 			switch state.phase {
-			case .unpaired:
-				Section("Worker") {
-					TextField("Address", text: $worker, prompt: Text("https://boxrunner.example.workers.dev"))
-					TextField("This Mac’s name", text: $deviceName)
-					Button("Pair") { state.pair(worker: worker, deviceName: deviceName) }
-						.keyboardShortcut(.defaultAction)
-						.disabled(worker.isEmpty || deviceName.isEmpty)
-				}
-			case .pairing(let code, let url):
-				Section("Approve in your browser") {
-					Text(code).font(.system(.largeTitle, design: .monospaced).weight(.semibold)).textSelection(.enabled)
-					Text("Check the dashboard shows the same code, then press Pair there. This window updates on its own.")
-						.font(.callout).foregroundStyle(.secondary)
-					HStack {
-						Link("Open the page again", destination: url)
-						Spacer()
-						Button("Cancel") { state.cancelPairing() }
-					}
-				}
+			case .unpaired, .pairing:
+				Section { PairView(state: state).padding(.vertical, 4) }
 			case .paired:
 				Section("Paired") {
 					LabeledContent("Worker", value: state.worker?.host() ?? "")
@@ -61,6 +42,5 @@ struct SettingsView: View {
 		}
 		.formStyle(.grouped)
 		.frame(width: 440)
-		.onAppear { worker = state.worker?.absoluteString ?? "" }
 	}
 }

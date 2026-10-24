@@ -12,7 +12,7 @@ struct BoxrunnerBar: App {
 		}
 		.menuBarExtraStyle(.window)
 
-		Window("Pair with a Worker", id: "settings") {
+		Window("Settings", id: "settings") {
 			SettingsView(state: state)
 		}
 		.windowResizability(.contentSize)
@@ -26,10 +26,10 @@ struct MenuLabel: View {
 	var body: some View {
 		let fleet = state.fleet
 		let symbol: String = switch true {
-		case state.phase != .paired: "square.stack.3d.up.slash"
+		case state.phase != .paired: "circle.dashed"
 		case state.myBox?.paused == true: "pause.circle"
-		case (fleet?.running ?? 0) > 0: "square.stack.3d.up.fill"
-		default: "square.stack.3d.up"
+		case (fleet?.running ?? 0) > 0: "circle.hexagongrid.fill"
+		default: "circle.hexagongrid"
 		}
 		HStack(spacing: 3) {
 			Image(systemName: symbol)
