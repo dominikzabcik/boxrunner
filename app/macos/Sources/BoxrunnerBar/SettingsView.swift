@@ -22,7 +22,9 @@ struct SettingsView: View {
 			}
 			switch state.phase {
 			case .unpaired, .pairing:
-				Section { PairView(state: state).padding(.vertical, 4) }
+				Section("Worker") {
+					Text("Not paired. Open the menu bar item to connect this Mac.").foregroundStyle(.secondary)
+				}
 			case .paired:
 				Section("Paired") {
 					LabeledContent("Worker", value: state.worker?.host() ?? "")

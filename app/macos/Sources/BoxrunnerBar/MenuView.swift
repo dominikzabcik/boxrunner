@@ -1,238 +1,218 @@
 import SwiftUI
 
-/// The window under the menu bar item: the fleet's totals, this Mac's
-/// availability, every box, the waiting jobs and the latest ones that finished.
+/// The window under the menu bar item, drawn like a terminal UI: the fleet's
+/// totals, this Mac's switch, every box, the waiting and the latest jobs.
 struct MenuView: View {
 	var state: AppState
 	@Environment(\.openWindow) private var openWindow
 	@Environment(\.openURL) private var openURL
 
 	var body: some View {
-		VStack(alignment: .leading, spacing: 14) {
+		VStack(alignment: .leading, spacing: 16) {
 			header
 			switch (state.phase, state.fleet) {
 			case (.paired, let fleet?):
-				totals(fleet)
 				thisMac(fleet)
 				boxes(fleet)
 				if !fleet.waiting.isEmpty { waiting(fleet) }
 				jobs(fleet)
 			case (.paired, nil):
-				ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 80)
+				Text("connecting…").font(Console.font()).foregroundStyle(Console.muted)
 			default:
 				PairView(state: state)
 			}
 			if let problem = state.problem {
-				Label(problem, systemImage: "exclamationmark.triangle.fill")
-					.font(.caption).foregroundStyle(.orange)
+				(Text("error ").foregroundColor(Console.red).bold() + Text(problem).foregroundColor(Console.text))
+					.font(Console.font(11))
 					.fixedSize(horizontal: false, vertical: true)
 			}
-			footer
+			statusBar
 		}
-		.padding(14)
-		.frame(width: 340)
-		.animation(.snappy, value: state.fleet)
+		.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
+		.frame(width: 380)
+		.background(Console.background)
+		.foregroundStyle(Console.text)
+		.font(Console.font())
+		.environment(\.colorScheme, .dark)
 	}
 
 	private var header: some View {
-		HStack(spacing: 10) {
-			Mark()
-			VStack(alignment: .leading, spacing: 1) {
-				Text(state.fleetName).font(.system(size: 15, weight: .semibold))
-				Text(subtitle).font(.caption).foregroundStyle(.secondary)
+		VStack(alignment: .leading, spacing: 8) {
+			HStack(alignment: .firstTextBaseline) {
+				(Text(state.fleetName.lowercased()).foregroundColor(Console.text) + Text("_").foregroundColor(Console.accent))
+					.font(Console.font(18, .bold))
+				Spacer()
+				live
 			}
-			Spacer()
-			if state.phase == .paired {
-				let live = state.problem == nil && state.fleet != nil
-				HStack(spacing: 4) {
-					Circle().fill(live ? Color.green : Color.orange).frame(width: 6, height: 6)
-					Text(live ? "Live" : "Offline").font(.caption2.weight(.semibold))
+			if let fleet = state.fleet, state.phase == .paired {
+				HStack(spacing: 14) {
+					figure(fleet.running, " running", Console.blue)
+					figure(fleet.waiting.count, " waiting", Console.yellow)
+					figure(fleet.online, "/\(fleet.boxes.count) online", Console.green)
+					Spacer()
 				}
-				.padding(.horizontal, 7).padding(.vertical, 3)
-				.background(Capsule().fill((live ? Color.green : Color.orange).opacity(0.15)))
-				.foregroundStyle(live ? Color.green : Color.orange)
 			}
 		}
 	}
 
-	private var subtitle: String {
+	@ViewBuilder private var live: some View {
 		switch state.phase {
-		case .unpaired: "Not connected"
-		case .pairing: "Waiting for approval"
-		case .paired: state.fleet.map { [$0.device.name, state.worker?.host()].compactMap { $0 }.joined(separator: " · ") } ?? "Connecting…"
+		case .unpaired: Text("○ offline").foregroundStyle(Console.muted)
+		case .pairing: Text("◌ pairing").foregroundStyle(Console.accent)
+		case .paired:
+			let live = state.problem == nil && state.fleet != nil
+			Text(live ? "● live" : "● stale").foregroundStyle(live ? Console.green : Console.yellow)
 		}
 	}
 
-	private func totals(_ fleet: Fleet) -> some View {
-		HStack(spacing: 0) {
-			Figure(value: fleet.running, label: "Running", tint: .blue)
-			Divider().frame(height: 28)
-			Figure(value: fleet.waiting.count, label: "Waiting", tint: .orange)
-			Divider().frame(height: 28)
-			Figure(value: fleet.online, label: "of \(fleet.boxes.count) online", tint: .green)
-		}
-		.padding(.vertical, 8)
-		.panel(padding: 0)
+	private func figure(_ value: Int, _ label: String, _ tint: Color) -> some View {
+		(Text("\(value)").foregroundColor(value == 0 ? Console.muted : tint).bold() + Text(label).foregroundColor(Console.muted))
+			.font(Console.font(12))
+			.contentTransition(.numericText())
 	}
 
 	@ViewBuilder private func thisMac(_ fleet: Fleet) -> some View {
-		HStack(spacing: 10) {
-			Image(systemName: "laptopcomputer")
-				.font(.system(size: 17)).foregroundStyle(.secondary).frame(width: 24)
-			if let box = state.myBox {
-				VStack(alignment: .leading, spacing: 1) {
-					Text("This Mac").font(.subheadline.weight(.semibold))
-					Text(!box.online ? "\(box.name) is offline" : box.paused ? "Paused · finishes what runs" : "Taking jobs as \(box.name)")
-						.font(.caption).foregroundStyle(.secondary)
+		if let box = state.myBox {
+			Block(title: "this mac", trailing: box.name, accent: box.paused ? Console.yellow : Console.green) {
+				HStack {
+					VStack(alignment: .leading, spacing: 2) {
+						Text(!box.online ? "offline" : box.paused ? "paused" : "taking jobs").bold()
+						Text(!box.online ? "the box is not reporting" : box.paused ? "finishes what runs, takes nothing new" : "the fleet sends it jobs")
+							.foregroundStyle(Console.muted).font(Console.font(11))
+					}
+					Spacer()
+					ConsoleSwitch(on: !box.paused, disabled: state.busy || !box.online) { state.setAvailable(box.paused) }
 				}
-				Spacer()
-				Toggle("Available", isOn: Binding(get: { !box.paused }, set: { state.setAvailable($0) }))
-					.toggleStyle(.switch).labelsHidden().controlSize(.small)
-					.disabled(state.busy || !box.online)
-			} else {
-				VStack(alignment: .leading, spacing: 1) {
-					Text("This Mac").font(.subheadline.weight(.semibold))
-					Text("Which box runs here?").font(.caption).foregroundStyle(.secondary)
+			}
+		} else {
+			Block(title: "this mac", accent: Console.accent) {
+				HStack {
+					Text("which box runs here?").foregroundStyle(Console.muted)
+					Spacer()
+					Menu {
+						ForEach(fleet.boxes) { box in Button(box.name) { state.thisBox = box.name } }
+					} label: {
+						Text("choose ▾").foregroundStyle(Console.accent)
+					}
+					.menuStyle(.borderlessButton).fixedSize()
 				}
-				Spacer()
-				Picker("Box", selection: Binding(get: { state.thisBox }, set: { state.thisBox = $0 })) {
-					Text("None").tag("")
-					ForEach(fleet.boxes) { Text($0.name).tag($0.name) }
-				}
-				.labelsHidden().fixedSize().controlSize(.small)
 			}
 		}
-		.panel()
 	}
 
 	private func boxes(_ fleet: Fleet) -> some View {
-		VStack(alignment: .leading, spacing: 6) {
-			SectionTitle(text: "Boxes")
-			VStack(spacing: 0) {
-				ForEach(Array(fleet.boxes.enumerated()), id: \.element.id) { index, box in
-					if index > 0 { Divider().padding(.leading, 22) }
-					BoxRow(box: box, isThisMac: box.name == state.thisBox)
-				}
+		Block(title: "boxes", trailing: "\(fleet.boxes.count)") {
+			ForEach(fleet.boxes) { box in
+				BoxRow(box: box, isThisMac: box.name == state.thisBox)
 			}
-			.panel(padding: 4)
 		}
 	}
 
 	private func waiting(_ fleet: Fleet) -> some View {
-		VStack(alignment: .leading, spacing: 6) {
-			SectionTitle(text: "Waiting")
-			VStack(alignment: .leading, spacing: 5) {
-				ForEach(Array(fleet.waiting.enumerated()), id: \.offset) { _, w in
-					HStack(alignment: .firstTextBaseline, spacing: 8) {
-						Image(systemName: "hourglass").font(.caption).foregroundStyle(.orange).frame(width: 14)
-						VStack(alignment: .leading, spacing: 1) {
-							Text("\(repoName(w.repo)) · \(w.class)").font(.caption.weight(.medium))
-							if let cause = w.cause {
-								Text(cause).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-							}
-						}
+		Block(title: "waiting", trailing: "\(fleet.waiting.count)", accent: Console.yellow) {
+			ForEach(Array(fleet.waiting.enumerated()), id: \.offset) { _, w in
+				VStack(alignment: .leading, spacing: 1) {
+					HStack {
+						(Text("◷ ").foregroundColor(Console.yellow) + Text(repoName(w.repo)) + Text(" \(w.class)").foregroundColor(Console.muted))
 						Spacer()
-						Text(duration(w.seconds)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+						Text(duration(w.seconds)).foregroundStyle(Console.muted)
+					}
+					if let cause = w.cause {
+						Text("  \(cause)").font(Console.font(10)).foregroundStyle(Console.muted).fixedSize(horizontal: false, vertical: true)
 					}
 				}
 			}
-			.panel()
 		}
 	}
 
 	private func jobs(_ fleet: Fleet) -> some View {
-		VStack(alignment: .leading, spacing: 6) {
-			SectionTitle(text: "Recent jobs")
-			VStack(alignment: .leading, spacing: 7) {
-				if fleet.jobs.isEmpty {
-					Text("No job has finished yet").font(.caption).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
-				}
-				ForEach(fleet.jobs.prefix(5)) { job in
-					HStack(spacing: 8) {
-						Image(systemName: job.result == "succeeded" ? "checkmark.circle.fill" : job.result == "cancelled" ? "minus.circle.fill" : "xmark.circle.fill")
-							.foregroundStyle(job.result == "succeeded" ? Color.green : job.result == "cancelled" ? Color.secondary : Color.red)
-							.font(.system(size: 13))
-						VStack(alignment: .leading, spacing: 0) {
-							Text(job.name).font(.caption.weight(.medium)).lineLimit(1)
-							Text([repoName(job.repo), job.box, job.memoryPeak.map(gigabytes)].compactMap { $0 }.joined(separator: " · "))
-								.font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-						}
-						Spacer(minLength: 6)
-						VStack(alignment: .trailing, spacing: 0) {
-							Text(duration(job.durationSeconds)).font(.caption.weight(.medium)).monospacedDigit()
-							Text("\(duration(job.secondsSinceFinished)) ago").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
-						}
+		Block(title: "recent jobs") {
+			if fleet.jobs.isEmpty {
+				Text("no job has finished yet").foregroundStyle(Console.muted)
+			}
+			ForEach(fleet.jobs.prefix(5)) { job in
+				HStack(spacing: 8) {
+					Text(job.result == "succeeded" ? "✓" : job.result == "cancelled" ? "–" : "✗")
+						.foregroundStyle(job.result == "succeeded" ? Console.green : job.result == "cancelled" ? Console.muted : Console.red)
+						.bold()
+					VStack(alignment: .leading, spacing: 0) {
+						Text(job.name).lineLimit(1)
+						Text([repoName(job.repo), job.box, job.memoryPeak.map(gigabytes)].compactMap { $0 }.joined(separator: " · "))
+							.font(Console.font(10)).foregroundStyle(Console.muted).lineLimit(1)
+					}
+					Spacer(minLength: 6)
+					VStack(alignment: .trailing, spacing: 0) {
+						Text(duration(job.durationSeconds))
+						Text("\(duration(job.secondsSinceFinished)) ago").font(Console.font(10)).foregroundStyle(Console.faint)
 					}
 				}
 			}
-			.panel()
 		}
 	}
 
-	private var footer: some View {
+	/// The bottom line, as opencode keeps its keys: what each does and its shortcut.
+	private var statusBar: some View {
 		HStack(spacing: 2) {
-			if let updated = state.updated, state.phase == .paired {
-				Text("Updated \(updated, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
-			}
-			Spacer()
 			if let worker = state.worker, state.phase == .paired {
-				IconButton(symbol: "safari", help: "Open the dashboard") { openURL(worker) }
+				KeyButton(title: "dashboard", key: "⌘D") { openURL(worker) }
+					.keyboardShortcut("d")
 			}
-			IconButton(symbol: "gearshape", help: "Settings") { openWindow(id: "settings"); NSApp.activate() }
-			IconButton(symbol: "power", help: "Quit") { NSApp.terminate(nil) }
+			KeyButton(title: "settings", key: "⌘,") { openWindow(id: "settings"); NSApp.activate() }
+				.keyboardShortcut(",")
+			KeyButton(title: "quit", key: "⌘Q") { NSApp.terminate(nil) }
+				.keyboardShortcut("q")
+			Spacer()
+			if let updated = state.updated, state.phase == .paired {
+				Text(updated, style: .relative).font(Console.font(10)).foregroundStyle(Console.faint)
+			}
 		}
-		.padding(.top, 2)
+		.padding(.top, 6)
+		.overlay(alignment: .top) { Rectangle().fill(Console.line).frame(height: 1) }
 	}
 }
 
-/// One box: its health, the slots of each class and what runs there.
+/// One box: its health, the cells of each class and what runs there.
 struct BoxRow: View {
 	var box: Fleet.Box
 	var isThisMac: Bool
 
 	var body: some View {
-		VStack(alignment: .leading, spacing: 5) {
+		VStack(alignment: .leading, spacing: 3) {
 			HStack(spacing: 6) {
 				StatusDot(health: Health(box))
-				Text(box.name).font(.subheadline.weight(.semibold))
-				if isThisMac {
-					Text("this Mac").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-						.padding(.horizontal, 5).padding(.vertical, 1)
-						.background(Capsule().fill(Color.primary.opacity(0.08)))
-				}
+				Text(box.name).bold()
+				if isThisMac { Text("(you)").foregroundStyle(Console.accent) }
 				Spacer()
-				Text(status).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+				Text(status).foregroundStyle(Console.muted).font(Console.font(11))
 			}
 			if box.online {
 				HStack(spacing: 12) {
 					ForEach(box.classes) { c in
-						HStack(spacing: 5) {
-							Text(c.name).font(.caption2).foregroundStyle(.secondary)
-							Slots(class: c)
-						}
+						(Text(c.name).foregroundColor(Console.muted) + Text(" ") + slots(c))
+							.font(Console.font(11))
 					}
-					Spacer(minLength: 0)
 				}
-				.padding(.leading, 18)
+				.padding(.leading, 16)
 				ForEach(box.runners.prefix(3)) { r in
-					HStack(spacing: 5) {
-						Image(systemName: r.state == "running" ? "play.fill" : "ellipsis")
-							.font(.system(size: 7)).foregroundStyle(r.state == "running" ? Color.blue : Color.secondary).frame(width: 10)
-						Text(repoName(r.repo)).font(.caption2)
+					HStack {
+						(Text("└ ").foregroundColor(Console.faint)
+							+ Text(repoName(r.repo)).foregroundColor(r.state == "running" ? Console.text : Console.muted)
+							+ Text(" \(r.state)").foregroundColor(r.state == "running" ? Console.blue : Console.muted))
 						Spacer()
-						Text(duration(r.seconds)).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+						Text(duration(r.seconds)).foregroundStyle(Console.muted)
 					}
-					.padding(.leading, 18)
+					.font(Console.font(11))
+					.padding(.leading, 16)
 				}
 			}
 		}
-		.padding(.horizontal, 6).padding(.vertical, 7)
+		.padding(.vertical, 2)
 	}
 
 	private var status: String {
 		guard box.online else { return "offline \(duration(box.secondsSinceSeen))" }
 		if box.paused { return "paused" }
-		return "\(gigabytes(box.disk.free)) free · \(box.version)"
+		return "\(gigabytes(box.disk.free)) free  v\(box.version)"
 	}
 }
 
