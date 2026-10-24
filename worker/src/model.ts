@@ -206,6 +206,12 @@ export function groupProblem(org: string, group: RunnerGroup): string | null {
 /** A class paused on the dashboard: boxes start no new runners for it until someone resumes it. */
 export type Pause = { className: ClassName; since: number; by: Login };
 
+/** A device, such as a laptop's menu bar app, asking to be paired; someone signed in to the dashboard approves it. */
+export type Pairing = { code: string; name: string; createdAt: number; approvedBy: Login | null };
+
+/** A paired device: its token reads the fleet and sets limits, as the person who approved it. */
+export type Device = { id: string; name: string; pairedAt: number; by: Login; seenAt: number };
+
 /** A cap set on the dashboard for one class on one box, below the class's max there; 0 starts none. */
 export type Limit = { box: BoxName; className: ClassName; max: number; since: number; by: Login };
 

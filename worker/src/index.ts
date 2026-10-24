@@ -3,7 +3,8 @@ import { handleApi } from './api';
 import { Box } from './box';
 import { check } from './fallback';
 import { notFound } from './http';
-import { isSetup, isWeb, isWebhook, match, type Route } from './routes';
+import { handleDevice } from './devices';
+import { isDevice, isSetup, isWeb, isWebhook, match, type Route } from './routes';
 import { handleSetup } from './setup';
 import { Store } from './store';
 import { handleWebhook } from './unserved';
@@ -22,6 +23,7 @@ export class BoxObject extends DurableObject<Env> {
 		if (isSetup(route)) return handleSetup(this.box, request, route);
 		if (isWeb(route)) return handleWeb(this.box, request, route);
 		if (isWebhook(route)) return handleWebhook(this.box, request);
+		if (isDevice(route)) return handleDevice(this.box, request, route);
 		return handleApi(this.box, request, route);
 	}
 

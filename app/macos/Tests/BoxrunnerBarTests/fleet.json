@@ -1,0 +1,135 @@
+{
+	"generatedAt": "2026-10-14T10:00:00.000Z",
+	"workerVersion": "0.9.3",
+	"boxes": [
+		{
+			"name": "box-1",
+			"version": "0.2.0",
+			"latest": null,
+			"image": "2.338.0+3f9a2c0b1d4e",
+			"lastSeen": "2026-10-14T10:00:00.000Z",
+			"secondsSinceSeen": 0,
+			"online": true,
+			"disk": {
+				"free": 26000000000,
+				"floor": 10000000000
+			},
+			"classes": [
+				{
+					"name": "boxrunner",
+					"priority": "normal",
+					"max": 1,
+					"running": 1,
+					"starting": 0,
+					"paused": false,
+					"limit": null
+				},
+				{
+					"name": "boxrunner-light",
+					"priority": "idle",
+					"max": 2,
+					"running": 0,
+					"starting": 1,
+					"paused": false,
+					"limit": null
+				}
+			],
+			"runners": [
+				{
+					"name": "box-1-boxrunner-3f9a2c",
+					"repo": "octo/site",
+					"class": "boxrunner",
+					"state": "running",
+					"since": "2026-10-14T09:55:00.000Z",
+					"seconds": 300
+				},
+				{
+					"name": "box-1-boxrunner-light-1b2c3d",
+					"repo": "octo/docs",
+					"class": "boxrunner-light",
+					"state": "starting",
+					"since": "2026-10-14T09:59:30.000Z",
+					"seconds": 30
+				}
+			]
+		}
+	],
+	"devices": [
+		{
+			"id": "device-id",
+			"name": "Dominik’s Mac",
+			"by": "octo",
+			"paired": "2026-10-14T10:00:00.000Z",
+			"lastSeen": "2026-10-14T10:00:00.000Z",
+			"secondsSinceSeen": 0
+		}
+	],
+	"waiting": [],
+	"jobs": [
+		{
+			"runner": "box-1-boxrunner-aaaaaa",
+			"repo": "octo/site",
+			"class": "boxrunner",
+			"name": "test",
+			"result": "succeeded",
+			"queued": "2026-10-14T09:50:00.000Z",
+			"started": "2026-10-14T09:50:20.000Z",
+			"finished": "2026-10-14T09:53:05.000Z",
+			"secondsSinceFinished": 415,
+			"waitSeconds": 20,
+			"durationSeconds": 165,
+			"minutes": 3,
+			"box": "box-1",
+			"cpuSeconds": 754.25,
+			"memoryPeak": 9812000768
+		}
+	],
+	"unserved": [],
+	"webhook": {
+		"lastDelivery": null,
+		"secondsSince": null
+	},
+	"totals": {
+		"today": {
+			"jobs": 1,
+			"minutes": 3,
+			"dollars": 0.02
+		},
+		"last30Days": {
+			"jobs": 1,
+			"minutes": 3,
+			"dollars": 0.02
+		}
+	},
+	"dollarsPerMinute": 0.006,
+	"repos": null,
+	"forkPullRequests": {},
+	"organization": null,
+	"classes": [
+		"boxrunner",
+		"boxrunner-light"
+	],
+	"classesProblem": null,
+	"paused": [],
+	"fallback": {
+		"minutes": null,
+		"configProblem": null,
+		"down": false,
+		"since": null,
+		"secondsSince": null,
+		"written": false,
+		"problem": null
+	},
+	"alerts": {
+		"host": null,
+		"minutes": null,
+		"configProblem": null,
+		"sentDown": false,
+		"problem": null
+	},
+	"device": {
+		"id": "device-id",
+		"name": "Dominik’s Mac",
+		"by": "octo"
+	}
+}

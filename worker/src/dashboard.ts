@@ -41,6 +41,8 @@ export type Dashboard = {
 		}[];
 		runners: { name: string; repo: string; class: string; state: RunnerState; since: string; seconds: number }[];
 	}[];
+	/** Devices paired to read this dashboard and set limits, such as a laptop's menu bar app. */
+	devices: { id: string; name: string; by: string; paired: string; lastSeen: string; secondsSinceSeen: number }[];
 	/** Scale sets whose assigned jobs have no runner requested, starting or running, as the boxes last reported them. */
 	waiting: { repo: string; class: string; box: string; since: string; seconds: number; overdue: boolean; cause: string | null }[];
 	jobs: {
@@ -179,6 +181,14 @@ export function dashboardData(box: Box, now: number): Dashboard {
 				})),
 			};
 		}),
+		devices: store.devices().map((d) => ({
+			id: d.id,
+			name: d.name,
+			by: d.by,
+			paired: iso(d.pairedAt),
+			lastSeen: iso(d.seenAt),
+			secondsSinceSeen: secondsBetween(d.seenAt, now),
+		})),
 		waiting: watch.waits.map((wait) => ({
 			repo: wait.repo,
 			class: wait.className,
@@ -489,6 +499,23 @@ function renderClasses({ classes, classesProblem, paused }: Dashboard, csrf: str
 <p class="hint">A paused class starts no new runners on any box. Its running jobs finish, and its new jobs wait at GitHub until you resume it. Boxes learn of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes.</p>`;
 }
 
+function renderDevices({ devices }: Dashboard, csrf: string) {
+	const unpair = (d: Dashboard['devices'][number]) => `<form method="post" action="/devices/unpair">
+<input type="hidden" name="csrf" value="${escape(csrf)}">
+<input type="hidden" name="id" value="${escape(d.id)}">
+<button type="submit" aria-label="Unpair ${escape(d.name)}">Unpair</button>
+</form>`;
+	return `<section aria-labelledby="devices">
+<h2 id="devices">Paired devices</h2>
+${table(
+	[{ title: 'Device' }, { title: 'Paired by' }, { title: 'Last seen' }, { title: 'Action' }],
+	devices.map((d) => [escape(d.name), escape(d.by), time(d.lastSeen, ago(d.secondsSinceSeen)), unpair(d)]),
+	'No device is paired.',
+)}
+<p class="hint">A paired device, such as the boxrunner menu bar app, reads what this page shows and sets limits, as the person who paired it. Pair one from the app; it opens a page here to approve.</p>
+</section>`;
+}
+
 /** "a", "a and b", "a, b and c". */
 const joined = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
@@ -541,7 +568,7 @@ export function renderLive(data: Dashboard, csrf: string): string {
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
 			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion, csrf)).join('\n');
-	return [boxes, renderWaiting(data), renderUnserved(data), renderJobs(data), renderTotals(data), renderServed(data, csrf)].filter(Boolean).join('\n');
+	return [boxes, renderWaiting(data), renderUnserved(data), renderJobs(data), renderTotals(data), renderServed(data, csrf), renderDevices(data, csrf)].filter(Boolean).join('\n');
 }
 
 /** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */

@@ -12,7 +12,9 @@ import {
 	type Heartbeat,
 	type JobEvent,
 	type Login,
+	type Device,
 	type Limit,
+	type Pairing,
 	type Pause,
 	type QueuedJob,
 	type ScaleSetId,
@@ -87,6 +89,21 @@ CREATE TABLE IF NOT EXISTS paused_classes (
 	class TEXT PRIMARY KEY,
 	since INTEGER NOT NULL,
 	by_login TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pairings (
+	code TEXT PRIMARY KEY,
+	secret_sha256 TEXT NOT NULL UNIQUE,
+	name TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	approved_by TEXT
+);
+CREATE TABLE IF NOT EXISTS devices (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	token_sha256 TEXT NOT NULL UNIQUE,
+	paired_at INTEGER NOT NULL,
+	by_login TEXT NOT NULL,
+	seen_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS box_limits (
 	box TEXT NOT NULL,
@@ -163,10 +180,10 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key, the pauses, the limits and the queued jobs from the webhook, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key, the pauses, the limits, the paired devices and the queued jobs from the webhook, so setup can run again. */
 	reset() {
 		this.sql.exec(
-			'DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes; DELETE FROM box_limits; DELETE FROM queued_jobs;',
+			'DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes; DELETE FROM box_limits; DELETE FROM pairings; DELETE FROM devices; DELETE FROM queued_jobs;',
 		);
 	}
 
@@ -202,6 +219,75 @@ export class Store {
 
 	resume(className: ClassName) {
 		this.sql.exec('DELETE FROM paused_classes WHERE class = ?', className);
+	}
+
+	/** Pairings older than `before` are gone; a new one past `most` waiting replaces nothing and is refused. */
+	startPairing(code: string, secretSha256: string, name: string, at: number, before: number, most: number): boolean {
+		this.sql.exec('DELETE FROM pairings WHERE created_at < ?', before);
+		const waiting = this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM pairings WHERE approved_by IS NULL').one().n;
+		if (waiting >= most) return false;
+		this.sql.exec('INSERT INTO pairings (code, secret_sha256, name, created_at) VALUES (?, ?, ?, ?)', code, secretSha256, name, at);
+		return true;
+	}
+
+	pairing(code: string, after: number): Pairing | undefined {
+		return this.sql
+			.exec<{ code: string; name: string; created_at: number; approved_by: string | null }>(
+				'SELECT code, name, created_at, approved_by FROM pairings WHERE code = ? AND created_at >= ?',
+				code,
+				after,
+			)
+			.toArray()
+			.map((row) => ({ code: row.code, name: row.name, createdAt: row.created_at, approvedBy: row.approved_by as Login | null }))[0];
+	}
+
+	approvePairing(code: string, by: Login) {
+		this.sql.exec('UPDATE pairings SET approved_by = ? WHERE code = ? AND approved_by IS NULL', by, code);
+	}
+
+	/** The pairing a secret started, found by the secret's hash. */
+	pairingBySecret(secretSha256: string, after: number): Pairing | undefined {
+		const code = this.sql
+			.exec<{ code: string }>('SELECT code FROM pairings WHERE secret_sha256 = ? AND created_at >= ?', secretSha256, after)
+			.toArray()[0]?.code;
+		return code === undefined ? undefined : this.pairing(code, after);
+	}
+
+	/** Turns an approved pairing into a device, once: the pairing is gone after. */
+	finishPairing(code: string, id: string, tokenSha256: string, at: number) {
+		const pairing = this.pairing(code, 0);
+		if (!pairing?.approvedBy) return;
+		this.sql.exec('DELETE FROM pairings WHERE code = ?', code);
+		this.sql.exec(
+			'INSERT INTO devices (id, name, token_sha256, paired_at, by_login, seen_at) VALUES (?, ?, ?, ?, ?, ?)',
+			id,
+			pairing.name,
+			tokenSha256,
+			at,
+			pairing.approvedBy,
+			at,
+		);
+	}
+
+	devices(): Device[] {
+		return this.sql
+			.exec<{ id: string; name: string; paired_at: number; by_login: string; seen_at: number }>(
+				'SELECT id, name, paired_at, by_login, seen_at FROM devices ORDER BY paired_at',
+			)
+			.toArray()
+			.map((row) => ({ id: row.id, name: row.name, pairedAt: row.paired_at, by: row.by_login as Login, seenAt: row.seen_at }));
+	}
+
+	/** The device a token belongs to, which counts as it being seen. */
+	deviceByToken(tokenSha256: string, at: number): Device | undefined {
+		const id = this.sql.exec<{ id: string }>('SELECT id FROM devices WHERE token_sha256 = ?', tokenSha256).toArray()[0]?.id;
+		if (id === undefined) return undefined;
+		this.sql.exec('UPDATE devices SET seen_at = ? WHERE id = ?', at, id);
+		return this.devices().find((d) => d.id === id);
+	}
+
+	unpair(id: string) {
+		this.sql.exec('DELETE FROM devices WHERE id = ?', id);
 	}
 
 	limits(): Limit[] {
