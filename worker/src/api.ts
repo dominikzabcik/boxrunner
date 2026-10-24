@@ -155,6 +155,7 @@ function dispatch(context: Context, route: ApiRoute): Promise<Response> {
 /**
  * The answer names the paused classes, so an agent learns of a pause within one heartbeat instead of at its next `GET /v1/repos`.
  * While two or more boxes serve one of the box's classes, it also carries the box's share of each of that class's scale sets.
+ * `limits` caps the box's classes as set for it on the dashboard.
  */
 async function heartbeat(context: Context) {
 	const parsed = parseHeartbeat(await body(context.request));
@@ -163,8 +164,10 @@ async function heartbeat(context: Context) {
 	await onHeartbeat(context.box, parsed.heartbeat, now);
 	context.box.store.saveHeartbeat(parsed.heartbeat, now);
 	const { paused } = splitPaused(context.classes, context.box.store.pauses());
-	const fleet = shares(context.box.store.boxes(), new Set(paused), now).get(parsed.heartbeat.box);
-	return json({ paused, ...(fleet === undefined ? {} : { fleet: fleet.map(({ repo, className, jobs, repos }) => ({ repo, class: className, jobs, repos })) }) });
+	const all = context.box.store.limits();
+	const limits = Object.fromEntries(all.filter((l) => l.box === parsed.heartbeat.box).map((l) => [l.className, l.max]));
+	const fleet = shares(context.box.store.boxes(), new Set(paused), all, now).get(parsed.heartbeat.box);
+	return json({ paused, limits, ...(fleet === undefined ? {} : { fleet: fleet.map(({ repo, className, jobs, repos }) => ({ repo, class: className, jobs, repos })) }) });
 }
 
 /**

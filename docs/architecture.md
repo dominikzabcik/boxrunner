@@ -199,6 +199,7 @@ The Worker runs on Cloudflare's free plan. Its state lives in one SQLite-backed 
 - which box opened or last refreshed each scale set's session, until that box closes it
 - with `ORG`, the organization's account and installation, its runner group's id and why the Worker serves none of its repositories, as the last repository list found them
 - the classes paused on the dashboard, with who paused each and when
+- the limits set on the dashboard for a class on one box, with who set each and when
 - cached tokens: the App JWT for nine minutes, admin tokens for nine minutes, the repository list for a minute, single-flight so concurrent calls derive them once
 - each served repository's fork pull request settings, read at most once an hour
 - what the box reports in its heartbeats, for the [dashboard](dashboard.md)

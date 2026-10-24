@@ -30,7 +30,7 @@ describe('POST /classes/pause and /classes/resume', () => {
 		expect(paused.headers.get('location')).toBe('/#classes');
 
 		expect(await served(token)).toEqual({ classes: ['boxrunner'], paused: ['boxrunner-light'] });
-		expect(await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()).toEqual({ paused: ['boxrunner-light'] });
+		expect(await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()).toEqual({ paused: ['boxrunner-light'], limits: {} });
 
 		time('2026-10-14T10:05:00Z');
 		await post('/classes/pause', { class: 'boxrunner-light' });
@@ -47,7 +47,7 @@ describe('POST /classes/pause and /classes/resume', () => {
 		const resumed = await post('/classes/resume', { class: 'boxrunner-light' });
 		expect(resumed.status).toBe(303);
 		expect(await served(token)).toEqual({ classes: ['boxrunner', 'boxrunner-light'], paused: [] });
-		expect(await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()).toEqual({ paused: [] });
+		expect(await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()).toEqual({ paused: [], limits: {} });
 	});
 
 	it('change nothing without a session, without the CSRF token or for a class the Worker does not serve', async () => {
@@ -73,6 +73,50 @@ describe('POST /classes/pause and /classes/resume', () => {
 		await post('/classes/pause', { class: 'boxrunner' });
 		await postForm('/setup/reset', { secret: setupSecret });
 		expect(await served(await setUp(github))).toEqual({ classes: ['boxrunner', 'boxrunner-light'], paused: [] });
+	});
+});
+
+describe('POST /boxes/limit', () => {
+	it('caps a class on one box until the field is left empty, and the dashboard says who set it', async () => {
+		const { token, view, post } = await ready();
+		const beat = async () => (await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()) as { limits: Record<string, number> };
+		await beat();
+		const set = await post('/boxes/limit', { box: 'box-1', class: 'boxrunner-light', max: '0' });
+		expect(set.status).toBe(303);
+		expect(set.headers.get('location')).toBe('/#box-0');
+		expect((await beat()).limits).toEqual({ 'boxrunner-light': 0 });
+		expect(((await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody({ box: 'box-2' }))).json()) as { limits: object }).limits).toEqual({});
+
+		time('2026-10-14T10:05:00Z');
+		const html = await (await view()).text();
+		expect(html).toContain(
+			'<td><p>0 by octo, <time datetime="2026-10-14T10:00:00.000Z">5 minutes ago</time></p><form method="post" action="/boxes/limit" class="inline">',
+		);
+		expect(html).toContain('<input type="number" name="max" min="0" max="2" value="0" aria-label="Limit for boxrunner-light on box-1">');
+		const json = (await (await view('/dashboard.json')).json()) as { boxes: { classes: { name: string; limit: unknown }[] }[] };
+		expect(json.boxes[0]!.classes.find((c) => c.name === 'boxrunner-light')!.limit).toEqual({ max: 0, by: 'octo', since: '2026-10-14T10:00:00.000Z', seconds: 300 });
+
+		await post('/boxes/limit', { box: 'box-1', class: 'boxrunner-light', max: '' });
+		expect((await beat()).limits).toEqual({});
+	});
+
+	it('changes nothing for a box or class nobody reported, or a limit outside 0 to the max', async () => {
+		const { token, post } = await ready();
+		await agent(token)('POST', '/v1/heartbeat', heartbeatBody());
+		for (const fields of [
+			{ box: 'box-9', class: 'boxrunner', max: '0' },
+			{ box: 'box-1', class: 'gpu', max: '0' },
+		]) {
+			const unknown = await post('/boxes/limit', fields);
+			expect(unknown.status).toBe(400);
+			expect(await unknown.text()).toContain('<h1>No such class on that box</h1>');
+		}
+		for (const max of ['2', '-1', '0.5', 'one']) {
+			const wrong = await post('/boxes/limit', { box: 'box-1', class: 'boxrunner', max });
+			expect(wrong.status).toBe(400);
+			expect(await wrong.text()).toContain('A limit is a whole number from 0 to 1');
+		}
+		expect(((await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()) as { limits: object }).limits).toEqual({});
 	});
 });
 

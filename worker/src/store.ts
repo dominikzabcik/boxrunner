@@ -12,6 +12,7 @@ import {
 	type Heartbeat,
 	type JobEvent,
 	type Login,
+	type Limit,
 	type Pause,
 	type QueuedJob,
 	type ScaleSetId,
@@ -87,6 +88,14 @@ CREATE TABLE IF NOT EXISTS paused_classes (
 	since INTEGER NOT NULL,
 	by_login TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS box_limits (
+	box TEXT NOT NULL,
+	class TEXT NOT NULL,
+	max INTEGER NOT NULL,
+	since INTEGER NOT NULL,
+	by_login TEXT NOT NULL,
+	PRIMARY KEY (box, class)
+);
 `;
 
 export type StoredBox = { status: BoxStatus; seenAt: number };
@@ -154,10 +163,10 @@ export class Store {
 		);
 	}
 
-	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key, the pauses and the queued jobs from the webhook, so setup can run again. */
+	/** Forgets the App, the box token, the scale sets and who holds their sessions, every cached token, the session key, the pauses, the limits and the queued jobs from the webhook, so setup can run again. */
 	reset() {
 		this.sql.exec(
-			'DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes; DELETE FROM queued_jobs;',
+			'DELETE FROM app; DELETE FROM repo_scale_sets; DELETE FROM session_holders; DELETE FROM cache; DELETE FROM keys; DELETE FROM paused_classes; DELETE FROM box_limits; DELETE FROM queued_jobs;',
 		);
 	}
 
@@ -193,6 +202,22 @@ export class Store {
 
 	resume(className: ClassName) {
 		this.sql.exec('DELETE FROM paused_classes WHERE class = ?', className);
+	}
+
+	limits(): Limit[] {
+		return this.sql
+			.exec<{ box: string; class: string; max: number; since: number; by_login: string }>('SELECT box, class, max, since, by_login FROM box_limits ORDER BY box, class')
+			.toArray()
+			.map((row) => ({ box: row.box as BoxName, className: row.class as ClassName, max: row.max, since: row.since, by: row.by_login as Login }));
+	}
+
+	/** Setting a class's limit again changes it, and who set it and when. */
+	limit(box: BoxName, className: ClassName, max: number, by: Login, at: number) {
+		this.sql.exec('INSERT OR REPLACE INTO box_limits (box, class, max, since, by_login) VALUES (?, ?, ?, ?, ?)', box, className, max, at, by);
+	}
+
+	unlimit(box: BoxName, className: ClassName) {
+		this.sql.exec('DELETE FROM box_limits WHERE box = ? AND class = ?', box, className);
 	}
 
 	scaleSet(repoId: number, className: ClassName): ScaleSetId | undefined {

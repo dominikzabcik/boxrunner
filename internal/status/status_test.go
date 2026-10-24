@@ -150,7 +150,7 @@ func TestPrint(t *testing.T) {
 	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", Worker: "0.1.0", Latest: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
-		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2}},
+		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2, Limit: new(0)}},
 		ScaleSets: []ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
 		Elsewhere: []Elsewhere{{Repo: "octo/docs", Class: "boxrunner", Box: "box-2"}},
 		Runners: []Runner{
@@ -174,7 +174,7 @@ If this box replaced one that died, jobs the old box had acquired stay queued: s
 
 CLASS            PRIORITY  RUNNERS  MAX
 boxrunner        normal    2        2
-boxrunner-light  idle      0        2
+boxrunner-light  idle      0        2, limit 0 on the dashboard
 
 REPOSITORY  CLASS      ASSIGNED JOBS
 octo/site   boxrunner  1

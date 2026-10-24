@@ -41,6 +41,7 @@ export async function handleWeb(box: Box, request: Request, route: WebRoute): Pr
 			case 'web.token':
 			case 'web.pause':
 			case 'web.resume':
+			case 'web.limit':
 				return await act(box, request, route.name, session, now);
 		}
 	} catch (error) {
@@ -167,11 +168,12 @@ async function logout(request: Request, session: Session | undefined) {
 }
 
 /** The dashboard's actions. Each is a form post carrying the session's CSRF token. */
-async function act(box: Box, request: Request, action: 'web.token' | 'web.pause' | 'web.resume', session: Session | undefined, now: number) {
+async function act(box: Box, request: Request, action: 'web.token' | 'web.pause' | 'web.resume' | 'web.limit', session: Session | undefined, now: number) {
 	if (!session) return messagePage(401, 'Sign in first', 'This browser is not signed in to the dashboard, so nothing changed.', { href: '/login', text: 'Sign in' });
 	const form = await formOf(request, session);
 	if (!form) return messagePage(403, 'This action did not come from your dashboard', 'Nothing changed. Use the buttons on the dashboard.', openDashboard);
 	if (action === 'web.token') return seeOther(`/box-token/${await box.replaceBoxToken('dashboard', now)}`);
+	if (action === 'web.limit') return limit(box, form, session, now);
 	const classes = box.classes();
 	const className = parse.className(form.get('class'));
 	if (!className || !classes.ok || !classes.classes.includes(className)) {
@@ -180,6 +182,26 @@ async function act(box: Box, request: Request, action: 'web.token' | 'web.pause'
 	if (action === 'web.pause') box.store.pause(className, session.login, now);
 	else box.store.resume(className);
 	return seeOther('/#classes');
+}
+
+/** Sets or, with an empty `max`, removes the limit of a class the box reports, from 0 up to the class's max there. */
+function limit(box: Box, form: FormData, session: Session, now: number) {
+	const name = parse.boxName(form.get('box'));
+	const boxes = box.store.boxes();
+	const index = boxes.findIndex((b) => b.status.box === name);
+	const status = boxes[index]?.status;
+	const className = parse.className(form.get('class'));
+	const c = status?.classes.find((c) => c.name === className);
+	if (!name || !className || !c) return messagePage(400, 'No such class on that box', 'The box has not reported that class, so nothing changed.', openDashboard);
+	const max = form.get('max');
+	if (max === '') {
+		box.store.unlimit(name, className);
+	} else if (typeof max === 'string' && /^\d+$/.test(max) && Number(max) <= c.max) {
+		box.store.limit(name, className, Number(max), session.login, now);
+	} else {
+		return messagePage(400, 'Not a limit', `A limit is a whole number from 0 to ${c.max}, the class’s max on the box. Nothing changed.`, openDashboard);
+	}
+	return seeOther(`/#box-${index}`);
 }
 
 async function showToken(box: Box, id: string, session: Session | undefined, now: number) {

@@ -1,6 +1,6 @@
 import type { Box } from './box';
 import { variable } from './fallback';
-import { dayOf, forkProblems, newer, type ForkPullRequests, type Priority, type Repo, type RunnerState } from './model';
+import { dayOf, forkProblems, newer, type ForkPullRequests, type Limit, type Priority, type Repo, type RunnerState } from './model';
 import { escape } from './page';
 import { retentionDays } from './store';
 import { slowAfterMs, unservedReason, type UnservedReason } from './unserved';
@@ -29,7 +29,16 @@ export type Dashboard = {
 		secondsSinceSeen: number;
 		online: boolean;
 		disk: { free: number; floor: number };
-		classes: { name: string; priority: Priority; max: number; running: number; starting: number; paused: boolean }[];
+		classes: {
+			name: string;
+			priority: Priority;
+			max: number;
+			running: number;
+			starting: number;
+			paused: boolean;
+			/** The cap set for the class on this box on the dashboard, or null. */
+			limit: { max: number; by: string; since: string; seconds: number } | null;
+		}[];
 		runners: { name: string; repo: string; class: string; state: RunnerState; since: string; seconds: number }[];
 	}[];
 	/** Scale sets whose assigned jobs have no runner requested, starting or running, as the boxes last reported them. */
@@ -131,6 +140,7 @@ export function dashboardData(box: Box, now: number): Dashboard {
 	// A box may report a class the Worker no longer serves; its wait still names the pause.
 	const pausedAnywhere = new Set(allPauses.map((pause) => pause.className));
 	const boxes = store.boxes();
+	const limits = store.limits();
 	const servedNow = box.served();
 	const delivered = store.lastDelivery();
 	return {
@@ -156,6 +166,7 @@ export function dashboardData(box: Box, now: number): Dashboard {
 						running: states.filter((state) => state === 'running').length,
 						starting: states.filter((state) => state === 'requested' || state === 'starting').length,
 						paused: paused.has(name),
+						limit: limitOf(limits.find((l) => l.box === status.box && l.className === name), now),
 					};
 				}),
 				runners: status.runners.map((runner) => ({
@@ -296,7 +307,23 @@ function versionWithLatest(version: string, latest: string | null) {
 	return `${escape(version)}, <span class="alert">${escape(latest)} is out</span> (<a href="${upgradingDocs}">upgrading</a>)`;
 }
 
-function renderBox(box: Dashboard['boxes'][number], index: number, workerVersion: string) {
+function limitOf(limit: Limit | undefined, now: number) {
+	return limit === undefined ? null : { max: limit.max, by: limit.by, since: iso(limit.since), seconds: secondsBetween(limit.since, now) };
+}
+
+/** A class's limit on a box, and the form that sets it or, left empty, removes it. */
+function limitForm(csrf: string, box: string, c: Dashboard['boxes'][number]['classes'][number]) {
+	const set = c.limit === null ? '' : `<p>${c.limit.max} by ${escape(c.limit.by)}, ${time(c.limit.since, ago(c.limit.seconds))}</p>`;
+	return `${set}<form method="post" action="/boxes/limit" class="inline">
+<input type="hidden" name="csrf" value="${escape(csrf)}">
+<input type="hidden" name="box" value="${escape(box)}">
+<input type="hidden" name="class" value="${escape(c.name)}">
+<input type="number" name="max" min="0" max="${c.max}" value="${c.limit?.max ?? ''}" aria-label="Limit for ${escape(c.name)} on ${escape(box)}">
+<button type="submit" aria-label="Set the limit for ${escape(c.name)} on ${escape(box)}">Set</button>
+</form>`;
+}
+
+function renderBox(box: Dashboard['boxes'][number], index: number, workerVersion: string, csrf: string) {
 	const seen = `last seen ${time(box.lastSeen, ago(box.secondsSinceSeen))}`;
 	const belowFloor = box.disk.free < box.disk.floor;
 	return `<section aria-labelledby="box-${index}">
@@ -310,10 +337,11 @@ ${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>
 </dl>
 <h3>Classes</h3>
 ${table(
-	[{ title: 'Class' }, { title: 'Priority' }, { title: 'Running', number: true }, { title: 'Starting', number: true }, { title: 'Max', number: true }],
-	box.classes.map((c) => [`${escape(c.name)}${c.paused ? ' (paused)' : ''}`, c.priority, String(c.running), String(c.starting), String(c.max)]),
+	[{ title: 'Class' }, { title: 'Priority' }, { title: 'Running', number: true }, { title: 'Starting', number: true }, { title: 'Max', number: true }, { title: 'Limit' }],
+	box.classes.map((c) => [`${escape(c.name)}${c.paused ? ' (paused)' : ''}`, c.priority, String(c.running), String(c.starting), String(c.max), limitForm(csrf, box.name, c)]),
 	'The box reported no classes.',
 )}
+${box.classes.length === 0 ? '' : '<p class="hint">A limit caps a class on this box below its max, and 0 stops it taking jobs. Runners waiting for a job over the limit go, running jobs finish. The box learns of it within 30 seconds; leave the field empty to remove the limit.</p>'}
 <h3>Runners</h3>
 ${table(
 	[{ title: 'Runner' }, { title: 'Repository' }, { title: 'Class' }, { title: 'State' }, { title: 'For', number: true }],
@@ -512,7 +540,7 @@ export function renderLive(data: Dashboard, csrf: string): string {
 	const boxes =
 		data.boxes.length === 0
 			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
-			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion)).join('\n');
+			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion, csrf)).join('\n');
 	return [boxes, renderWaiting(data), renderUnserved(data), renderJobs(data), renderTotals(data), renderServed(data, csrf)].filter(Boolean).join('\n');
 }
 

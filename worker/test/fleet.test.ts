@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agent, fakeGitHub, heartbeatBody, setUp, time } from './harness';
+import { agent, fakeGitHub, heartbeatBody, postForm, send, setUp, signIn, time } from './harness';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -25,14 +25,14 @@ const box = (name: string, overrides: Record<string, unknown> = {}) =>
 async function beat(call: ReturnType<typeof agent>, body: Record<string, unknown>) {
 	const response = await call('POST', '/v1/heartbeat', body);
 	expect(response.status).toBe(200);
-	return (await response.json()) as { paused: string[]; fleet?: { repo: string; class: string; jobs: number; repos: string[] }[] };
+	return (await response.json()) as { paused: string[]; limits: Record<string, number>; fleet?: { repo: string; class: string; jobs: number; repos: string[] }[] };
 }
 
 describe('fleet shares', () => {
 	it('sends no share while one box serves a class', async () => {
 		const call = await ready();
 		const reply = await beat(call, box('vm', { scaleSets: [{ repo: 'octo/site', class: 'boxrunner', assigned: 3 }] }));
-		expect(reply).toEqual({ paused: [] });
+		expect(reply).toEqual({ paused: [], limits: {} });
 	});
 
 	it('gives the jobs the session holder cannot run to the next box by rank', async () => {
@@ -78,6 +78,21 @@ describe('fleet shares', () => {
 		const call = await ready();
 		await beat(call, box('vm', { runners: [runner('vm', 1, 'running', 'octo'), runner('vm', 2, 'running', 'octo')], scaleSets: [{ repo: 'octo', class: 'boxrunner', assigned: 3, pending: ['octo/site'] }] }));
 		expect((await beat(call, box('mac', { rank: 10 }))).fleet).toEqual([{ repo: 'octo', class: 'boxrunner', jobs: 1, repos: ['octo/site'] }]);
+	});
+
+	it('gives a box no more than the limit set for it on the dashboard', async () => {
+		time('2026-10-14T10:00:00Z');
+		const github = await fakeGitHub();
+		const token = await setUp(github);
+		const { cookie } = await signIn(github);
+		const call = agent(token);
+		await beat(call, box('mac', { rank: 10 }));
+		const csrf = /name="csrf" value="([^"]+)"/.exec(await (await send('/', { headers: { cookie: cookie! } })).text())![1]!;
+		expect((await postForm('/boxes/limit', { csrf, box: 'mac', class: 'boxrunner', max: '1' }, { cookie: cookie! })).status).toBe(303);
+		await beat(call, box('vm', { runners: [runner('vm', 1), runner('vm', 2)], scaleSets: [{ repo: 'octo/site', class: 'boxrunner', assigned: 5 }] }));
+		const mac = await beat(call, box('mac', { rank: 10 }));
+		expect(mac.limits).toEqual({ boxrunner: 1 });
+		expect(mac.fleet).toEqual([{ repo: 'octo/site', class: 'boxrunner', jobs: 1, repos: [] }]);
 	});
 
 	it('tells a draining box its share is 0, so it drops what an earlier answer gave it', async () => {

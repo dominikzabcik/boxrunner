@@ -1,4 +1,4 @@
-import { heartbeatGapMs, type BoxName, type BoxStatus, type ClassName, type RepoName } from './model';
+import { heartbeatGapMs, type BoxName, type BoxStatus, type ClassName, type Limit, type RepoName } from './model';
 import type { StoredBox } from './store';
 
 /**
@@ -20,7 +20,7 @@ const holding = new Set(['requested', 'starting', 'running']);
  * split from the same heartbeats. A class served by one box gets no shares, and
  * that box decides alone, as it always has.
  */
-export function shares(boxes: readonly StoredBox[], paused: ReadonlySet<ClassName>, now: number): Map<BoxName, Share[]> {
+export function shares(boxes: readonly StoredBox[], paused: ReadonlySet<ClassName>, limits: readonly Limit[], now: number): Map<BoxName, Share[]> {
 	const fresh = boxes
 		.filter((b) => now - b.seenAt <= heartbeatGapMs)
 		.map((b) => b.status)
@@ -30,7 +30,7 @@ export function shares(boxes: readonly StoredBox[], paused: ReadonlySet<ClassNam
 	for (const className of [...classes].sort()) {
 		const servers = fresh.filter((b) => b.classes.some((c) => c.name === className));
 		if (servers.length < 2) continue;
-		const room = new Map(servers.map((b) => [b.box, paused.has(className) ? 0 : free(b, className, now)]));
+		const room = new Map(servers.map((b) => [b.box, paused.has(className) ? 0 : free(b, className, limits, now)]));
 		for (const { repo, assigned, pending } of scaleSets(servers, className)) {
 			const held = new Map(servers.map((b) => [b.box, b.runners.filter((r) => r.className === className && r.repo === repo && holding.has(r.state)).length]));
 			let waiting = Math.max(0, assigned - [...held.values()].reduce((a, b) => a + b, 0));
@@ -47,12 +47,13 @@ export function shares(boxes: readonly StoredBox[], paused: ReadonlySet<ClassNam
 	return out;
 }
 
-/** The runners a box may still start for a class: none while it drains, holds the class's starts or lacks disk. */
-function free(b: BoxStatus, className: ClassName, now: number): number {
+/** The runners a box may still start for a class, up to its max or the dashboard's lower limit: none while it drains, holds the class's starts or lacks disk. */
+function free(b: BoxStatus, className: ClassName, limits: readonly Limit[], now: number): number {
 	const c = b.classes.find((c) => c.name === className);
 	if (c === undefined || b.draining || b.disk.free < b.disk.floor || (c.heldUntil !== null && c.heldUntil > now)) return 0;
 	const active = b.runners.filter((r) => r.className === className && r.state !== 'exited').length;
-	return Math.max(0, c.max - active);
+	const limit = limits.find((l) => l.box === b.box && l.className === className);
+	return Math.max(0, Math.min(c.max, limit?.max ?? c.max) - active);
 }
 
 /** Each scale set of the class as the box holding its session reports it: the one with the most assigned jobs. */

@@ -306,6 +306,9 @@ type HeartbeatReply struct {
 	// serves too; nil while no class of the box has one, and from a Worker
 	// from before fleets.
 	Fleet *[]FleetShare `json:"fleet"`
+	// Limits caps classes on this box below their max, as set for the box on
+	// the dashboard; empty from a Worker from before limits.
+	Limits map[string]int `json:"limits"`
 }
 
 // FleetShare is how many of a scale set's jobs the box's runners should

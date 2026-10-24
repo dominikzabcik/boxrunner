@@ -300,6 +300,8 @@ type fakeGitHub struct {
 	// fleet, when set, is the JSON the heartbeat's answer carries as the box's
 	// fleet shares.
 	fleet string
+	// limits is the raw JSON of the limits the heartbeat's answer sets.
+	limits string
 	// runner is the runner's latest release, 2.338.0 when empty. list is
 	// runner-digests.json, which names digest338 for 2.338.0 when empty, and
 	// tags maps each tag to the digest the registry names, 2.338.0's to
@@ -430,6 +432,9 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			reply := map[string]any{"paused": append([]string{}, g.paused...)}
 			if g.fleet != "" {
 				reply["fleet"] = json.RawMessage(g.fleet)
+			}
+			if g.limits != "" {
+				reply["limits"] = json.RawMessage(g.limits)
 			}
 			json.NewEncoder(w).Encode(reply)
 			g.mu.Unlock()
@@ -1077,6 +1082,36 @@ func TestFleetShare(t *testing.T) {
 	if n := minted(); n != 1 {
 		t.Errorf("%d runners minted for a share of 1", n)
 	}
+}
+
+func TestDashboardLimit(t *testing.T) {
+	h := startAgent(t, map[string]*container{}, nil, func(_ *config.Class, h *harness) {
+		h.github.heldBy = "box-2"
+		h.github.fleet = `[{"repo":"octo/site","class":"boxrunner","jobs":1,"repos":[]}]`
+		h.github.limits = `{"boxrunner":0}`
+	})
+	defer h.stop(t)
+	waitFor(t, "the limit in the status", func() bool {
+		snap, err := status.Fetch(context.Background(), h.socket)
+		return err == nil && len(snap.Classes) == 1 && snap.Classes[0].Limit != nil && *snap.Classes[0].Limit == 0
+	})
+	time.Sleep(300 * time.Millisecond)
+	for _, c := range h.github.workerCalls() {
+		if strings.HasPrefix(c, "POST /v1/runners ") {
+			t.Fatalf("a runner was minted under a limit of 0: %s", c)
+		}
+	}
+	h.github.mu.Lock()
+	h.github.limits = `{}`
+	h.github.mu.Unlock()
+	waitFor(t, "a runner minted once the limit is gone", func() bool {
+		for _, c := range h.github.workerCalls() {
+			if strings.HasPrefix(c, "POST /v1/runners ") {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // systemd before 252 ignores CPUWeight=idle, so the agent sets the idle

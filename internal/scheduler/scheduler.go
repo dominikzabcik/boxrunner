@@ -167,6 +167,18 @@ type State struct {
 	// Draining starts no runner and removes every runner without a job, warm
 	// ones included; running jobs keep running.
 	Draining bool
+	// Limits caps a class's runners on this box below its max, as set for the
+	// box on the Worker's dashboard; 0 starts none.
+	Limits map[string]int
+}
+
+// max is how many runners of a class the box may have: its max, or the
+// dashboard's limit when that is lower.
+func (s State) max(class string) int {
+	if limit, ok := s.Limits[class]; ok {
+		return min(limit, s.Classes[class].Max)
+	}
+	return s.Classes[class].Max
 }
 
 func New(cfg config.Config) State {
@@ -218,6 +230,7 @@ func Decide(s State, now time.Time) []Action {
 	}
 	var actions []Action
 	warm := Warm(s)
+	over := overLimit(s)
 	removing := false
 	for _, r := range sortedRunners(s) {
 		maxDuration := s.Classes[r.ScaleSet.Class].MaxDuration
@@ -232,6 +245,8 @@ func Decide(s State, now time.Time) []Action {
 			actions = append(actions, Remove{Runner: r.Name, Deregister: !r.TookJob, Reason: "exited", Logs: logs})
 		case r.Phase == Starting && s.Draining:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "draining"})
+		case r.Phase == Starting && over[r.Name]:
+			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "over the limit set on the dashboard"})
 		case r.Phase == Starting && !warm[r.Name] && now.Sub(r.Since) >= IdleTimeout:
 			actions = append(actions, Remove{Runner: r.Name, Deregister: true, Reason: "took no job within 3 minutes"})
 		case r.Phase == Running && maxDuration > 0 && now.Sub(r.Since) >= maxDuration:
@@ -259,6 +274,28 @@ func Decide(s State, now time.Time) []Action {
 		actions = append(actions, Build{Version: img.Latest, Digest: img.LatestDigest})
 	}
 	return actions
+}
+
+// overLimit names the runners without a job to remove so that each class is
+// back within its limit, the newest first: running jobs keep running.
+func overLimit(s State) map[string]bool {
+	over := map[string]bool{}
+	for class := range s.Limits {
+		var active, idle []Runner
+		for _, r := range sortedRunners(s) {
+			if r.ScaleSet.Class == class && r.Phase != Exited {
+				active = append(active, r)
+				if r.Phase == Starting {
+					idle = append(idle, r)
+				}
+			}
+		}
+		slices.SortStableFunc(idle, func(a, b Runner) int { return b.Since.Compare(a.Since) })
+		for _, r := range idle[:min(len(idle), max(0, len(active)-s.max(class)))] {
+			over[r.Name] = true
+		}
+	}
+	return over
 }
 
 // served returns the scale sets the box starts runners for. With a fleet share,
@@ -309,7 +346,7 @@ func starts(s State, now time.Time) []Action {
 				held[r.ScaleSet]++
 			}
 		}
-		room := s.Classes[class].Max - active
+		room := s.max(class) - active
 		if backoff.holding() {
 			// After a hold, one runner at a time tries whether the class works again.
 			room = min(room, 1-pending)
@@ -474,6 +511,9 @@ type LatestRunner struct{ Version, Digest, Unlisted string }
 // Drain starts draining the box, or with On false stops.
 type Drain struct{ On bool }
 
+// Limits replaces the limits set for the box on the dashboard.
+type Limits struct{ Max map[string]int }
+
 func (Update) event()           {}
 func (ScaleSetGone) event()     {}
 func (Observed) event()         {}
@@ -489,6 +529,7 @@ func (BuildFailed) event()      {}
 func (LatestRunner) event()     {}
 func (Drain) event()            {}
 func (Fleet) event()            {}
+func (Limits) event()           {}
 
 // Apply returns the state after an event. It never changes s.
 func Apply(s State, e Event, now time.Time) State {
@@ -557,6 +598,8 @@ func Apply(s State, e Event, now time.Time) State {
 		}
 	case Fleet:
 		s.Fleet = maps.Clone(e.Shares)
+	case Limits:
+		s.Limits = maps.Clone(e.Max)
 	case Observed:
 		s.Observed = true
 		s.DiskFree = e.DiskFree
