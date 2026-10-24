@@ -55,7 +55,7 @@ describe('pairing a device', () => {
 		const fleet = (await (await call('/v1/fleet', undefined, device)).json()) as { boxes: { name: string }[]; device: { name: string } };
 		// The menu bar app decodes this answer; its test reads the same file.
 		const devices = (fleet as unknown as { devices: { id: string }[] }).devices.map((d) => ({ ...d, id: 'device-id' }));
-		expect({ ...fleet, devices, device: { ...fleet.device, id: 'device-id' } }).toEqual(fleetFixture);
+		expect({ ...fleet, workerVersion: 'worker-version', devices, device: { ...fleet.device, id: 'device-id' } }).toEqual(fleetFixture);
 		expect(fleet.boxes.map((b) => b.name)).toEqual(['box-1']);
 		expect(fleet.device.name).toBe('Dominik’s Mac');
 
