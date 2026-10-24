@@ -959,6 +959,9 @@ func TestDrainAndResume(t *testing.T) {
 		snap, _ := status.Fetch(context.Background(), h.socket)
 		return snap
 	}
+	// A message about a runner the agent has not observed yet changes nothing,
+	// and draining would then try to remove the busy runner.
+	waitFor(t, "the adopted runner", func() bool { return len(fetch().Runners) == 1 })
 	h.github.queue <- message(1, 1, `{"messageType":"JobStarted","runnerRequestId":501,"runnerId":40,"runnerName":"box-1-boxrunner-aaaaaa"}`)
 	waitFor(t, "a warm runner beside the job", func() bool { return len(h.docker.snapshot()) == 2 })
 	if err := status.Drain(context.Background(), h.socket, true); err != nil {
