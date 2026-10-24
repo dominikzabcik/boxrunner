@@ -1,41 +1,55 @@
 import { sha256Base64 } from './crypto';
 import { favicon } from './favicon';
 
+// One dark, monospaced look in the manner of a terminal UI, shared with the menu bar app.
 const style = `
-:root { color-scheme: light dark; --bg: #fff; --fg: #1a1a1a; --muted: #555; --line: #c8c8c8; --accent: #0b57d0; --alert: #b3261e; }
-@media (prefers-color-scheme: dark) { :root { --bg: #141414; --fg: #ececec; --muted: #a8a8a8; --line: #444; --accent: #8ab4f8; --alert: #f2b8b5; } }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
-main { max-width: 40rem; margin: 0 auto; padding: 2rem 1rem; }
-main.wide, header { max-width: 72rem; }
-header { margin: 0 auto; padding: 1rem 1rem 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; justify-content: space-between; }
-header form { display: flex; gap: 0.75rem; align-items: center; }
-header button { margin-top: 0; }
-h1 { font-size: 1.6rem; line-height: 1.2; }
-h2 { font-size: 1.1rem; margin-top: 2rem; }
-h3 { font-size: 1rem; margin: 1.25rem 0 0; }
-p, label { max-width: 36rem; }
-.hint { color: var(--muted); font-size: 0.9rem; margin-top: 0.25rem; }
+:root { color-scheme: dark; --bg: #0a0a0a; --panel: #141414; --line: #262626; --fg: #eeeeee; --muted: #808080; --faint: #4a4a4a; --accent: #fab283; --link: #5c9cf5; --ok: #7fd88f; --alert: #e06c75; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; -webkit-font-smoothing: antialiased; }
+::selection { background: var(--accent); color: var(--bg); }
+main { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+main.wide, header { max-width: 76rem; }
+header { position: sticky; top: 0; z-index: 1; margin: 0 auto; padding: 0.6rem 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; justify-content: space-between; background: var(--bg); border-bottom: 1px solid var(--line); }
+header p { margin: 0; }
+header strong::after { content: "_"; color: var(--accent); }
+header form { display: flex; gap: 0.75rem; align-items: center; color: var(--muted); }
+header button { margin-top: 0; color: var(--fg); background: transparent; border: 1px solid var(--line); font-weight: 400; }
+header button:hover { border-color: var(--muted); background: transparent; }
+h1 { font-size: 1.35rem; line-height: 1.3; margin: 0 0 0.25rem; }
+h1::before { content: "❯ "; color: var(--accent); }
+h2 { font-size: 0.95rem; margin: 2.75rem 0 0.75rem; padding: 0.15rem 0 0.15rem 0.75rem; border-left: 2px solid var(--accent); }
+h3 { display: flex; gap: 0.75rem; align-items: center; font-size: 0.75rem; font-weight: 500; color: var(--muted); text-transform: lowercase; margin: 1.75rem 0 0.25rem; }
+h3::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+p, label { max-width: 40rem; }
+.hint { color: var(--muted); font-size: 0.8rem; margin-top: 0.4rem; }
 label { display: block; font-weight: 600; margin-top: 1.25rem; }
-input { display: block; width: 100%; box-sizing: border-box; margin-top: 0.25rem; padding: 0.5rem; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 4px; }
-input[type=checkbox] { display: inline; width: auto; margin: 0 0.5rem 0 0; }
-button, .button { display: inline-block; margin-top: 1.5rem; padding: 0.6rem 1rem; font: inherit; font-weight: 600; color: var(--bg); background: var(--fg); border: 0; border-radius: 4px; cursor: pointer; text-decoration: none; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-a { color: var(--accent); }
-pre, code { font-family: ui-monospace, monospace; font-size: 0.9rem; }
-pre { padding: 0.75rem; border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+input { display: block; width: 100%; margin-top: 0.35rem; padding: 0.45rem 0.6rem; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 0; }
+input:focus { outline: none; border-color: var(--accent); }
+input[type=checkbox] { display: inline; width: auto; margin: 0 0.5rem 0 0; accent-color: var(--accent); }
+button, .button { display: inline-block; margin-top: 1.5rem; padding: 0.4rem 0.9rem; font: inherit; font-weight: 600; color: var(--bg); background: var(--accent); border: 1px solid var(--accent); border-radius: 0; cursor: pointer; text-decoration: none; }
+button:hover, .button:hover { background: #fcc9a5; }
+:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+a { color: var(--link); text-underline-offset: 3px; }
+a:hover { color: var(--fg); }
+pre, code { font: inherit; }
+code { color: var(--accent); }
+pre { padding: 0.75rem 1rem; background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--faint); white-space: pre-wrap; word-break: break-all; }
+pre code { color: var(--fg); }
 [role=alert], .alert { color: var(--alert); font-weight: 600; }
-table { width: 100%; min-width: max-content; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9rem; }
+[role=alert]::before { content: "error "; }
+table { width: 100%; min-width: max-content; border-collapse: collapse; margin-top: 0.25rem; font-size: 0.85rem; }
 .scroll { overflow-x: auto; }
-th, td { text-align: left; padding: 0.4rem 1rem 0.4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th, td { text-align: left; padding: 0.4rem 1.25rem 0.4rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:hover td { background: var(--panel); }
 th:last-child, td:last-child { padding-right: 0; }
 td form { margin: 0; }
-td button { margin-top: 0; padding: 0.25rem 0.75rem; }
-.code code { font-size: 2rem; letter-spacing: 0.15em; }
+td button { margin-top: 0; padding: 0.15rem 0.6rem; }
+.code code { display: block; padding: 1.25rem 0; font-size: 2.5rem; font-weight: 700; letter-spacing: 0.2em; text-align: center; color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--accent); }
 form.inline { display: flex; gap: 0.5rem; align-items: center; }
-form.inline input[type=number] { width: 4.5rem; margin-top: 0; padding: 0.25rem 0.5rem; }
-th { color: var(--muted); font-weight: 600; }
+form.inline input[type=number] { width: 4.5rem; margin-top: 0; padding: 0.15rem 0.4rem; }
+th { color: var(--muted); font-weight: 500; text-transform: lowercase; }
 .number { text-align: right; font-variant-numeric: tabular-nums; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0 0; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 1.5rem; margin: 0.5rem 0 0; }
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
 `;
@@ -87,7 +101,7 @@ export async function page({ status, title, body, header, wide, script, formTarg
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex">
 <link rel="icon" href="${favicon}">
 ${next ? `<meta http-equiv="refresh" content="0; url=${escape(next)}">\n` : ''}<title>${escape(title)} · boxrunner</title>
