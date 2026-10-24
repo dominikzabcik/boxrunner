@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.4
 
 **Features**
 - A menu bar app for macOS shows the fleet: each box, its runners and limits, the waiting and the latest jobs. It pairs with the Worker the way a device pairs with a TV: it shows a code, you approve it on the dashboard, and it keeps a token of its own in the keychain. Its switch takes your Mac's box out of the fleet and back ([app](app/macos/README.md)). The Worker gains the pairing and `GET /v1/fleet`, `POST /v1/fleet/limit` for paired devices, and a **Paired devices** section with **Unpair** ([api](docs/api.md#paired-devices)).
