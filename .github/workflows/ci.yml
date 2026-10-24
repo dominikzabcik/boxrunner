@@ -54,6 +54,20 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
 
+  menubar:
+    name: Menu bar app
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/macos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: swift test
+      - run: ./build-app.sh
+
   site:
     name: Site
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}

@@ -253,6 +253,26 @@ With [fallback](fallback.md) or [alerts](alerts.md) on, the time a heartbeat arr
 
 The Worker keeps the latest heartbeat of each box with the time it arrived. It stores jobs by runner name, so a job sent in every heartbeat is stored once and a changed one replaces it. Jobs are kept for 30 days, and so is a box that stopped reporting. A heartbeat that repeats the previous one writes 2 rows in the Durable Object (*measured*); the free plan allows 100,000 a day.
 
+## Paired devices
+
+A device, such as the [menu bar app](../app/macos/README.md), pairs once and then reads the fleet with a token of its own. These calls take no `Boxrunner-Version` header and no box token.
+
+1. `POST /v1/pair` with `{ "name": "Dominik’s Mac" }` (1 to 64 printable characters) answers 201:
+
+   ```json
+   { "code": "K7QM-3XRA", "secret": "…", "url": "https://boxrunner.example.workers.dev/pair?code=K7QM-3XRA", "expiresIn": 600 }
+   ```
+
+   The device opens `url`. Someone signed in to the dashboard checks the code and presses **Pair**. A code works for 10 minutes, and at most 5 wait for approval at once (`429 rate_limited` above that).
+2. `POST /v1/pair/token` with `{ "secret": "…" }` answers `202 { "status": "pending" }` until then, and once approved `200` with `{ "token": "brd_…", "device": { "id", "name", "by" } }`, once only. An unknown or expired secret is `404 not_found`.
+
+With `Authorization: Bearer brd_…`:
+
+- `GET /v1/fleet` answers what `GET /dashboard.json` holds, without `html`, plus `device`.
+- `POST /v1/fleet/limit` with `{ "box": "mac-1", "class": "agent", "max": 0 }` sets a class's limit on a box as the dashboard's **Limit** field does; `"max": null` removes it. It answers the box's limits, `{ "limits": [{ "class": "agent", "max": 0 }] }`, or `400 bad_request` for a box or class nobody reported or a number outside 0 to the class's max.
+
+A device acts as the person who approved it, and stops working (`401 unauthorized`) once it is unpaired on the dashboard or that person may no longer open the dashboard. The Worker keeps only the token's SHA-256 hash.
+
 ## `POST /webhook`
 
 GitHub's webhook deliveries for the App, when [unserved jobs](unserved-jobs.md) are on. The agent never calls it, and it follows GitHub's conventions instead of the ones above: no box token, no `Boxrunner-Version` and no budget, since a delivery without the right signature changes nothing. Its answers carry the same headers and error shape.

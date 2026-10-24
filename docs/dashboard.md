@@ -53,6 +53,10 @@ The **Limit** field next to each class in a box's section caps how many runners 
 
 The Worker sends the box its limits in the answer to every heartbeat, so the box applies a change within 30 seconds. Runners waiting for a job over the limit are removed, newest first, and running jobs finish. The Worker also counts the limit when it splits a fleet's jobs, so another box gets what the limited one no longer takes. Limits stay across restarts of the Worker; a restarted agent applies them with its first heartbeat. `boxrunner status` shows a class's limit next to its max. An agent from before limits ignores them.
 
+### Pairing a device
+
+A device such as the [menu bar app](../app/macos/README.md) asks to pair and opens a page here with a code. Check that the device shows the same code, then press **Pair**. The device then reads this page's data and sets limits, as you. **Paired devices** at the bottom lists each with who paired it and when it was last seen; **Unpair** stops its token at once ([api.md](api.md#paired-devices)).
+
 ### Replacing the box token
 
 **Replace the box token** makes a new token and sends the browser to a page that shows it once, with the command that puts it on a box:

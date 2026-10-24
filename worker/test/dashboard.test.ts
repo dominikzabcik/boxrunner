@@ -172,6 +172,7 @@ describe('GET /dashboard.json', () => {
 					],
 				},
 			],
+			devices: [],
 			waiting: [],
 			jobs: [
 				{

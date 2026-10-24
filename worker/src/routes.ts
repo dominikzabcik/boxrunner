@@ -16,7 +16,10 @@ export type WebRoute =
 	| { name: 'web.showToken'; id: string }
 	| { name: 'web.pause' }
 	| { name: 'web.resume' }
-	| { name: 'web.limit' };
+	| { name: 'web.limit' }
+	| { name: 'web.pair' }
+	| { name: 'web.approvePair' }
+	| { name: 'web.unpair' };
 
 export type ApiRoute =
 	| { name: 'heartbeat' }
@@ -32,7 +35,9 @@ export type ApiRoute =
 /** GitHub's webhook deliveries for the App. */
 export type WebhookRoute = { name: 'webhook' };
 
-export type Route = SetupRoute | WebRoute | ApiRoute | WebhookRoute;
+export type DeviceRoute = { name: 'device.pair' } | { name: 'device.token' } | { name: 'device.fleet' } | { name: 'device.limit' };
+
+export type Route = SetupRoute | WebRoute | ApiRoute | WebhookRoute | DeviceRoute;
 
 const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) => Route]> = [
 	['GET', /^\/setup$/, () => ({ name: 'setup.form' })],
@@ -51,6 +56,13 @@ const table: ReadonlyArray<[method: string, path: RegExp, route: (id: string) =>
 	['POST', /^\/classes\/pause$/, () => ({ name: 'web.pause' })],
 	['POST', /^\/classes\/resume$/, () => ({ name: 'web.resume' })],
 	['POST', /^\/boxes\/limit$/, () => ({ name: 'web.limit' })],
+	['GET', /^\/pair$/, () => ({ name: 'web.pair' })],
+	['POST', /^\/pair$/, () => ({ name: 'web.approvePair' })],
+	['POST', /^\/devices\/unpair$/, () => ({ name: 'web.unpair' })],
+	['POST', /^\/v1\/pair$/, () => ({ name: 'device.pair' })],
+	['POST', /^\/v1\/pair\/token$/, () => ({ name: 'device.token' })],
+	['GET', /^\/v1\/fleet$/, () => ({ name: 'device.fleet' })],
+	['POST', /^\/v1\/fleet\/limit$/, () => ({ name: 'device.limit' })],
 	['POST', /^\/webhook$/, () => ({ name: 'webhook' })],
 	['POST', /^\/v1\/heartbeat$/, () => ({ name: 'heartbeat' })],
 	['GET', /^\/v1\/repos$/, () => ({ name: 'repos' })],
@@ -84,3 +96,5 @@ export const isSetup = (route: Route): route is SetupRoute => route.name.startsW
 export const isWeb = (route: Route): route is WebRoute => route.name.startsWith('web.');
 
 export const isWebhook = (route: Route): route is WebhookRoute => route.name === 'webhook';
+
+export const isDevice = (route: Route): route is DeviceRoute => route.name.startsWith('device.');
