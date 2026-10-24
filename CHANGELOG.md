@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.5
+
+**Features**
+- The Worker's pages and the menu bar app share one look, in the manner of a terminal UI: dark, monospaced, with an accent bar for each section. The app pairs from its menu (the Worker's address, then the code to approve) and lists each action's key on its bottom line. Only the Worker changes on the server; the boxes need no upgrade.
+
+**Fixes**
+- `TestDrainAndResume` sends its job message once the agent sees the runner, so it no longer fails when the agent reads the session before listing its containers.
+
 ## v0.9.4
 
 **Features**
