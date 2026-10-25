@@ -24,14 +24,17 @@ The Worker uses `GITHUB_CLIENT_SECRET` only when setup did not keep a secret. It
 
 ## What it shows
 
-- **Each box.** Its name, the agent's and the Worker's release, each with the newer release when one is out, job image, or the one the agent is building, and free disk against the floor. "Online, last seen 12 seconds ago" while heartbeats arrive. "Offline, last seen 5 minutes ago" in red once the last one is more than two minutes old.
-- **Its classes.** Priority, how many runners are running and how many are starting (requested or starting), against `max`.
-- **Its runners.** Name, repository, class, state and for how long it has been in that state.
+The page is laid out like a terminal UI, in the menu bar app's look: dark, monospaced, each section a bordered block with its title in the top line. The fleet is on the left, what the Worker does on the right; below 72rem they stack in one column.
+
+- **The summary.** Runners running and starting on the boxes that are online, jobs waiting for a runner, boxes online, jobs today and what the last 30 days' minutes are worth.
+- **Each box.** A dot and a coloured edge say its state at a glance: blue while it runs a job, green while it takes jobs, yellow while it is switched off, grey while it is offline. Then its name, the agent's and the Worker's release, each with the newer release when one is out, job image, or the one the agent is building, and free disk against the floor. "Online, last seen 12 seconds ago" while heartbeats arrive. "Offline, last seen 5 minutes ago" in red once the last one is more than two minutes old.
+- **Its classes.** Priority, and one cell per runner the class may run: ■ runs a job, a dim ■ starts a runner (requested or starting), □ is free and · is held back by a limit, up to `max`.
+- **Its runners.** Repository, class, name, state and for how long it has been in that state.
 - **Jobs waiting for a runner.** Only while there are some: each repository and class with jobs assigned and no runner requested, starting or running, the box that reported it, how long it has waited (in red once it has waited long enough for an [alert](alerts.md#when-jobs-wait)) and the likely cause.
 - **Jobs nobody here runs.** With [unserved jobs](unserved-jobs.md) on, the jobs GitHub's webhook reported queued that no box here will run: their label or repository is one no box serves, or no box took them within 10 minutes. Unlike the section above, it sees jobs no box was ever assigned. Repository, job with a link to it, `runs-on`, why and how long it has waited. "Off" with a link to that page until GitHub's first webhook delivery arrives, then when the last one did.
-- **Recent jobs.** The last 30: repository, class, job, result, how long the job waited in the queue, how long it took and when it finished.
+- **Recent jobs.** The last 30: ✓ succeeded, ✗ failed or – cancelled, the job with its repository, class and box, how long the job waited in the queue, how long it took with its CPU time and peak memory when the box measured them, and when it finished.
 - **GitHub minutes not billed.** Jobs and minutes today (UTC) and in the last 30 days, each job rounded up to whole minutes as GitHub bills them. The dollar value uses $0.006 a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan's free allowance would not have cost money, so this is what the minutes are worth, not necessarily what you saved.
-- **What the Worker serves.** With `ORG` set, the organization and its runner group, or why the Worker serves none of its repositories ([config](config.md#organizations)). The repositories as the agent last fetched them with `GET /v1/repos`, and the Worker's `CLASSES`, each serving or paused, with who paused it and when. A paused class also reads "(paused)" in each box's classes. A repository whose fork pull requests run workflows without approval, with write tokens or with secrets gets a warning that names the settings to change ([api.md](api.md#get-v1repos)).
+- **What the Worker serves.** With `ORG` set, the organization and its runner group, or why the Worker serves none of its repositories ([config](config.md#organizations)). The repositories as the agent last fetched them with `GET /v1/repos`, and the Worker's `CLASSES`, each serving or paused, with who paused it and when. A paused class also reads "paused" in each box's classes. A repository whose fork pull requests run workflows without approval, with write tokens or with secrets gets a warning that names the settings to change ([api.md](api.md#get-v1repos)).
 - **Fallback to GitHub's runners.** Off, on and after how many minutes, or that the box is down and when the Worker switched. In red, why the Worker could not set or delete `BOXRUNNER_DOWN`, or why it cannot read `FALLBACK_MINUTES` ([fallback](fallback.md)).
 - **Alerts.** Off, or the webhook's host and after how many minutes without a heartbeat, or of jobs waiting, the Worker posts to it. In red, why the last post failed, or why it cannot read `ALERT_WEBHOOK` or `ALERT_MINUTES` ([alerts](alerts.md)).
 
@@ -43,19 +46,21 @@ Each action is a button that posts a form with the session's CSRF token, so it w
 
 ### Pausing a class
 
-**Pause** next to a class stops every box from starting new runners for it. Jobs that are running finish, and a runner that already started may still take a job. Every other job for the class waits at GitHub until someone presses **Resume**; the box then picks it up as it does after a restart. The pause is the Worker's, so it applies to every box, and it stays until someone resumes the class, across restarts of the box and the Worker. Pausing a paused class changes nothing; the page keeps who paused it first.
+The **ON | OFF** switch next to a class under What this Worker serves pauses it. A pause stops every box from starting new runners for it. Jobs that are running finish, and a runner that already started may still take a job. Every other job for the class waits at GitHub until someone switches it back on; the box then picks it up as it does after a restart. The pause is the Worker's, so it applies to every box, and it stays until someone resumes the class, across restarts of the box and the Worker. Pausing a paused class changes nothing; the page keeps who paused it first.
 
 The agent stops listening to the paused class's scale sets, which closes their sessions. The Worker names the paused classes in its answer to every heartbeat, so a box learns of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes, because `GET /v1/repos` leaves paused classes out of `classes` ([api.md](api.md#get-v1repos)); its log then says the class is not one of the Worker's.
 
 ### Limiting a class on one box
 
-The **Limit** field next to each class in a box's section caps how many runners of that class the box keeps, below the class's `max` in its config. 0 stops the box taking the class's jobs while the other boxes of a [fleet](config.md#one-class-on-several-boxes) go on; that is how to take a laptop out of the fleet for an afternoon without logging in to it. Leave the field empty and press **Set** to remove the limit. The page shows who set each limit and when.
+The **Limit** field next to each class in a box's section caps how many runners of that class the box keeps, below the class's `max` in its config. 0 stops the box taking the class's jobs while the other boxes of a [fleet](config.md#one-class-on-several-boxes) go on; that is how to take a laptop out of the fleet for an afternoon without logging in to it. Leave the field empty and press **set** to remove the limit. The page shows who set each limit and when.
+
+The **ON | OFF** switch in a box's block does this for every class on the box at once: OFF sets each class's limit to 0, ON removes the limits, as the menu bar app's switch does. A form to `POST /boxes/limit` without `class` is that switch.
 
 The Worker sends the box its limits in the answer to every heartbeat, so the box applies a change within 30 seconds. Runners waiting for a job over the limit are removed, newest first, and running jobs finish. The Worker also counts the limit when it splits a fleet's jobs, so another box gets what the limited one no longer takes. Limits stay across restarts of the Worker; a restarted agent applies them with its first heartbeat. `boxrunner status` shows a class's limit next to its max. An agent from before limits ignores them.
 
 ### Pairing a device
 
-A device such as the [menu bar app](../app/macos/README.md) asks to pair and opens a page here with a code. Check that the device shows the same code, then press **Pair**. The device then reads this page's data and sets limits, as you. **Paired devices** at the bottom lists each with who paired it and when it was last seen; **Unpair** stops its token at once ([api.md](api.md#paired-devices)).
+A device such as the [menu bar app](../app/macos/README.md) asks to pair and opens a page here with a code. Check that the device shows the same code, then press **Pair**. The device then reads this page's data and sets limits, as you. **Paired devices** lists each with who paired it and when it was last seen; **unpair** stops its token at once ([api.md](api.md#paired-devices)).
 
 ### Replacing the box token
 
@@ -101,6 +106,7 @@ Totals come from one row per day, so a refresh reads at most about 30 of them ho
 | `POST /logout` | Ends the session; needs the CSRF token |
 | `POST /classes/pause` | Pauses the class named by the form field `class`; needs a session and the CSRF token |
 | `POST /classes/resume` | Resumes the class named by `class`; needs a session and the CSRF token |
+| `POST /boxes/limit` | Sets the limit `max` (empty removes it) of the class `class` on the box `box`, or of every class on it without `class`; needs a session and the CSRF token |
 | `POST /box-token` | Replaces the box token and redirects to `/box-token/{id}`; needs a session and the CSRF token |
 | `GET /box-token/{id}` | Shows the new box token on the first view within a minute, then answers 410; needs a session |
 | `POST /webhook` | GitHub's webhook deliveries, checked by their signature ([api.md](api.md#post-webhook)) |

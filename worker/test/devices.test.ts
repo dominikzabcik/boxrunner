@@ -62,8 +62,8 @@ describe('pairing a device', () => {
 		const limited = await call('/v1/fleet/limit', { box: 'box-1', class: 'boxrunner', max: 0 }, device);
 		expect(await limited.json()).toEqual({ limits: [{ class: 'boxrunner', max: 0 }] });
 		const html = await (await view('/')).text();
-		expect(html).toContain('<td><p>0 by octo,');
-		expect(html).toContain('<tr><td>Dominik’s Mac</td><td>octo</td>');
+		expect(html).toContain('<small>0 by octo,');
+		expect(html).toContain('<tr><td>Dominik’s Mac<small>paired by octo</small></td>');
 		expect(((await (await call('/v1/fleet/limit', { box: 'box-1', class: 'boxrunner', max: null }, device)).json()) as { limits: unknown[] }).limits).toEqual([]);
 		expect((await call('/v1/fleet/limit', { box: 'box-1', class: 'boxrunner', max: 5 }, device)).status).toBe(400);
 

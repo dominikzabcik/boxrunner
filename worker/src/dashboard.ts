@@ -279,7 +279,10 @@ function duration(seconds: number) {
 const gigabytes = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 const dollars = (amount: number) => `$${amount.toFixed(2)}`;
 const time = (at: string, text: string) => `<time datetime="${at}">${escape(text)}</time>`;
+const hidden = (field: string, value: string) => `<input type="hidden" name="${field}" value="${escape(value)}">`;
 
+type BoxView = Dashboard['boxes'][number];
+type ClassView = BoxView['classes'][number];
 type Column = { title: string; number?: boolean };
 
 function table(columns: Column[], rows: string[][], empty: string) {
@@ -293,20 +296,55 @@ ${rows.map((row) => `<tr>${row.map((html, i) => cell(columns[i]!, html)).join(''
 </table></div>`;
 }
 
-function renderTotals({ totals: { today, last30Days } }: Dashboard) {
-	const row = (label: string, t: Totals) =>
-		`<tr><th scope="row">${label}</th><td class="number">${integer.format(t.jobs)}</td><td class="number">${integer.format(t.minutes)}</td><td class="number">${dollars(t.dollars)}</td></tr>`;
-	return `<section aria-labelledby="totals">
-<h2 id="totals">GitHub minutes not billed</h2>
-<div class="scroll"><table>
-<thead><tr><td></td><th scope="col" class="number">Jobs</th><th scope="col" class="number">Minutes</th><th scope="col" class="number">At GitHub’s price</th></tr></thead>
-<tbody>
-${row('Today (UTC)', today)}
-${row('Last 30 days', last30Days)}
-</tbody>
-</table></div>
-<p class="hint">Each job’s time is rounded up to whole minutes, as GitHub bills it, and valued at $${dollarsPerMinute} a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan’s free allowance would not have cost money.</p>
+/** A bordered block with its title set into the top line, as a terminal UI draws one; `edge` colours its left side. */
+function block(id: string, title: string, body: string, { edge, trail }: { edge?: Health | 'accent' | 'alert'; trail?: string } = {}) {
+	return `<section class="block"${edge ? ` data-edge="${edge}"` : ''} aria-labelledby="${id}">
+<h2 id="${id}">${title}</h2>${trail ? `\n<p class="trail">${trail}</p>` : ''}
+${body}
 </section>`;
+}
+
+/** A box at a glance: running jobs, taking jobs, switched off on the dashboard, or not reporting. */
+type Health = 'run' | 'ok' | 'warn' | 'off';
+const switchedOff = (box: BoxView) => box.classes.length > 0 && box.classes.every((c) => c.limit?.max === 0);
+const health = (box: BoxView): Health =>
+	!box.online ? 'off' : switchedOff(box) ? 'warn' : box.classes.some((c) => c.running > 0) ? 'run' : 'ok';
+const dot = (h: Health) => `<span class="dot ${h}" aria-hidden="true">●</span>`;
+
+/** One cell per runner the class may run: filled while a job runs, dim while a runner starts, empty while free, a dot past the limit. */
+function slots(c: ClassView) {
+	const allowed = Math.min(c.limit?.max ?? c.max, c.max);
+	const cells = Array.from({ length: Math.max(c.max, 1) }, (_, i) => {
+		if (i < c.running) return '<span class="run">■</span>';
+		if (i < c.running + c.starting) return '<span class="start">■</span>';
+		if (i < allowed) return '<span class="free">□</span>';
+		return '<span class="cap">·</span>';
+	});
+	const label = `${c.running} running, ${c.starting} starting, ${allowed} of ${c.max} allowed`;
+	return `<span class="slots" role="img" aria-label="${label}">${cells.join('')}</span>`;
+}
+
+/** ` ON | OFF `: posts the other state. */
+function toggle(on: boolean, label: string) {
+	return `<button type="submit" class="switch ${on ? 'on' : 'off'}" aria-label="${escape(label)}"><span>ON</span><span>OFF</span></button>`;
+}
+
+function renderSummary(data: Dashboard) {
+	const online = data.boxes.filter((b) => b.online);
+	const count = (pick: (c: ClassView) => number) => online.reduce((sum, b) => sum + b.classes.reduce((s, c) => s + pick(c), 0), 0);
+	const figure = (label: string, value: string, tint: string, zero: boolean) =>
+		`<div><dt>${label}</dt><dd class="${zero ? 'zero' : tint}">${value}</dd></div>`;
+	const running = count((c) => c.running);
+	const starting = count((c) => c.starting);
+	const { today, last30Days } = data.totals;
+	return `<dl class="summary">
+${figure('running', String(running), 'run', running === 0)}
+${figure('starting', String(starting), 'run', starting === 0)}
+${figure('waiting', String(data.waiting.length), 'warn', data.waiting.length === 0)}
+${figure('boxes online', `${online.length}/${data.boxes.length}`, online.length < data.boxes.length ? 'alert' : 'ok', data.boxes.length === 0)}
+${figure('jobs today', integer.format(today.jobs), '', today.jobs === 0)}
+${figure('saved in 30 days', dollars(last30Days.dollars), 'accent', last30Days.dollars === 0)}
+</dl>`;
 }
 
 const upgradingDocs = 'https://boxrunner.zabcik.me/docs/upgrading/';
@@ -322,23 +360,49 @@ function limitOf(limit: Limit | undefined, now: number) {
 }
 
 /** A class's limit on a box, and the form that sets it or, left empty, removes it. */
-function limitForm(csrf: string, box: string, c: Dashboard['boxes'][number]['classes'][number]) {
-	const set = c.limit === null ? '' : `<p>${c.limit.max} by ${escape(c.limit.by)}, ${time(c.limit.since, ago(c.limit.seconds))}</p>`;
-	return `${set}<form method="post" action="/boxes/limit" class="inline">
-<input type="hidden" name="csrf" value="${escape(csrf)}">
-<input type="hidden" name="box" value="${escape(box)}">
-<input type="hidden" name="class" value="${escape(c.name)}">
-<input type="number" name="max" min="0" max="${c.max}" value="${c.limit?.max ?? ''}" aria-label="Limit for ${escape(c.name)} on ${escape(box)}">
-<button type="submit" aria-label="Set the limit for ${escape(c.name)} on ${escape(box)}">Set</button>
+function limitForm(csrf: string, box: string, c: ClassView) {
+	const set = c.limit === null ? '' : `<small>${c.limit.max} by ${escape(c.limit.by)}, ${time(c.limit.since, ago(c.limit.seconds))}</small>`;
+	return `<form method="post" action="/boxes/limit" class="inline">
+${hidden('csrf', csrf)}
+${hidden('box', box)}
+${hidden('class', c.name)}
+<input type="number" name="max" min="0" max="${c.max}" value="${c.limit?.max ?? ''}" placeholder="${c.max}" aria-label="Limit for ${escape(c.name)} on ${escape(box)}">
+<button type="submit" class="ghost" aria-label="Set the limit for ${escape(c.name)} on ${escape(box)}">set</button>
+</form>${set}`;
+}
+
+/** Switches every class on the box off with a limit of 0, or back on by removing the limits, as the menu bar app does. */
+function boxSwitch(csrf: string, box: BoxView) {
+	if (box.classes.length === 0) return '';
+	const off = switchedOff(box);
+	return `<form method="post" action="/boxes/limit">
+${hidden('csrf', csrf)}
+${hidden('box', box.name)}
+${hidden('max', off ? '' : '0')}
+${toggle(!off, `${off ? 'Switch on' : 'Switch off'} ${box.name}`)}
 </form>`;
 }
 
-function renderBox(box: Dashboard['boxes'][number], index: number, workerVersion: string, csrf: string) {
+function renderRunners(box: BoxView) {
+	if (box.runners.length === 0) return '<p class="muted">No runners right now.</p>';
+	return `<ul class="tree">
+${box.runners
+	.map(
+		(r) =>
+			`<li><span class="faint" aria-hidden="true">└</span><span class="grow">${escape(r.repo)} <span class="muted">${escape(r.class)}</span><small>${escape(r.name)}</small></span><span class="state ${r.state}">${r.state}</span><span class="number">${duration(r.seconds)}</span></li>`,
+	)
+	.join('\n')}
+</ul>`;
+}
+
+function renderBox(box: BoxView, index: number, workerVersion: string, csrf: string) {
 	const seen = `last seen ${time(box.lastSeen, ago(box.secondsSinceSeen))}`;
 	const belowFloor = box.disk.free < box.disk.floor;
-	return `<section aria-labelledby="box-${index}">
-<h2 id="box-${index}">${escape(box.name)}</h2>
+	const h = health(box);
+	const body = `<div class="row">
 ${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>`}
+${boxSwitch(csrf, box)}
+</div>
 <dl>
 <dt>Agent</dt><dd>${versionWithLatest(box.version, box.latest)}</dd>
 <dt>Worker</dt><dd>${versionWithLatest(workerVersion, box.latest)}</dd>
@@ -347,70 +411,67 @@ ${box.online ? `<p>Online, ${seen}</p>` : `<p class="alert">Offline, ${seen}</p>
 </dl>
 <h3>Classes</h3>
 ${table(
-	[{ title: 'Class' }, { title: 'Priority' }, { title: 'Running', number: true }, { title: 'Starting', number: true }, { title: 'Max', number: true }, { title: 'Limit' }],
-	box.classes.map((c) => [`${escape(c.name)}${c.paused ? ' (paused)' : ''}`, c.priority, String(c.running), String(c.starting), String(c.max), limitForm(csrf, box.name, c)]),
+	[{ title: 'Class' }, { title: 'Slots' }, { title: 'Limit' }],
+	box.classes.map((c) => [
+		`${escape(c.name)}${c.paused ? ' <span class="warn">paused</span>' : ''}<small>${c.priority}</small>`,
+		slots(c),
+		limitForm(csrf, box.name, c),
+	]),
 	'The box reported no classes.',
 )}
-${box.classes.length === 0 ? '' : '<p class="hint">A limit caps a class on this box below its max, and 0 stops it taking jobs. Runners waiting for a job over the limit go, running jobs finish. The box learns of it within 30 seconds; leave the field empty to remove the limit.</p>'}
 <h3>Runners</h3>
-${table(
-	[{ title: 'Runner' }, { title: 'Repository' }, { title: 'Class' }, { title: 'State' }, { title: 'For', number: true }],
-	box.runners.map((r) => [escape(r.name), escape(r.repo), escape(r.class), r.state, duration(r.seconds)]),
-	'No runners right now.',
-)}
-</section>`;
+${renderRunners(box)}`;
+	return block(`box-${index}`, `${dot(h)}<span class="name">${escape(box.name)}</span>`, body, { edge: h, trail: `v${escape(box.version)}` });
 }
 
+function renderBoxes(data: Dashboard, csrf: string) {
+	if (data.boxes.length === 0) {
+		return block('no-box', 'Boxes', '<p>No box has reported yet. A running agent reports every 30 seconds.</p>', { edge: 'off' });
+	}
+	return `<div class="boxes">
+${data.boxes.map((box, index) => renderBox(box, index, data.workerVersion, csrf)).join('\n')}
+</div>
+<p class="hint">■ runs a job, dim ■ starts a runner, □ is free, · is held back by a limit. A limit caps a class on a box below its max, and 0 stops it taking jobs; ON | OFF sets every class on the box to 0 or removes the limits. Runners waiting for a job over the limit go, running jobs finish. A box learns of it within 30 seconds; leave the field empty to remove one limit.</p>`;
+}
+
+/** CPU time across all cores and the peak memory, under the job's duration, when its box measured them. */
+const usage = (job: Dashboard['jobs'][number]) =>
+	job.cpuSeconds === null && job.memoryPeak === null
+		? ''
+		: `<small>${job.cpuSeconds === null ? '' : `cpu ${duration(Math.round(job.cpuSeconds))}`}${job.cpuSeconds !== null && job.memoryPeak !== null ? ' · ' : ''}${job.memoryPeak === null ? '' : `${gigabytes(job.memoryPeak)} peak`}</small>`;
+
+const resultMark: Record<string, string> = { succeeded: '✓', failed: '✗', cancelled: '–' };
+
 function renderJobs({ jobs }: Dashboard) {
-	return `<section aria-labelledby="jobs">
-<h2 id="jobs">Recent jobs</h2>
-${table(
-	[
-		{ title: 'Repository' },
-		{ title: 'Class' },
-		{ title: 'Job' },
-		{ title: 'Box' },
-		{ title: 'Result' },
-		{ title: 'Waited', number: true },
-		{ title: 'Took', number: true },
-		{ title: 'CPU', number: true },
-		{ title: 'Peak memory', number: true },
-		{ title: 'Finished' },
-	],
-	jobs.map((job) => [
-		escape(job.repo),
-		escape(job.class),
-		escape(job.name),
-		job.box === null ? 'Unknown' : escape(job.box),
-		job.result === 'failed' ? `<span class="alert">${escape(job.result)}</span>` : escape(job.result),
-		job.started === null ? 'Never started' : job.waitSeconds === null ? 'Unknown' : duration(job.waitSeconds),
-		duration(job.durationSeconds),
-		job.cpuSeconds === null ? 'Unknown' : duration(Math.round(job.cpuSeconds)),
-		job.memoryPeak === null ? 'Unknown' : gigabytes(job.memoryPeak),
-		time(job.finished, ago(job.secondsSinceFinished)),
-	]),
-	'No finished jobs in the last 30 days.',
-)}
-</section>`;
+	const body = table(
+		[{ title: '' }, { title: 'Job' }, { title: 'Waited', number: true }, { title: 'Took', number: true }, { title: 'Finished' }],
+		jobs.map((job) => [
+			`<span class="result ${escape(job.result)}" aria-hidden="true">${resultMark[job.result] ?? '?'}</span><span class="sr">${escape(job.result)}</span>`,
+			`${escape(job.name)}<small>${[job.repo, job.class, job.box ?? 'unknown box'].map(escape).join(' · ')}</small>`,
+			job.started === null ? 'Never started' : job.waitSeconds === null ? 'Unknown' : duration(job.waitSeconds),
+			`${duration(job.durationSeconds)}${usage(job)}`,
+			time(job.finished, ago(job.secondsSinceFinished)),
+		]),
+		'No finished jobs in the last 30 days.',
+	);
+	return block('jobs', 'Recent jobs', body, { trail: String(jobs.length) });
 }
 
 function renderWaiting({ waiting }: Dashboard) {
 	if (waiting.length === 0) return '';
-	return `<section aria-labelledby="waiting">
-<h2 id="waiting">Jobs waiting for a runner</h2>
-${table(
-	[{ title: 'Repository' }, { title: 'Class' }, { title: 'Box' }, { title: 'Waiting', number: true }, { title: 'Likely cause' }],
-	waiting.map((wait) => [
-		escape(wait.repo),
-		escape(wait.class),
-		escape(wait.box),
-		wait.overdue ? `<span class="alert">${duration(wait.seconds)}</span>` : duration(wait.seconds),
-		wait.cause === null ? 'Unknown' : escape(wait.cause),
-	]),
-	'',
-)}
-<p class="hint">Jobs assigned to a box with no runner requested, starting or running for their repository and class. A box stops reporting a scale set while its class is paused, while the box drains or restarts, so a row stays until a box reports the scale set again.</p>
-</section>`;
+	const body = `${table(
+		[{ title: 'Repository' }, { title: 'Class' }, { title: 'Box' }, { title: 'Waiting', number: true }, { title: 'Likely cause' }],
+		waiting.map((wait) => [
+			escape(wait.repo),
+			escape(wait.class),
+			escape(wait.box),
+			wait.overdue ? `<span class="alert">${duration(wait.seconds)}</span>` : duration(wait.seconds),
+			wait.cause === null ? 'Unknown' : escape(wait.cause),
+		]),
+		'',
+	)}
+<p class="hint">Jobs assigned to a box with no runner requested, starting or running for their repository and class. A box stops reporting a scale set while its class is paused, while the box drains or restarts, so a row stays until a box reports the scale set again.</p>`;
+	return block('waiting', 'Jobs waiting for a runner', body, { edge: 'warn', trail: String(waiting.length) });
 }
 
 const unservedDocs = 'https://boxrunner.zabcik.me/docs/unserved-jobs/';
@@ -425,28 +486,45 @@ const why: Record<UnservedReason, string> = {
 };
 
 function renderUnserved({ unserved, webhook }: Dashboard) {
-	const heading = '<h2 id="unserved">Jobs nobody here runs</h2>';
+	const title = 'Jobs nobody here runs';
 	if (webhook.lastDelivery === null || webhook.secondsSince === null) {
-		return `<section aria-labelledby="unserved">
-${heading}
-<p>Off. With the App’s <code>workflow_job</code> event, this lists the jobs that wait for a runner no box here will start (<a href="${unservedDocs}">turning it on</a>).</p>
-</section>`;
+		return block(
+			'unserved',
+			title,
+			`<p>Off. With the App’s <code>workflow_job</code> event, this lists the jobs that wait for a runner no box here will start (<a href="${unservedDocs}">turning it on</a>).</p>`,
+		);
 	}
-	return `<section aria-labelledby="unserved">
-${heading}
-${table(
-	[{ title: 'Repository' }, { title: 'Job' }, { title: 'runs-on' }, { title: 'Why' }, { title: 'Waiting', number: true }],
-	unserved.map((job) => [
-		escape(job.repo),
-		`<a href="${escape(job.url)}">${escape(job.workflow === null ? job.name : `${job.workflow} / ${job.name}`)}</a>`,
-		`<code>${escape(job.labels.join(', '))}</code>`,
-		`<span class="alert">${escape(why[job.reason])}</span>`,
-		duration(job.waitSeconds),
-	]),
-	'None.',
-)}
-<p class="hint">From GitHub’s <code>workflow_job</code> event; the last delivery arrived ${time(webhook.lastDelivery, ago(webhook.secondsSince))}.</p>
-</section>`;
+	const body = `${table(
+		[{ title: 'Repository' }, { title: 'Job' }, { title: 'runs-on' }, { title: 'Why' }, { title: 'Waiting', number: true }],
+		unserved.map((job) => [
+			escape(job.repo),
+			`<a href="${escape(job.url)}">${escape(job.workflow === null ? job.name : `${job.workflow} / ${job.name}`)}</a>`,
+			`<code>${escape(job.labels.join(', '))}</code>`,
+			`<span class="alert">${escape(why[job.reason])}</span>`,
+			duration(job.waitSeconds),
+		]),
+		'None.',
+	)}
+<p class="hint">From GitHub’s <code>workflow_job</code> event; the last delivery arrived ${time(webhook.lastDelivery, ago(webhook.secondsSince))}.</p>`;
+	return block('unserved', title, body, unserved.length === 0 ? {} : { edge: 'alert', trail: String(unserved.length) });
+}
+
+function renderTotals({ totals: { today, last30Days } }: Dashboard) {
+	const row = (label: string, t: Totals) =>
+		`<tr><th scope="row">${label}</th><td class="number">${integer.format(t.jobs)}</td><td class="number">${integer.format(t.minutes)}</td><td class="number">${dollars(t.dollars)}</td></tr>`;
+	return block(
+		'totals',
+		'GitHub minutes not billed',
+		`<div class="scroll"><table>
+<thead><tr><td></td><th scope="col" class="number">Jobs</th><th scope="col" class="number">Minutes</th><th scope="col" class="number">Value</th></tr></thead>
+<tbody>
+${row('Today (UTC)', today)}
+${row('Last 30 days', last30Days)}
+</tbody>
+</table></div>
+<p class="hint">Each job’s time is rounded up to whole minutes, as GitHub bills it, and valued at $${dollarsPerMinute} a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan’s free allowance would not have cost money.</p>`,
+		{ edge: 'accent' },
+	);
 }
 
 function renderFallback({ fallback }: Dashboard) {
@@ -479,12 +557,16 @@ function renderAlerts({ alerts, fallback }: Dashboard) {
 	return `<h3>Alerts</h3>\n${lines.join('\n')}`;
 }
 
+function renderGuards(data: Dashboard) {
+	const down = data.fallback.down || data.fallback.configProblem !== null || data.alerts.configProblem !== null;
+	return block('guards', 'When a box goes silent', `${renderFallback(data)}\n${renderAlerts(data)}`, down ? { edge: 'alert' } : {});
+}
+
 function classAction(csrf: string, name: string, paused: boolean) {
-	const [action, verb] = paused ? ['resume', 'Resume'] : ['pause', 'Pause'];
-	return `<form method="post" action="/classes/${action}">
-<input type="hidden" name="csrf" value="${escape(csrf)}">
-<input type="hidden" name="class" value="${escape(name)}">
-<button type="submit" aria-label="${verb} ${escape(name)}">${verb}</button>
+	return `<form method="post" action="/classes/${paused ? 'resume' : 'pause'}">
+${hidden('csrf', csrf)}
+${hidden('class', name)}
+${toggle(!paused, `${paused ? 'Resume' : 'Pause'} ${name}`)}
 </form>`;
 }
 
@@ -492,28 +574,11 @@ function renderClasses({ classes, classesProblem, paused }: Dashboard, csrf: str
 	if (classesProblem !== null) return `<p class="alert">The Worker’s ${escape(classesProblem)}.</p>`;
 	const rows = classes.map((name) => {
 		const pause = paused.find((p) => p.class === name);
-		const state = pause ? `Paused by ${escape(pause.by)}<br>${time(pause.since, ago(pause.seconds))}` : 'Serving';
+		const state = pause ? `<span class="warn">Paused</span><small>by ${escape(pause.by)}, ${time(pause.since, ago(pause.seconds))}</small>` : 'Serving';
 		return [escape(name), state, classAction(csrf, name, pause !== undefined)];
 	});
-	return `${table([{ title: 'Class' }, { title: 'State' }, { title: 'Action' }], rows, '')}
+	return `${table([{ title: 'Class' }, { title: 'State' }, { title: 'Switch' }], rows, '')}
 <p class="hint">A paused class starts no new runners on any box. Its running jobs finish, and its new jobs wait at GitHub until you resume it. Boxes learn of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes.</p>`;
-}
-
-function renderDevices({ devices }: Dashboard, csrf: string) {
-	const unpair = (d: Dashboard['devices'][number]) => `<form method="post" action="/devices/unpair">
-<input type="hidden" name="csrf" value="${escape(csrf)}">
-<input type="hidden" name="id" value="${escape(d.id)}">
-<button type="submit" aria-label="Unpair ${escape(d.name)}">Unpair</button>
-</form>`;
-	return `<section aria-labelledby="devices">
-<h2 id="devices">Paired devices</h2>
-${table(
-	[{ title: 'Device' }, { title: 'Paired by' }, { title: 'Last seen' }, { title: 'Action' }],
-	devices.map((d) => [escape(d.name), escape(d.by), time(d.lastSeen, ago(d.secondsSinceSeen)), unpair(d)]),
-	'No device is paired.',
-)}
-<p class="hint">A paired device, such as the boxrunner menu bar app, reads what this page shows and sets limits, as the person who paired it. Pair one from the app; it opens a page here to approve.</p>
-</section>`;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -550,25 +615,42 @@ function renderRepos({ repos, forkPullRequests, organization }: Dashboard) {
 }
 
 function renderServed(data: Dashboard, csrf: string) {
-	return `<section aria-labelledby="served">
-<h2 id="served">What this Worker serves</h2>
-${renderOrganization(data)}
+	const body = `${renderOrganization(data)}
 <h3>Repositories</h3>
 ${renderRepos(data)}
 <h3 id="classes">Classes</h3>
-${renderClasses(data, csrf)}
-${renderFallback(data)}
-${renderAlerts(data)}
-</section>`;
+${renderClasses(data, csrf)}`;
+	return block('served', 'What this Worker serves', body, data.paused.length > 0 ? { edge: 'warn' } : {});
 }
 
-/** The part of the page the script refreshes. Its forms carry the session's CSRF token. */
+function renderDevices({ devices }: Dashboard, csrf: string) {
+	const unpair = (d: Dashboard['devices'][number]) => `<form method="post" action="/devices/unpair">
+${hidden('csrf', csrf)}
+${hidden('id', d.id)}
+<button type="submit" class="ghost" aria-label="Unpair ${escape(d.name)}">unpair</button>
+</form>`;
+	const body = `${table(
+		[{ title: 'Device' }, { title: 'Last seen' }, { title: '' }],
+		devices.map((d) => [`${escape(d.name)}<small>paired by ${escape(d.by)}</small>`, time(d.lastSeen, ago(d.secondsSinceSeen)), unpair(d)]),
+		'No device is paired.',
+	)}
+<p class="hint">A paired device, such as the boxrunner menu bar app, reads what this page shows and sets limits, as the person who paired it. Pair one from the app; it opens a page here to approve.</p>`;
+	return block('devices', 'Paired devices', body, { trail: String(devices.length) });
+}
+
+/** The part of the page the script refreshes: the fleet on the left, what the Worker does on the right. Its forms carry the session's CSRF token. */
 export function renderLive(data: Dashboard, csrf: string): string {
-	const boxes =
-		data.boxes.length === 0
-			? '<section aria-labelledby="no-box"><h2 id="no-box">Box</h2><p>No box has reported yet. A running agent reports every 30 seconds.</p></section>'
-			: data.boxes.map((box, index) => renderBox(box, index, data.workerVersion, csrf)).join('\n');
-	return [boxes, renderWaiting(data), renderUnserved(data), renderJobs(data), renderTotals(data), renderServed(data, csrf), renderDevices(data, csrf)].filter(Boolean).join('\n');
+	const main = [renderBoxes(data, csrf), renderWaiting(data), renderJobs(data), renderUnserved(data)];
+	const side = [renderTotals(data), renderServed(data, csrf), renderGuards(data), renderDevices(data, csrf)];
+	return `${renderSummary(data)}
+<div class="board">
+<div class="stack">
+${main.filter(Boolean).join('\n')}
+</div>
+<div class="stack">
+${side.join('\n')}
+</div>
+</div>`;
 }
 
 /** Refreshes the page every 10 seconds while the tab is visible. Without it, a reload does the same. */
@@ -585,9 +667,11 @@ async function refresh() {
     if (response.status === 401) return location.reload();
     if (!response.ok) throw new Error(String(response.status));
     live.innerHTML = (await response.json()).html;
-    note.textContent = 'Updates every 10 seconds.';
+    note.dataset.state = 'live';
+    note.textContent = 'live';
   } catch {
-    note.textContent = 'The last update failed. Trying again in 10 seconds.';
+    note.dataset.state = 'stale';
+    note.textContent = 'stale, retrying';
   }
   schedule();
 }

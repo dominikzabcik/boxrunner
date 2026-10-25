@@ -376,7 +376,7 @@ describe('alerts for waiting jobs', () => {
 			expect(said(hook)).toEqual([stillWaiting]);
 			const { waiting, html } = await dashboard();
 			expect(waiting).toMatchObject([{ repo: 'octo/site', overdue: true }]);
-			expect(text(html)).toContain('Jobs waiting for a runner RepositoryClassBoxWaitingLikely cause octo/siteboxrunner-lightbox-110 min 0 sUnknown');
+			expect(text(html)).toContain('Jobs waiting for a runner 1 RepositoryClassBoxWaitingLikely cause octo/siteboxrunner-lightbox-110 min 0 sUnknown');
 
 			await beats('10:10:30', '10:12:00', { scaleSets: [site] });
 			await fire();
