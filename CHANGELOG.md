@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.6
+
+**Features**
+- The dashboard is laid out like the menu bar app: a summary line, each box as a block with its state, slot cells for its classes and its runners as a tree, the fleet on the left and the Worker's settings on the right. Each box has an ON | OFF switch that sets every class there to limit 0 or removes the limits, as the app's switch does ([dashboard](docs/dashboard.md#limiting-a-class-on-one-box)). Only the Worker changes; the boxes need no upgrade.
+
 ## v0.9.5
 
 **Features**
