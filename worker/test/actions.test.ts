@@ -35,11 +35,11 @@ describe('POST /classes/pause and /classes/resume', () => {
 		time('2026-10-14T10:05:00Z');
 		await post('/classes/pause', { class: 'boxrunner-light' });
 		const html = await (await view()).text();
-		expect(html).toContain('<tr><td>boxrunner-light (paused)</td><td>idle</td>');
+		expect(html).toContain('<tr><td>boxrunner-light <span class="warn">paused</span><small>idle</small></td>');
 		expect(html).toContain(
-			'<tr><td>boxrunner-light</td><td>Paused by octo<br><time datetime="2026-10-14T10:00:00.000Z">5 minutes ago</time></td><td><form method="post" action="/classes/resume">',
+			'<tr><td>boxrunner-light</td><td><span class="warn">Paused</span><small>by octo, <time datetime="2026-10-14T10:00:00.000Z">5 minutes ago</time></small></td><td><form method="post" action="/classes/resume">',
 		);
-		expect(html).toContain('<button type="submit" aria-label="Resume boxrunner-light">Resume</button>');
+		expect(html).toContain('<button type="submit" class="switch off" aria-label="Resume boxrunner-light"><span>ON</span><span>OFF</span></button>');
 		expect(((await (await view('/dashboard.json')).json()) as { paused: unknown }).paused).toEqual([
 			{ class: 'boxrunner-light', by: 'octo', since: '2026-10-14T10:00:00.000Z', seconds: 300 },
 		]);
@@ -90,14 +90,30 @@ describe('POST /boxes/limit', () => {
 		time('2026-10-14T10:05:00Z');
 		const html = await (await view()).text();
 		expect(html).toContain(
-			'<td><p>0 by octo, <time datetime="2026-10-14T10:00:00.000Z">5 minutes ago</time></p><form method="post" action="/boxes/limit" class="inline">',
+			'</form><small>0 by octo, <time datetime="2026-10-14T10:00:00.000Z">5 minutes ago</time></small></td>',
 		);
-		expect(html).toContain('<input type="number" name="max" min="0" max="2" value="0" aria-label="Limit for boxrunner-light on box-1">');
+		expect(html).toContain('<input type="number" name="max" min="0" max="2" value="0" placeholder="2" aria-label="Limit for boxrunner-light on box-1">');
 		const json = (await (await view('/dashboard.json')).json()) as { boxes: { classes: { name: string; limit: unknown }[] }[] };
 		expect(json.boxes[0]!.classes.find((c) => c.name === 'boxrunner-light')!.limit).toEqual({ max: 0, by: 'octo', since: '2026-10-14T10:00:00.000Z', seconds: 300 });
 
 		await post('/boxes/limit', { box: 'box-1', class: 'boxrunner-light', max: '' });
 		expect((await beat()).limits).toEqual({});
+	});
+
+	it('switches every class on a box off and on again from one form', async () => {
+		const { token, view, post } = await ready();
+		const beat = async () => (await (await agent(token)('POST', '/v1/heartbeat', heartbeatBody())).json()) as { limits: Record<string, number> };
+		await beat();
+		expect((await post('/boxes/limit', { box: 'box-1', max: '0' })).status).toBe(303);
+		expect((await beat()).limits).toEqual({ boxrunner: 0, 'boxrunner-light': 0 });
+		const html = await (await view()).text();
+		expect(html).toContain('<span class="dot warn" aria-hidden="true">●</span><span class="name">box-1</span>');
+		expect(html).toContain('<input type="hidden" name="max" value="">\n<button type="submit" class="switch off" aria-label="Switch on box-1"><span>ON</span><span>OFF</span></button>');
+		expect(html).toContain('<span class="slots" role="img" aria-label="0 running, 1 starting, 0 of 2 allowed"><span class="start">■</span><span class="cap">·</span></span>');
+
+		await post('/boxes/limit', { box: 'box-1', max: '' });
+		expect((await beat()).limits).toEqual({});
+		expect((await post('/boxes/limit', { box: 'box-1', max: '2' })).status).toBe(400);
 	});
 
 	it('changes nothing for a box or class nobody reported, or a limit outside 0 to the max', async () => {

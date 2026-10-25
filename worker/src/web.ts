@@ -227,22 +227,22 @@ function dashboardPage(box: Box, session: Session, now: number) {
 		connect: true,
 		header: `<p><strong>boxrunner</strong></p>
 <form method="post" action="/logout">
+<span class="live" id="refreshing" data-state="live" hidden>live</span>
 <span>Signed in as ${escape(session.login)}</span>
 <input type="hidden" name="csrf" value="${escape(session.csrf)}">
 <button type="submit">Sign out</button>
 </form>`,
 		body: `<h1>Dashboard</h1>
-<p class="hint" id="refreshing" hidden>Updates every 10 seconds.</p>
 <noscript><p class="hint">Reload the page to update it.</p></noscript>
 <div id="live">
 ${renderLive(dashboardData(box, now), session.csrf)}
 </div>
-<section aria-labelledby="token">
+<section class="block" data-edge="alert" aria-labelledby="token">
 <h2 id="token">Box token</h2>
 <p>Every box uses it to reach this Worker. A new token stops the old one at once, so each box stops working until it has the new one.</p>
 <form method="post" action="/box-token">
 <input type="hidden" name="csrf" value="${escape(session.csrf)}">
-<button type="submit">Replace the box token</button>
+<button type="submit" class="danger">Replace the box token</button>
 </form>
 </section>`,
 	});
