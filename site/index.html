@@ -338,6 +338,21 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28p
 .src { margin: 0; color: var(--dim); font-size: 13.5px; max-width: 62em; }
 .src .fig-no { font-size: 14px; margin-right: 4px; }
 
+.calc { margin-top: clamp(20px, 2.4vw, 30px); background: var(--slip); border-radius: 3px; padding: clamp(18px, 2.4vw, 30px); box-shadow: 0 1px 0 rgba(36, 28, 20, .1); }
+.calc h3 { font-size: clamp(24px, 2.4vw, 30px); line-height: 1.15; margin-bottom: 18px; }
+.calc-fields { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, .7fr) minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px 18px; }
+.field { display: grid; gap: 6px; min-width: 0; font-size: 15px; }
+.field label { color: var(--dim); }
+.field input, .field select { width: 100%; min-width: 0; height: 44px; padding: 0 12px; font: 500 15px var(--f-mono); color: var(--ink); background: var(--paper); border: 1px solid var(--rule-2); border-radius: 3px; }
+.field select { font-family: var(--f-ui); font-weight: 400; text-overflow: ellipsis; }
+.calc-out { margin: 22px 0 0; font: 400 clamp(22px, 2.5vw, 30px)/1.25 var(--f-display); text-wrap: balance; }
+.calc-out b { font-weight: 400; font-variant-numeric: tabular-nums; box-shadow: inset 0 -.2em 0 var(--wash-amber); }
+.calc-how { margin: 10px 0 0; max-width: 46em; color: var(--ink-2); font-size: 15px; }
+.rates { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0 14px; margin: 20px 0 16px; padding: 0; list-style: none; font-size: 14px; }
+.rates li { display: flex; flex-direction: column; gap: 2px; padding: 8px 0 9px; border-top: 1px solid var(--rule-2); color: var(--dim); }
+.rates a { font: 500 14px var(--f-mono); color: var(--ink); }
+.rates li[aria-current] { border-top: 3px solid var(--blue); padding-top: 6px; color: var(--ink); }
+
 /* also */
 .also h2 { margin-bottom: clamp(30px, 4vw, 52px); }
 .index { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 56px); margin: 0; }
@@ -378,6 +393,7 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28p
   .parts, .steps { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .origin-grid { grid-template-columns: minmax(0, 1fr); }
+  .calc-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .twelve { display: flex; align-items: baseline; gap: 14px; }
   .twelve small { margin: 0; }
   .qa div { grid-template-columns: minmax(0, 1fr); }
@@ -392,6 +408,9 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28p
   .run { grid-template-columns: 8.4em minmax(0, 1fr) 4.6em; gap: 10px; font-size: 14px; }
   .slider input { order: 3; flex-basis: 100%; }
   .slider output { margin-left: auto; }
+  .calc-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .field:nth-child(n+3) { grid-column: 1 / -1; }
+  .rates { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .plot { margin-left: 40px; }
   .ylab { left: -42px; width: 36px; }
   .colo .right { margin-left: 0; }
@@ -619,6 +638,27 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28p
       </div>
       <figcaption class="src"><span class="fig-no">Fig. 5.</span> GitHub’s list price for the 2-core Linux runner, October 2026: $0.006 a minute after the 2,000 minutes GitHub Free includes for private repositories. Self-hosted minutes are free. You still pay for the box, which you were paying for already.</figcaption>
     </figure>
+
+    <div class="calc" id="calc" role="group" aria-labelledby="calc-h">
+      <h3 id="calc-h">Try your own numbers</h3>
+      <div class="calc-fields">
+        <div class="field"><label for="c-jobs">Jobs a day</label><input id="c-jobs" type="number" inputmode="numeric" min="1" max="10000" step="1" value="40"></div>
+        <div class="field"><label for="c-len">Minutes a job</label><input id="c-len" type="number" inputmode="numeric" min="1" max="360" step="1" value="8"></div>
+        <div class="field"><label for="c-size">Runner size</label><select id="c-size"><option value="2" selected>2-core Linux</option><option value="4">4-core Linux</option><option value="8">8-core Linux</option><option value="16">16-core Linux</option><option value="32">32-core Linux</option><option value="64">64-core Linux</option></select></div>
+        <div class="field"><label for="c-plan">Your GitHub plan</label><select id="c-plan"><option value="2000" selected>GitHub Free, 2,000 free minutes</option><option value="3000">GitHub Pro, 3,000 free minutes</option><option value="3000">GitHub Team, 3,000 free minutes</option><option value="50000">Enterprise Cloud, 50,000 free minutes</option></select></div>
+      </div>
+      <p class="calc-out" id="c-out" role="status"><b id="c-min">9,600</b> minutes a month: <b id="c-gh">$45.60</b> on GitHub, $0 on boxrunner.</p>
+      <p class="calc-how" id="c-how">40 jobs of 8 minutes over 30 days. The 2-core runner costs <a href="https://docs.github.com/en/billing/reference/actions-runner-pricing" id="c-rate">$0.006 a minute</a>, and the plan’s 2,000 free minutes come off first.</p>
+      <ul class="rates" aria-label="GitHub-hosted Linux x64 runners, price per minute">
+        <li data-cores="2" data-rate="0.006" aria-current="true"><span>2-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing">$0.006</a></li>
+        <li data-cores="4" data-rate="0.012"><span>4-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#x64-powered-larger-runners">$0.012</a></li>
+        <li data-cores="8" data-rate="0.022"><span>8-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#x64-powered-larger-runners">$0.022</a></li>
+        <li data-cores="16" data-rate="0.042"><span>16-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#x64-powered-larger-runners">$0.042</a></li>
+        <li data-cores="32" data-rate="0.082"><span>32-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#x64-powered-larger-runners">$0.082</a></li>
+        <li data-cores="64" data-rate="0.162"><span>64-core</span><a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#x64-powered-larger-runners">$0.162</a></li>
+      </ul>
+      <p class="src">Rates are GitHub’s list prices per minute for Linux x64 runners, October 2026, from <a href="https://docs.github.com/en/billing/reference/actions-runner-pricing">its pricing page</a>. A month is 30 days, and GitHub <a href="https://docs.github.com/en/billing/reference/actions-runner-pricing#points-to-note-about-rates-for-runners">rounds every job up to a whole minute</a>. The free minutes <a href="https://docs.github.com/en/billing/reference/product-usage-included">depend on your plan</a> and pay only for the 2-core runner: included minutes cannot be used for larger runners, which only GitHub Team and Enterprise Cloud have. Public repositories pay nothing on standard runners.</p>
+    </div>
   </section>
 
   <section class="sec wrap also">
@@ -940,6 +980,27 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--ink); height: 28p
     g.style.left = b.style.left = (m / MAXM * 100) + '%'; g.style.top = (100 - c / MAXC * 100) + '%';
   }
   mins.addEventListener('input', cost); cost();
+
+  /* ---------- the calculator ---------- */
+  const cj = document.getElementById('c-jobs'), cl = document.getElementById('c-len'), cs = document.getElementById('c-size'), cp = document.getElementById('c-plan');
+  const co = document.getElementById('c-out'), ch = document.getElementById('c-how');
+  const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const whole = (el) => { const n = Math.ceil(Number(el.value)); return el.value.trim() !== '' && n >= +el.min && n <= +el.max ? n : NaN; };
+  function calc() {
+    const jobs = whole(cj), len = whole(cl), free = +cp.value, cores = cs.value;
+    const row = document.querySelector(`.rates li[data-cores="${cores}"]`), rate = +row.dataset.rate, link = row.querySelector('a');
+    document.querySelectorAll('.rates li').forEach((li) => li.toggleAttribute('aria-current', li === row));
+    if (!(jobs > 0 && len > 0)) {
+      co.textContent = `Jobs a day: 1 to ${num.format(+cj.max)}. Minutes a job: 1 to ${num.format(+cl.max)}.`;
+      ch.textContent = '';
+      return;
+    }
+    const m = jobs * len * 30, billable = cores === '2' ? Math.max(0, m - free) : m;
+    co.replaceChildren(...[[num.format(m), 'b'], [' minutes a month: ', ''], [money.format(billable * rate), 'b'], [' on GitHub, $0 on boxrunner.', '']].map(([t, tag]) => { if (!tag) return document.createTextNode(t); const e = document.createElement(tag); e.textContent = t; return e; }));
+    const a = Object.assign(document.createElement('a'), { href: link.href, textContent: `$${link.textContent.slice(1)} a minute` });
+    ch.replaceChildren(`${num.format(jobs)} ${jobs === 1 ? 'job' : 'jobs'} of ${num.format(len)} ${len === 1 ? 'minute' : 'minutes'} over 30 days. The ${cores}-core runner costs `, a, cores === '2' ? `, and the plan’s ${num.format(free)} free minutes come off first.` : '. Free minutes do not apply to larger runners.');
+  }
+  [cj, cl, cs, cp].forEach((el) => el.addEventListener('input', calc));
 
   /* ---------- copy ---------- */
   const announce = document.getElementById('announce');
