@@ -28,6 +28,7 @@ final class AppState {
 	private let defaults = UserDefaults.standard
 	private var poller: Task<Void, Never>?
 	private var token: String?
+	private var localBoxes: Set<String>?
 
 	init() {
 		fleetName = defaults.string(forKey: "fleetName") ?? "boxrunner"
@@ -105,9 +106,11 @@ final class AppState {
 	func refresh() async {
 		guard let client, let token else { return }
 		do {
-			fleet = try await client.fleet(token: token)
+			let fleet = try await client.fleet(token: token)
+			self.fleet = fleet
 			updated = Date()
 			problem = nil
+			await findThisBox(in: fleet)
 		} catch let failure as Client.Failure where failure.status == 401 {
 			unpair()
 			problem = failure.message
@@ -132,6 +135,14 @@ final class AppState {
 				problem = error.localizedDescription
 			}
 		}
+	}
+
+	/// Chooses this Mac's box on its own when none is chosen yet and exactly
+	/// one box of the fleet runs here, so the switch shows without a setting.
+	private func findThisBox(in fleet: Fleet) async {
+		guard thisBox.isEmpty else { return }
+		if localBoxes == nil { localBoxes = await LocalBoxes.names() }
+		if let found = LocalBoxes.pick(from: fleet.boxes.map(\.name), local: localBoxes ?? []) { thisBox = found }
 	}
 
 	private func startPolling() {
