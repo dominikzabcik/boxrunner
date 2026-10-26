@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.7
+
+**Features**
+- The menu bar app finds which box runs on this Mac by itself: the Mac's own name, or an OrbStack or Lima VM on it, when exactly one box in the fleet matches. Its ON | OFF switch shows without choosing the box under **this mac** first (#132).
+
+**Fixes**
+- A box whose session another box took over no longer keeps the class to itself. GitHub answers a refresh of such a session with 400, not 404, so the Worker passed the error on, the box kept retrying as the holder and ignored its share, and jobs the Worker gave it waited until the agent restarted. The Worker now answers that the session is gone, and the box opens a new one (#133). Only the Worker changes; the boxes need no upgrade.
+
 ## v0.9.6
 
 **Features**
