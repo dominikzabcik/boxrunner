@@ -41,7 +41,7 @@ Usage:
   boxrunner install [--worker URL] [--token TOKEN] [--box NAME] [--docker] [--sysbox]
   boxrunner upgrade [--downgrade] [VERSION]
   boxrunner run
-  boxrunner status
+  boxrunner status [--json]
   boxrunner drain [--wait]
   boxrunner resume
   boxrunner doctor
@@ -67,7 +67,7 @@ func main() {
 	case "run":
 		err = runCmd(ctx)
 	case "status":
-		err = statusCmd(ctx)
+		err = statusCmd(ctx, os.Args[2:])
 	case "drain":
 		err = drainCmd(ctx, os.Args[2:])
 	case "resume":
@@ -266,12 +266,18 @@ func uninstallCmd(ctx context.Context) error {
 	return nil
 }
 
-func statusCmd(ctx context.Context) error {
+func statusCmd(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("status", flag.ExitOnError)
+	asJSON := flags.Bool("json", false, "print the agent's status as JSON, as it answers on its socket")
+	flags.Parse(args)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	s, err := status.Fetch(ctx, layout.Socket)
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return status.PrintJSON(os.Stdout, s)
 	}
 	status.Print(os.Stdout, s, time.Now())
 	return nil

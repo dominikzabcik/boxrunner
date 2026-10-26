@@ -48,7 +48,7 @@ Each action is a button that posts a form with the session's CSRF token, so it w
 
 The **ON | OFF** switch next to a class under What this Worker serves pauses it. A pause stops every box from starting new runners for it. Jobs that are running finish, and a runner that already started may still take a job. Every other job for the class waits at GitHub until someone switches it back on; the box then picks it up as it does after a restart. The pause is the Worker's, so it applies to every box, and it stays until someone resumes the class, across restarts of the box and the Worker. Pausing a paused class changes nothing; the page keeps who paused it first.
 
-The agent stops listening to the paused class's scale sets, which closes their sessions. The Worker names the paused classes in its answer to every heartbeat, so a box learns of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes, because `GET /v1/repos` leaves paused classes out of `classes` ([api.md](api.md#get-v1repos)); its log then says the class is not one of the Worker's.
+The agent stops listening to the paused class's scale sets, which closes their sessions. The Worker names the paused classes in its answer to every heartbeat, so a box learns of a pause or a resume within 30 seconds. An agent from before pausing existed learns of it when it next lists the repositories, within 5 minutes, because `GET /v1/repos` leaves paused classes out of `classes` ([api.md](api.md#get-v1repos)); its log then says the class is not one of the Worker's. `boxrunner status` writes "paused" in the DASHBOARD column of a paused class.
 
 ### Limiting a class on one box
 
@@ -56,7 +56,7 @@ The **Limit** field next to each class in a box's section caps how many runners 
 
 The **ON | OFF** switch in a box's block does this for every class on the box at once: OFF sets each class's limit to 0, ON removes the limits, as the menu bar app's switch does. A form to `POST /boxes/limit` without `class` is that switch.
 
-The Worker sends the box its limits in the answer to every heartbeat, so the box applies a change within 30 seconds. Runners waiting for a job over the limit are removed, newest first, and running jobs finish. The Worker also counts the limit when it splits a fleet's jobs, so another box gets what the limited one no longer takes. Limits stay across restarts of the Worker; a restarted agent applies them with its first heartbeat. `boxrunner status` shows a class's limit next to its max. An agent from before limits ignores them.
+The Worker sends the box its limits in the answer to every heartbeat, so the box applies a change within 30 seconds. Runners waiting for a job over the limit are removed, newest first, and running jobs finish. The Worker also counts the limit when it splits a fleet's jobs, so another box gets what the limited one no longer takes. Limits stay across restarts of the Worker; a restarted agent applies them with its first heartbeat. `boxrunner status` shows a class's limit, and whether the class is paused, in the table's DASHBOARD column. An agent from before limits ignores them.
 
 ### Pairing a device
 

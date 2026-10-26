@@ -847,8 +847,16 @@ func TestPauseAndResume(t *testing.T) {
 	waitFor(t, "a session", func() bool { return opened() == 1 })
 	h.github.pause("boxrunner")
 	waitFor(t, "the paused class's session to close", func() bool { return closed() == 1 })
+	paused := func(want bool) func() bool {
+		return func() bool {
+			snap, err := status.Fetch(context.Background(), h.socket)
+			return err == nil && len(snap.Classes) == 1 && snap.Classes[0].Paused == want
+		}
+	}
+	waitFor(t, "the class paused in the status", paused(true))
 	h.github.pause()
 	waitFor(t, "a session after resuming", func() bool { return opened() == 2 })
+	waitFor(t, "the class no longer paused in the status", paused(false))
 	if closed() != 1 {
 		t.Errorf("sessions closed while resumed: %d", closed())
 	}

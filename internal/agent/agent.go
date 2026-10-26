@@ -159,6 +159,9 @@ type Agent struct {
 	// case) whose jobs the class's organization scale set acquires.
 	org     atomic.Pointer[worker.Organization]
 	accepts atomic.Pointer[map[string]map[string]bool]
+	// paused are the classes paused on the dashboard, as the Worker last listed
+	// the repositories.
+	paused atomic.Pointer[[]string]
 	// refused counts, by scale set and repository, the jobs an organization
 	// scale set was offered from repositories the box does not serve.
 	refusedMu sync.Mutex
@@ -896,8 +899,9 @@ func (a *Agent) publish(s scheduler.State) {
 		}
 		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since, Warm: warm[r.Name]})
 	}
+	paused := a.paused.Load()
 	for _, c := range a.Config.Classes {
-		class := status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until}
+		class := status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until, Paused: paused != nil && slices.Contains(*paused, c.Name)}
 		if limit, ok := s.Limits[c.Name]; ok {
 			class.Limit = &limit
 		}
@@ -1044,6 +1048,7 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 	want := map[scheduler.Key]bool{}
 	org := repos.Organization
 	a.org.Store(org)
+	a.paused.Store(&repos.Paused)
 	if org != nil && org.Problem != "" {
 		a.Log.Error("the Worker serves no repository of its organization", "org", org.Name, "group", org.Group, "problem", org.Problem)
 	}
