@@ -8,6 +8,8 @@ const (
 	TokenPath   = "/etc/boxrunner/token"
 	StateDir    = "/var/lib/boxrunner"
 	JobsLogPath = "/var/lib/boxrunner/jobs.jsonl"
+	// DestinationsPath holds the destinations jobs connected to, per repository.
+	DestinationsPath = "/var/lib/boxrunner/destinations.json"
 	// DrainPath exists while the box drains, so a drain outlasts a restart.
 	DrainPath = "/var/lib/boxrunner/draining"
 	Socket    = "/run/boxrunner.sock"
@@ -48,6 +50,9 @@ const (
 	EnvDNS = "BOXRUNNER_DNS"
 	// NFLogGroup is where the egress rules log the connections they drop.
 	NFLogGroup = 4137
+	// SeenNFLogGroup is where the rules of the destinations log send the
+	// start of each new connection that leaves a job network.
+	SeenNFLogGroup = 4138
 
 	LabelBox        = "boxrunner.box"
 	LabelRunner     = "boxrunner.runner"

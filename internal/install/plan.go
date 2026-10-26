@@ -79,7 +79,7 @@ type Observed struct {
 	FirewallOpen map[firewall.Services]firewall.State
 	Mirror       mirror.State
 	// Nft is true when the nft command is there, which classes with an egress
-	// allowlist need.
+	// allowlist need, and which logs where jobs connect.
 	Nft bool
 	// EgressNetworks are the Docker networks of egress classes, and EgressTable
 	// is whether the nftables table of their rules exists.
@@ -111,7 +111,7 @@ type (
 	// with Docker.
 	InstallSysbox struct{ Package SysboxPackage }
 	// InstallNftables installs the nftables package, which holds the nft
-	// command that the egress allowlists need.
+	// command that logs where jobs connect and that the egress allowlists need.
 	InstallNftables struct{}
 	WriteFile       struct {
 		Path    string
@@ -155,7 +155,7 @@ func (s InstallSysbox) String() string {
 	return "install Sysbox " + s.Package.Version + "; Docker reloads its configuration and running containers keep running"
 }
 func (InstallNftables) String() string {
-	return "install nftables, for the egress allowlists of classes"
+	return "install nftables, to log where jobs connect and for the egress allowlists of classes"
 }
 func (s RemoveEgress) String() string {
 	return "remove the egress allowlists' rules and networks"
@@ -303,8 +303,11 @@ func Plan(d Desired, o Observed) []Step {
 	// mirror.
 	wantMirror := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker })
 	needSysbox := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Isolation == config.Sysbox })
-	needNft := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Egress != nil }) && !o.Nft
-	if needNft && !o.Debian {
+	// Every box logs where its jobs connect, which takes nft; a class with an
+	// egress allowlist cannot run without it.
+	needAllowlist := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Egress != nil }) && !o.Nft
+	needNft := !o.Nft && (needAllowlist || o.Debian)
+	if needAllowlist && !o.Debian {
 		block("a class has an egress allowlist, which needs the nft command, and this is not Debian or Ubuntu; install nftables and run install again")
 	}
 	sysbox := !o.Sysbox && (d.Docker || d.Sysbox || needSysbox)

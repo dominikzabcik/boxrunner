@@ -22,6 +22,7 @@ done
 ip -o link show boxrunner0 >/dev/null 2>&1 && echo "link boxrunner0"
 ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^boxrunner-/ { print "link " $2 }'
 nft list table inet boxrunner >/dev/null 2>&1 && echo "nft table inet boxrunner"
+nft list table inet boxrunner_seen >/dev/null 2>&1 && echo "nft table inet boxrunner_seen"
 docker network ls --filter label=boxrunner.egress --format 'network {{.Name}}'
 docker network inspect boxrunner >/dev/null 2>&1 && echo "network boxrunner"
 docker ps -a --filter label=boxrunner.box --format 'container {{.Names}}'

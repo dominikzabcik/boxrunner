@@ -360,6 +360,17 @@ The agent checks the rules before it starts each runner of an egress class, and 
 
 `sudo boxrunner status` has a table per class with the packets dropped and the lookups refused since the agent started, and the latest refusals with the job that made each, the address or name and, when the address was opened for a name, that name. The agent logs each distinct refusal at most once a minute, and for each class no more than thirty a minute of each kind (dropped packets, refused lookups, addresses withheld from an answer and lookups it could not answer); the counters count them all. The metrics have `boxrunner_egress_blocked_total` by class and kind (`packet` or `lookup`) and `boxrunner_egress_ready`. `sudo boxrunner doctor` shows the same summary and proves the policy from a container on each class's network: an allowed host answers, a name outside the list does not resolve, an address of one is unreachable by number, and the host, the metadata service and the box's resolver are unreachable.
 
+## Where jobs connect
+
+Every class, with or without `egress`, has the first connection of each job to an address, port and protocol recorded. `sudo boxrunner status` lists them for each repository, the newest first and up to 10, with when each was first seen and how many connections the agent counted; a container that is not one of the agent's runners shows `?` as the repository. The [dashboard](dashboard.md#where-jobs-connect) shows the newest across boxes, and the agent logs each new destination as `a job connected somewhere new`, at most thirty a minute.
+
+- **It needs `nft`.** `sudo boxrunner install` installs the `nftables` package on Debian and Ubuntu for this alone. Without `nft` jobs run as before, nothing is recorded, and `status` and `doctor` say why.
+- **It records connections that were allowed.** The rules sit after the job network's firewall and the egress table, so a refused connection appears under [what was refused](#seeing-what-was-refused) and not here. Traffic between containers on one bridge is left out.
+- **Counts are a lower bound.** The kernel passes at most 100 new connections a second to the agent.
+- **Names come from the egress forwarder.** A class without `egress` shows addresses only.
+- **The record is small and private to the box.** At most 64 repositories and 100 destinations each, the least recently used dropped first, saved to `/var/lib/boxrunner/destinations.json` and forgotten after 30 days. Only the addresses, ports, protocols and names go to the Worker, never what a job sent.
+- **The rules stay while the agent is stopped**, and a job that runs then is not recorded. `sudo boxrunner uninstall` removes them.
+
 ## Extending the job image
 
 The job image is GitHub's official runner image plus common build tools. A class that needs more, such as browsers for end-to-end tests, gets its own Dockerfile:

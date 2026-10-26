@@ -249,6 +249,20 @@ type Heartbeat struct {
 	ScaleSets []HeartbeatScaleSet `json:"scaleSets,omitempty"`
 	// Rank orders the boxes that serve one class for the Worker's fleet shares.
 	Rank int `json:"rank,omitempty"`
+	// Destinations are the newest places jobs connected to; a Worker from
+	// before them ignores it.
+	Destinations []HeartbeatDestination `json:"destinations,omitempty"`
+}
+
+// HeartbeatDestination is a place a repository's jobs connected to.
+type HeartbeatDestination struct {
+	Repo  string    `json:"repo"`
+	Addr  string    `json:"addr"`
+	Port  uint16    `json:"port"`
+	Proto string    `json:"proto"`
+	Name  string    `json:"name,omitempty"`
+	First time.Time `json:"first"`
+	Count uint64    `json:"count"`
 }
 
 type HeartbeatDisk struct {

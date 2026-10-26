@@ -53,6 +53,31 @@ describe('GET / signed in', () => {
 		}
 	});
 
+	it('lists where jobs connected, with the name of an address when the box knows it', async () => {
+		const { call, view } = await ready();
+		const at = { repo: 'octo/site', proto: 'tcp', first: '2026-10-14T09:30:00Z', count: 12 };
+		expect((await call('POST', '/v1/heartbeat', heartbeatBody({ destinations: [
+			{ ...at, addr: '203.0.113.9', port: 443, name: 'api.example.com' },
+			{ ...at, addr: '2001:db8::1', port: 8080, first: '2026-10-14T09:40:00Z', count: 1 },
+			{ ...at, addr: '198.51.100.4', port: 53, proto: 'udp', first: '2026-10-14T09:00:00Z' },
+		] }))).status).toBe(200);
+		const html = await (await view()).text();
+		for (const fragment of [
+			'<h2 id="destinations">Where jobs connect</h2>\n<p class="trail">3</p>',
+			'<tr><td><code>[2001:db8::1]:8080</code></td><td>octo/site<small>box-1</small></td><td><time datetime="2026-10-14T09:40:00.000Z">20 minutes ago</time></td><td class="number">1</td></tr>',
+			'<tr><td><code>203.0.113.9:443</code><small>api.example.com</small></td><td>octo/site<small>box-1</small></td><td><time datetime="2026-10-14T09:30:00.000Z">30 minutes ago</time></td><td class="number">12</td></tr>',
+			'<tr><td><code>198.51.100.4:53 udp</code></td>',
+		]) {
+			expect(html).toContain(fragment);
+		}
+		expect(html.indexOf('[2001:db8::1]')).toBeLessThan(html.indexOf('203.0.113.9:443'));
+	});
+
+	it('says no box reported a destination until one does', async () => {
+		const { view } = await ready();
+		expect(await (await view()).text()).toContain('<h2 id="destinations">Where jobs connect</h2>\n<p class="trail">0</p>\n<p>No box has reported a destination yet.</p>');
+	});
+
 	it('says the box is offline, and when it was last seen, after two minutes without a heartbeat', async () => {
 		const { view } = await ready();
 		time('2026-10-14T10:01:30Z');
@@ -197,6 +222,7 @@ describe('GET /dashboard.json', () => {
 					memoryPeak: 9812000768,
 				},
 			],
+			destinations: [],
 			unserved: [],
 			webhook: { lastDelivery: null, secondsSince: null },
 			totals: { today: { jobs: 1, minutes: 3, dollars: 0.02 }, last30Days: { jobs: 1, minutes: 3, dollars: 0.02 } },
