@@ -88,8 +88,12 @@ func Run(ctx context.Context, o Options) error {
 	if err := o.Install(ctx, script); err != nil {
 		return err
 	}
-	// Installers before 0.3.0 leave the running agent on the old binary, so
-	// the upgrade restarts it whatever the target's installer did.
+	// Installers before 0.3.0 leave the running agent on the old binary. Later
+	// ones restart it themselves, and a second restart would stop a job of an
+	// egress class that started in between.
+	if !release.Newer("0.3.0", target) {
+		return nil
+	}
 	fmt.Fprintf(o.Out, "==> restart boxrunner.service on %s\n", target)
 	return o.Restart(ctx)
 }
