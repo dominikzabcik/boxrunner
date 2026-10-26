@@ -152,6 +152,24 @@ struct MenuView: View {
 
 	/// The bottom line, as opencode keeps its keys: what each does and its shortcut.
 	private var statusBar: some View {
+		VStack(alignment: .leading, spacing: 4) {
+			keys
+			switch state.update {
+			case .idle: EmptyView()
+			case .installing(let version): updateLine("updating to v\(version)…", Console.muted)
+			case .installed(let version): updateLine("updated to v\(version)", Console.green)
+			case .failed(let reason): updateLine("update failed: \(reason)", Console.red)
+			}
+		}
+		.padding(.top, 6)
+		.overlay(alignment: .top) { Rectangle().fill(Console.line).frame(height: 1) }
+	}
+
+	private func updateLine(_ text: String, _ tint: Color) -> some View {
+		Text(text).font(Console.font(10)).foregroundStyle(tint).fixedSize(horizontal: false, vertical: true)
+	}
+
+	private var keys: some View {
 		HStack(spacing: 2) {
 			if let worker = state.worker, state.phase == .paired {
 				KeyButton(title: "dashboard", key: "⌘D") { openURL(worker) }
@@ -166,8 +184,6 @@ struct MenuView: View {
 				Text(updated, style: .relative).font(Console.font(10)).foregroundStyle(Console.faint)
 			}
 		}
-		.padding(.top, 6)
-		.overlay(alignment: .top) { Rectangle().fill(Console.line).frame(height: 1) }
 	}
 }
 

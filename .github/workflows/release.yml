@@ -8,8 +8,32 @@ permissions:
   contents: read
 
 jobs:
+  # The menu bar app is built on macOS and handed to the release job, which
+  # lists it in checksums.txt and attests it with the agent. The app
+  # updates itself from this asset.
+  macos:
+    name: Menu bar app
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and zip the app
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          app/macos/build-app.sh "${TAG#v}"
+          ditto -c -k --keepParent app/macos/build/boxrunner.app boxrunner-macos.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: boxrunner-macos
+          path: boxrunner-macos.zip
+          if-no-files-found: error
+
   release:
     name: Release
+    needs: macos
     runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
@@ -26,6 +50,15 @@ jobs:
           cache: false
       - run: go test ./...
       - run: scripts/build-release.sh "$GITHUB_REF_NAME"
+      # install.sh is already written and keeps only the Linux checksums; the
+      # app checks its own download against checksums.txt.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: boxrunner-macos
+          path: dist
+      - name: List the app in checksums.txt
+        working-directory: dist
+        run: sha256sum boxrunner-macos.zip >>checksums.txt
       # Checks what ships: a binary built with a Go release that has a known
       # vulnerability in code it contains does not get published.
       - name: Known vulnerabilities in the binaries
@@ -43,6 +76,7 @@ jobs:
         with:
           subject-path: |
             dist/boxrunner-linux-*
+            dist/boxrunner-macos.zip
             dist/install.sh
 
       # The same attestation as a release asset, for verifiers that read
