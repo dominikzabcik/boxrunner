@@ -71,14 +71,21 @@ type Server struct {
 	Upstream *url.URL
 	Log      *slog.Logger
 	Now      func() time.Time
+	// Containers is how many job containers can exist at once, the sum of
+	// the cache classes' max. Each gets its share of the connections; 0
+	// means unknown, and then each may hold maxAddrConns.
+	Containers int
 }
 
 // maxConns is the most connections the cache serves at once; more wait.
 // maxAddrConns is the most from one address, which is one job's container:
-// its actions/cache opens at most 32 for one upload.
+// its actions/cache opens at most 32 for one upload. With many containers
+// possible, a container gets maxConns/containers, but not less than
+// minAddrConns.
 const (
 	maxConns     = 256
 	maxAddrConns = 64
+	minAddrConns = 8
 )
 
 // stall is how long a request's body or a download may stop before the
@@ -91,7 +98,7 @@ var stall = 30 * time.Second
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(limit(l, maxConns, maxAddrConns)) }()
+	go func() { served <- srv.Serve(limit(l, maxConns, addrConns(s.Containers))) }()
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for {
@@ -397,4 +404,16 @@ func twirpError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"code": code, "msg": msg})
+}
+
+// addrConns is the most connections one container may hold when containers
+// can exist at once: its share of maxConns, so that the others can always
+// connect. A container keeps at least minAddrConns, which is enough for an
+// upload to go on, so past maxConns/minAddrConns containers the shares add up
+// to more than there is; and at most maxAddrConns.
+func addrConns(containers int) int {
+	if containers <= 0 {
+		return maxAddrConns
+	}
+	return min(max(maxConns/containers, minAddrConns), maxAddrConns)
 }
