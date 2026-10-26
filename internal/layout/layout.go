@@ -10,10 +10,16 @@ const (
 	JobsLogPath = "/var/lib/boxrunner/jobs.jsonl"
 	// DrainPath exists while the box drains, so a drain outlasts a restart.
 	DrainPath = "/var/lib/boxrunner/draining"
-	Socket    = "/run/boxrunner.sock"
-	Binary    = "/usr/local/bin/boxrunner"
-	UnitName  = "boxrunner.service"
-	UnitPath  = "/etc/systemd/system/boxrunner.service"
+	// ReleaseSeenPath remembers when the agent first saw the latest release,
+	// so a restart does not restart the wait before auto-upgrade installs it.
+	ReleaseSeenPath = "/var/lib/boxrunner/release-seen.json"
+	Socket          = "/run/boxrunner.sock"
+	Binary          = "/usr/local/bin/boxrunner"
+	UnitName        = "boxrunner.service"
+	// UpgradeUnit is the transient unit that auto-upgrade runs the upgrade
+	// in, outside the agent's own cgroup.
+	UpgradeUnit = "boxrunner-upgrade"
+	UnitPath    = "/etc/systemd/system/boxrunner.service"
 	// A dash in a slice name means nesting to systemd, so the idle slice uses
 	// an underscore to stay at the top level (docs/decisions.md).
 	IdleSlice     = "boxrunner_idle.slice"

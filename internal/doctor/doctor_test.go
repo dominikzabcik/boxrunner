@@ -289,6 +289,25 @@ func TestLiveRestore(t *testing.T) {
 	}
 }
 
+func TestAutoUpgrade(t *testing.T) {
+	cases := []struct {
+		name    string
+		enabled bool
+		runErr  error
+		want    Result
+	}{
+		{"on", true, nil, Result{"auto-upgrade", true, "on; the agent installs a newer release of its major version 6 hours after it first sees it (docs/upgrading.md#automatic-upgrades)"}},
+		{"off", false, nil, Result{"auto-upgrade", true, "off (auto_upgrade = false in the config); upgrade with: sudo boxrunner upgrade"}},
+		{"on without systemd-run", true, errors.New("executable file not found in $PATH"), Result{"auto-upgrade", false, "on, but systemd-run does not run, so the agent cannot start an upgrade: executable file not found in $PATH"}},
+		{"off without systemd-run", false, errors.New("not looked for"), Result{"auto-upgrade", true, "off (auto_upgrade = false in the config); upgrade with: sudo boxrunner upgrade"}},
+	}
+	for _, c := range cases {
+		if got := AutoUpgrade(c.enabled, c.runErr); got != c.want {
+			t.Errorf("%s: AutoUpgrade = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestDraining(t *testing.T) {
 	if got := Draining(status.Snapshot{}); got != nil {
 		t.Errorf("Draining of a serving agent = %+v", got)

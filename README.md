@@ -165,7 +165,7 @@ Checked against each project's README on October 14, 2026. Corrections are welco
 sudo boxrunner upgrade
 ```
 
-It installs the latest release on the box, checked like the first install, and restarts the agent. The Worker is upgraded separately; [upgrading](docs/upgrading.md) says how for a Worker deployed with the button or with Wrangler. `sudo boxrunner status` and the dashboard say when a newer release is out.
+It installs the latest release on the box, checked like the first install, and restarts the agent. The Worker is upgraded separately; [upgrading](docs/upgrading.md) says how for a Worker deployed with the button or with Wrangler. The agent also upgrades itself to newer releases of its major version, six hours after it first sees them, unless the config sets `auto_upgrade = false`. `sudo boxrunner status` and the dashboard say when a newer release is out.
 
 ## Uninstall
 

@@ -2,11 +2,13 @@
 
 boxrunner has two parts to upgrade: the agent on the box and the Worker in your Cloudflare account. Only the latest release gets security fixes, so keep both on it.
 
-You do not need to watch the releases page. The agent looks for boxrunner's latest release once a day, through the release page's redirect, which needs no GitHub API quota. When a newer release is out, `sudo boxrunner status` and the [dashboard](dashboard.md) say so for the agent and for the Worker, and `sudo boxrunner doctor` prints a warning. The [changelog](../CHANGELOG.md) says which part each change is in.
+You do not need to watch the releases page. The agent looks for boxrunner's latest release every hour, through the release page's redirect, which needs no GitHub API quota. When a newer release is out, `sudo boxrunner status` and the [dashboard](dashboard.md) say so for the agent and for the Worker, and `sudo boxrunner doctor` prints a warning. The [changelog](../CHANGELOG.md) says which part each change is in.
 
 The Worker refuses an agent of a major version it does not serve, so within one major version either part can go first.
 
 ## The agent
+
+The agent upgrades itself, as [below](#automatic-upgrades). To upgrade it by hand, for example to take a release before the wait is over or a new major version:
 
 ```sh
 sudo boxrunner upgrade           # the latest release
@@ -25,6 +27,25 @@ An agent from before `upgrade` existed upgrades the same way with the install co
 ```sh
 curl -fsSL https://boxrunner.zabcik.me/install.sh | sudo sh
 ```
+
+### Automatic upgrades
+
+Unless the box turns it off, the agent installs a newer release of its own major version without anyone running `sudo boxrunner upgrade`. It starts the upgrade when all of this holds:
+
+- **The release has been the latest for six hours** since this agent first saw it. The agent keeps that time in `/var/lib/boxrunner/release-seen.json`, so a restart does not start the wait over. The wait leaves time to pull or fix a broken release before most boxes take it.
+- **The release has the same major version as the agent.** A newer major version, an older release and a development build are never installed this way. `status` says when a new major version is out.
+- **The box does not drain.**
+- **No job of a class with an [egress allowlist](config.md#when-the-agent-stops-and-when-the-rules-go) is running,** because the restart stops it. Jobs of other classes keep running through the restart, as in a manual upgrade. A step that talks to the [Actions cache](config.md#actions-cache) at that moment can fail, so drain first when that matters to you.
+
+The agent weighs this every five minutes. It runs `boxrunner upgrade` for the release in a transient systemd unit of its own, `boxrunner-upgrade`, because the installer restarts `boxrunner.service` and systemd would stop an installer that ran inside it. The upgrade is the one described above, with the same checks. Its output goes to the journal:
+
+```sh
+journalctl -u boxrunner-upgrade
+```
+
+When starting the upgrade fails or the upgrade does not finish, the agent logs it and tries again after an hour, then after two, four, eight and sixteen hours, and after that once a day. It never retries sooner.
+
+`sudo boxrunner status` shows whether auto-upgrade is on and, while a newer release waits, why and until when. `sudo boxrunner doctor` shows the same setting and fails when auto-upgrade is on but `systemd-run` does not run. To turn it off, set `auto_upgrade = false` in [the config](config.md#top-level) and restart the agent; the agent then only logs and shows that a newer release is out.
 
 ## Rebooting the box
 

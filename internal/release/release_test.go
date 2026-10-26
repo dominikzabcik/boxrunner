@@ -54,3 +54,11 @@ func TestCompare(t *testing.T) {
 		t.Error("Newer treats an empty version as known")
 	}
 }
+
+func TestMajor(t *testing.T) {
+	for v, want := range map[string]int{"0.3.1": 0, "v1.0.0": 1, "12.4.0-rc.1": 12} {
+		if got := Major(v); got != want {
+			t.Errorf("Major(%q) = %d, want %d", v, got, want)
+		}
+	}
+}

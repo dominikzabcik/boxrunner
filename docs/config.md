@@ -1,6 +1,6 @@
 # Configuration
 
-The agent reads `/etc/boxrunner/config.toml` when it starts. After a change, run `sudo systemctl restart boxrunner`. A running job keeps running through a restart, except a job of a class with an [egress allowlist](#when-the-agent-stops-and-when-the-rules-go), which the restart stops.
+The agent reads `/etc/boxrunner/config.toml` when it starts. After a change, run `sudo systemctl restart boxrunner`. A running job keeps running through a restart, except a job of a class with an [egress allowlist](#when-the-agent-stops-and-when-the-rules-go), which the restart stops. The same holds for an [automatic upgrade](upgrading.md#automatic-upgrades), which waits until no such job runs.
 
 `boxrunner install` writes the file once, sized for the box. It never overwrites the file afterwards. On a later run it only fills in `worker` and `box` when you pass them.
 
@@ -37,6 +37,7 @@ max = 2
 | `metrics` | none | An IP address and port, such as `127.0.0.1:9464`, where the agent serves [Prometheus metrics](#metrics). |
 | `metrics_public` | `false` | Allows `metrics` to be an address other machines can reach. |
 | `cache` | none | The most the box's [Actions cache](#actions-cache) keeps, such as `20GB`. At least 1 GiB. Set it together with `cache = true` in a class. |
+| `auto_upgrade` | `true` | Lets the agent install a newer release of its own major version by itself, six hours after it first sees it and when no job of an egress class runs. `false` leaves every upgrade to you; see [upgrading](upgrading.md#automatic-upgrades). |
 
 The box token lives in `/etc/boxrunner/token`, readable by root only.
 

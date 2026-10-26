@@ -23,6 +23,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/autoupgrade"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/release"
 )
@@ -49,6 +50,9 @@ type Snapshot struct {
 	Worker string `json:"worker,omitempty"`
 	// Latest is boxrunner's latest release, once the agent has found it.
 	Latest string `json:"latest,omitempty"`
+	// AutoUpgrade is whether the agent installs newer releases itself, and
+	// what it does about the latest one.
+	AutoUpgrade AutoUpgrade `json:"autoUpgrade"`
 	// Draining means `boxrunner drain` closed the sessions: the agent starts
 	// no runner until `boxrunner resume`.
 	Draining bool `json:"draining,omitempty"`
@@ -60,6 +64,42 @@ type Snapshot struct {
 	Egress []Egress `json:"egress,omitempty"`
 	// Organization is set while the Worker serves an organization.
 	Organization *Organization `json:"organization,omitempty"`
+}
+
+// AutoUpgrade is the agent's plan for the latest release.
+type AutoUpgrade struct {
+	Enabled bool `json:"enabled"`
+	// Verdict is the agent's latest decision about the latest release; Until
+	// is when a hold or a retry ends.
+	Verdict autoupgrade.Verdict `json:"verdict,omitempty"`
+	Until   time.Time           `json:"until,omitzero"`
+}
+
+const manualUpgrade = "Upgrade this agent with: sudo boxrunner upgrade"
+
+// Next says what happens to a newer release, as the rest of a sentence after
+// "boxrunner X is out."
+func (u AutoUpgrade) Next() string {
+	until := u.Until.Local().Format("Jan 02 15:04")
+	switch {
+	case !u.Enabled:
+		return "Auto-upgrade is off. " + manualUpgrade
+	case u.Verdict == autoupgrade.Major:
+		return "It is a new major version, which auto-upgrade leaves to you. " + manualUpgrade
+	case u.Verdict == autoupgrade.Unreleased:
+		return "This agent is a development build, which auto-upgrade leaves alone. " + manualUpgrade
+	case u.Verdict == autoupgrade.Hold:
+		return "Auto-upgrade installs it after " + until + "."
+	case u.Verdict == autoupgrade.Retry:
+		return "Auto-upgrade tried a while ago and tries again after " + until + ". To upgrade now: sudo boxrunner upgrade"
+	case u.Verdict == autoupgrade.Draining:
+		return "Auto-upgrade waits for the box to resume."
+	case u.Verdict == autoupgrade.Egress:
+		return "Auto-upgrade waits until no job of a class with an egress allowlist runs."
+	case u.Verdict == autoupgrade.Go:
+		return "Auto-upgrade is installing it now."
+	}
+	return "Auto-upgrade is on."
 }
 
 // Egress is what the agent knows of one class with an egress allowlist.
@@ -492,10 +532,11 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 	if s.Image.Disk > 0 {
 		images = "  images " + gigabytes(s.Image.Disk)
 	}
-	fmt.Fprintf(w, "%s  boxrunner %s  worker %s  image %s (latest %s)%s  disk %s free, floor %s\n\n",
-		s.Box, s.Version, cmp.Or(s.Worker, "unknown"), s.Image.String(), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor))
+	fmt.Fprintf(w, "%s  boxrunner %s  worker %s  image %s (latest %s)%s  disk %s free, floor %s  auto-upgrade %s\n\n",
+		s.Box, s.Version, cmp.Or(s.Worker, "unknown"), s.Image.String(), orNone(s.Image.Latest), images, gigabytes(s.DiskFree), gigabytes(s.DiskFloor),
+		map[bool]string{true: "on", false: "off"}[s.AutoUpgrade.Enabled])
 	if release.Newer(s.Latest, s.Version) {
-		fmt.Fprintf(w, "boxrunner %s is out. Upgrade this agent with: sudo boxrunner upgrade\n\n", s.Latest)
+		fmt.Fprintf(w, "boxrunner %s is out. %s\n\n", s.Latest, s.AutoUpgrade.Next())
 	}
 	if release.Newer(s.Latest, s.Worker) {
 		fmt.Fprintf(w, "The Worker runs %s. Redeploy it from %s: see docs/upgrading.md.\n\n", s.Worker, s.Latest)

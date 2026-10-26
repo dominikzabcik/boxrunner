@@ -469,7 +469,7 @@ type harness struct {
 	cgroup string
 	// sysbox stands in for /var/lib/sysbox.
 	sysbox string
-	// run answers the commands the agent runs, except systemctl; a fakeHost
+	// run answers the commands the agent runs, except systemctl and systemd-run; a fakeHost
 	// of its own when nil.
 	run func(stdin, name string, args ...string) (string, error)
 	// egressListen, openPackets and upstream stand in for the egress classes' sockets, log and resolver.
@@ -488,8 +488,15 @@ type harness struct {
 	cache     config.Bytes
 	cacheAddr netip.AddrPort
 
-	mu        sync.Mutex
-	systemctl []string
+	// autoUpgrade turns the agent's auto-upgrade on; upgradeDelay is its wait,
+	// six hours when zero. seen is where it remembers the latest release.
+	autoUpgrade  bool
+	upgradeDelay time.Duration
+	seen         string
+
+	mu         sync.Mutex
+	systemctl  []string
+	systemdRun []string
 }
 
 // startAgent runs the agent with one class; change may adjust the class and
@@ -505,6 +512,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 		cgroup: t.TempDir(),
 		sysbox: t.TempDir(),
 		logs:   &logBuffer{},
+		seen:   filepath.Join(t.TempDir(), "release-seen.json"),
 	}
 	os.Mkdir(filepath.Join(h.cgroup, "boxrunner_idle.slice"), 0o755)
 	os.WriteFile(filepath.Join(h.cgroup, "boxrunner_idle.slice", "cpu.idle"), []byte("0\n"), 0o644)
@@ -518,7 +526,7 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	if h.run == nil {
 		h.run = (&fakeHost{}).run
 	}
-	cfg.Metrics, cfg.Cache = h.metrics, h.cache
+	cfg.Metrics, cfg.Cache, cfg.AutoUpgrade = h.metrics, h.cache, h.autoUpgrade
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
 	d, err := docker.Dial(context.Background(), socket)
@@ -542,8 +550,17 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 					h.mu.Unlock()
 					return "", nil
 				}
+				if name == "systemd-run" {
+					h.mu.Lock()
+					h.systemdRun = append(h.systemdRun, strings.Join(args, " "))
+					h.mu.Unlock()
+					return "", nil
+				}
 				return h.run(stdin, name, args...)
 			},
+			ReleaseSeenFile:      h.seen,
+			UpgradeDelay:         h.upgradeDelay,
+			UpgradeEvery:         50 * time.Millisecond,
 			EgressListen:         h.egressListen,
 			OpenPackets:          h.openPackets,
 			EgressUpstream:       h.upstream,

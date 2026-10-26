@@ -207,6 +207,16 @@ The Worker splits the jobs, because it already holds every box's latest heartbea
 
 Two alternatives were set aside. The Worker could hold the session itself, but a Durable Object would then long-poll GitHub's queue all day, and every box would depend on it for every job, including a lone box. A workflow could pick a box's own class in `runs-on`, but then each workflow carries the routing, and a box that goes down after the pick strands the job.
 
+## The agent upgrades itself, late and carefully
+
+Only the latest release gets security fixes, and a box nobody logs in to would stay on the release it was installed from. The agent therefore installs a newer release of its own major version, unless the config sets `auto_upgrade = false` ([upgrading](upgrading.md#automatic-upgrades)). It is on by default, because a default that needs a decision leaves most boxes behind.
+
+- **Six hours after it first sees a release,** not at once. The wait leaves time to pull or fix a broken release before most boxes take it. It counts from the agent's first sighting, kept in a file, so a restart does not reset it and a new release restarts the wait.
+- **Never a new major version.** A major version can change what a box needs, and the Worker refuses an agent of a major version it does not serve. A person decides when to cross it.
+- **Not while a job of an egress class runs.** A restart stops those jobs, because nobody else puts their rules back. Other jobs survive the restart, so they do not hold an upgrade back; a box that must never restart under a running job turns the setting off, or drains first.
+- **In a transient systemd unit,** `boxrunner-upgrade`, started with `systemd-run`. The installer restarts `boxrunner.service`, and systemd stops everything in that service's cgroup, an installer included. The unit is the same `boxrunner upgrade` a person runs, so there is one way to install a release, with its checks.
+- **With a backoff, persisted.** After each attempt the agent waits an hour, then twice as long each time up to a day, whether or not the attempt looked successful: the agent only learns that an upgrade worked when it restarts as the new version.
+
 ## Not in v0.1
 
 - **Public repositories.** GitHub's own guidance is that self-hosted runners should almost never serve them.

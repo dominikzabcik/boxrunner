@@ -100,6 +100,12 @@ type Options struct {
 
 	// BoxrunnerReleasesURL is boxrunner's latest-release page.
 	BoxrunnerReleasesURL string
+	// ReleaseSeenFile remembers when the latest release was first seen,
+	// UpgradeDelay is how long auto-upgrade waits after that (six hours when
+	// zero) and UpgradeEvery how often it weighs an upgrade (five minutes).
+	ReleaseSeenFile string
+	UpgradeDelay    time.Duration
+	UpgradeEvery    time.Duration
 }
 
 type Agent struct {
@@ -152,6 +158,8 @@ type Agent struct {
 	building atomic.Pointer[string]
 	// latest is boxrunner's latest release, once checkRelease found it.
 	latest atomic.Pointer[string]
+	// upgrade is what auto-upgrade last decided about it, nil before the first look.
+	upgrade atomic.Pointer[status.AutoUpgrade]
 	// heartbeatOK is when the Worker last took a heartbeat, in Unix nanoseconds.
 	heartbeatOK atomic.Int64
 	// org is the organization the Worker serves, nil while it serves
@@ -881,6 +889,10 @@ func (a *Agent) publish(s scheduler.State) {
 	}
 	if latest := a.latest.Load(); latest != nil {
 		snap.Latest = *latest
+	}
+	snap.AutoUpgrade = status.AutoUpgrade{Enabled: a.Config.AutoUpgrade}
+	if u := a.upgrade.Load(); u != nil {
+		snap.AutoUpgrade = *u
 	}
 	if building := a.building.Load(); building != nil {
 		snap.Image.Building = *building
