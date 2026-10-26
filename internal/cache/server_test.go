@@ -541,11 +541,17 @@ func TestErrorsLeaveOutTheBoxsPaths(t *testing.T) {
 // comes from the address addr gives, and returns the listener's address.
 func (b *box) serve(addr func(n int) string) string {
 	b.t.Helper()
+	return b.serveFor(0, addr)
+}
+
+// serveFor is serve for a box that has containers job containers at most.
+func (b *box) serveFor(containers int, addr func(n int) string) string {
+	b.t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	srv := &Server{Store: b.store, Keys: b.server.Keys, Upstream: b.server.Upstream, Log: b.server.Log, Now: b.clock}
+	srv := &Server{Store: b.store, Keys: b.server.Keys, Upstream: b.server.Upstream, Log: b.server.Log, Now: b.clock, Containers: containers}
 	go srv.Serve(b.t.Context(), &from{Listener: l, addr: addr})
 	return l.Addr().String()
 }

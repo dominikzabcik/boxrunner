@@ -93,8 +93,8 @@ type download struct {
 // Entry beside it as JSON, and holds the uploads in progress and the download
 // URLs it handed out. Entries and uploads together stay within Max bytes and
 // above Floor free bytes: to make room, the store gives up the least recently
-// used entry of the repository that holds the most, and a write that still
-// does not fit is refused.
+// used entry of the repository that holds the most, and a write that would not
+// fit even so is refused before it gives up any.
 type Store struct {
 	Dir   string
 	Max   int64
@@ -182,7 +182,7 @@ func (s *Store) Reserve(c Claims, key, version string, now time.Time) (string, e
 		return "", fmt.Errorf("the cache has %d uploads in progress, the most it takes", maxUploads)
 	case repoUploads >= maxRepoUploads:
 		return "", fmt.Errorf("this repository has %d uploads in progress, the most the cache takes", maxRepoUploads)
-	case !s.room("", 0):
+	case !s.room("", 0, false):
 		return "", ErrFull
 	}
 	capability := token()
@@ -197,8 +197,10 @@ func (s *Store) Reserve(c Claims, key, version string, now time.Time) (string, e
 // Put writes an upload's archive at once, or with block set, one block of
 // it. It writes into a new file and puts it in place when the body ends, so
 // a write that fails leaves the upload as it was. size is the body's
-// length, or -1 when unknown; a body that could not fit even with every
-// entry gone is refused before it is read.
+// length, or -1 when unknown. A body of known length reserves its size
+// before it is read, so one that cannot fit is refused without giving up an
+// entry; a body of unknown length takes room as it comes, and takes entries
+// from other repositories only until its writer holds a share of the cache.
 func (s *Store) Put(capability, block string, body io.Reader, size int64, now time.Time) error {
 	name := "archive"
 	if block != "" {
@@ -211,7 +213,7 @@ func (s *Store) Put(capability, block string, body io.Reader, size int64, now ti
 	if err != nil {
 		return err
 	}
-	w := &budget{s: s, u: u}
+	w := &budget{s: s, u: u, held: max(size, 0), limited: size <= 0}
 	tmp, err := os.CreateTemp(u.dir, "write-")
 	if err == nil {
 		w.f = tmp
@@ -228,15 +230,18 @@ func (s *Store) Put(capability, block string, body io.Reader, size int64, now ti
 		if tmp != nil {
 			os.Remove(tmp.Name())
 		}
-		s.release(u, w.n)
+		s.release(u, w.held)
 		return err
 	}
-	s.release(u, u.files[name])
+	// The write gives back what it reserved and did not use, and the file it
+	// replaces.
+	s.release(u, u.files[name]+w.held-w.n)
 	u.files[name] = w.n
 	return nil
 }
 
-// begin counts a write of the file name, of size bytes, into an upload.
+// begin counts a write of the file name, of size bytes, into an upload, and
+// reserves the size when it is known.
 func (s *Store) begin(capability, name string, size int64, now time.Time) (*upload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -250,34 +255,50 @@ func (s *Store) begin(capability, name string, size int64, now time.Time) (*uplo
 	if _, ok := u.files[name]; !ok && len(u.files)+u.writes >= maxBlocks {
 		return nil, fmt.Errorf("an upload holds at most %d blocks", maxBlocks)
 	}
-	if size > 0 && !s.fits(size) {
-		return nil, ErrNoRoom
+	if size > 0 {
+		if err := s.take(u, size, false); err != nil {
+			return nil, err
+		}
 	}
 	u.writes++
 	u.last = now
 	return u, nil
 }
 
-// budget writes to f only what the store has room for, and counts it.
+// budget writes to f only what the store has room for, and counts it. held is
+// what the write has taken from the store: the length it reserved, or the
+// bytes written when they pass it. limited is set for a body of unknown
+// length.
 type budget struct {
-	s *Store
-	u *upload
-	f *os.File
-	n int64
+	s       *Store
+	u       *upload
+	f       *os.File
+	n       int64
+	held    int64
+	limited bool
 }
 
 func (w *budget) Write(p []byte) (int, error) {
-	if err := w.s.grow(w.u, int64(len(p))); err != nil {
-		return 0, err
+	if more := w.n + int64(len(p)) - w.held; more > 0 {
+		if err := w.s.grow(w.u, more, w.limited); err != nil {
+			return 0, err
+		}
+		w.held += more
 	}
 	w.n += int64(len(p))
 	return w.f.Write(p)
 }
 
-func (s *Store) grow(u *upload, n int64) error {
+func (s *Store) grow(u *upload, n int64, limited bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.room(u.Repo, n) {
+	return s.take(u, n, limited)
+}
+
+// take counts n more bytes in u once the store has made room for them. The
+// caller holds mu.
+func (s *Store) take(u *upload, n int64, limited bool) error {
+	if !s.room(u.Repo, n, limited) {
 		return ErrNoRoom
 	}
 	u.bytes += n
@@ -348,7 +369,7 @@ func (s *Store) join(u *upload, names []string, sizes []int64) (int64, error) {
 	defer archive.Close()
 	var size int64
 	for i, name := range names {
-		if err := s.grow(u, sizes[i]); err != nil {
+		if err := s.grow(u, sizes[i], false); err != nil {
 			return 0, err
 		}
 		f, err := os.Open(filepath.Join(u.dir, name))
@@ -436,7 +457,7 @@ func (s *Store) Finalize(c Claims, key, version string, size int64, now time.Tim
 	if s.count(e.Repo) > maxEntries {
 		s.remove(s.oldest(func(o *Entry) bool { return o.Repo == e.Repo }))
 	}
-	s.room("", 0)
+	s.room("", 0, false)
 	return e, nil
 }
 
@@ -503,7 +524,7 @@ func (s *Store) Sweep(now time.Time) {
 			delete(s.downloads, k)
 		}
 	}
-	short := !s.room("", 0)
+	short := !s.room("", 0, false)
 	for k, u := range s.uploads {
 		if u.writes == 0 && (short || now.Sub(u.last) > uploadIdle) {
 			s.drop(k)
@@ -522,47 +543,84 @@ func (s *Store) Size() (int64, int) {
 // above Floor, and says whether they do. Each entry it gives up is the least
 // recently used of the repository that holds the most, counting uploads and
 // need, with repo first among equals, so a repository makes room from its own
-// entries before those of a repository that holds less. When that is repo
-// with no entries left, or need could not fit with every entry gone, it gives
-// up nothing more. The caller holds mu.
-func (s *Store) room(repo string, need int64) bool {
-	if need > 0 && !s.fits(need) {
+// entries before those of a repository that holds less. It plans the entries
+// first and gives up none when they would not be enough: a write whose
+// repository holds the most and has too few entries of its own, or that could
+// not fit with every entry gone, removes nothing. With limited set, once repo
+// holds its share of Max, an equal part for each repository that holds
+// anything, the plan takes only repo's own entries. For repo "", which asks
+// for nothing, it gives up as many as it can. The caller holds mu.
+func (s *Store) room(repo string, need int64, limited bool) bool {
+	free, err := s.Free()
+	if err != nil {
 		return false
 	}
-	for {
-		free, err := s.Free()
-		if err != nil {
-			return false
+	evict, ok := s.plan(repo, need, limited, free)
+	if ok || repo == "" {
+		for _, e := range evict {
+			s.remove(e)
 		}
-		if s.size+s.open+need <= s.Max && free-need >= s.Floor {
-			return true
-		}
-		held := map[string]int64{repo: need}
-		for _, e := range s.entries {
-			held[e.Repo] += e.Size
-		}
-		for _, u := range s.uploads {
-			held[u.Repo] += u.bytes
-		}
-		top := repo
-		for _, e := range s.entries {
-			if held[e.Repo] > held[top] {
-				top = e.Repo
-			}
-		}
-		oldest := s.oldest(func(e *Entry) bool { return e.Repo == top })
-		if oldest == nil {
-			return false
-		}
-		s.remove(oldest)
 	}
+	return ok
 }
 
-// fits says whether need more bytes would fit with every entry given up. The
-// caller holds mu.
-func (s *Store) fits(need int64) bool {
-	free, err := s.Free()
-	return err == nil && s.open+need <= s.Max && free+s.size-need >= s.Floor
+// plan lists the entries room would give up for repo, in order, when free
+// bytes are free, and says whether they make room. The caller holds mu.
+func (s *Store) plan(repo string, need int64, limited bool, free int64) ([]*Entry, bool) {
+	fit := func(freed int64) bool {
+		return s.size-freed+s.open+need <= s.Max && free+freed-need >= s.Floor
+	}
+	if fit(0) {
+		return nil, true
+	}
+	// With every entry gone, still too much: nothing is worth giving up.
+	if repo != "" && !fit(s.size) {
+		return nil, false
+	}
+	held := map[string]int64{repo: need}
+	queue := map[string][]*Entry{}
+	for _, e := range s.entries {
+		held[e.Repo] += e.Size
+		queue[e.Repo] = append(queue[e.Repo], e)
+	}
+	for _, u := range s.uploads {
+		held[u.Repo] += u.bytes
+	}
+	repos := make([]string, 0, len(queue))
+	for r, q := range queue {
+		repos = append(repos, r)
+		slices.SortFunc(q, func(a, b *Entry) int { return cmp.Or(a.used.Compare(b.used), cmp.Compare(a.id, b.id)) })
+	}
+	slices.Sort(repos)
+	holders := int64(1)
+	for r, n := range held {
+		if r != repo && n > 0 {
+			holders++
+		}
+	}
+	share := s.Max / holders
+
+	var evict []*Entry
+	var freed int64
+	for !fit(freed) {
+		top := repo
+		if !limited || held[repo]-need < share {
+			for _, r := range repos {
+				if len(queue[r]) > 0 && held[r] > held[top] {
+					top = r
+				}
+			}
+		}
+		if len(queue[top]) == 0 {
+			return evict, false
+		}
+		e := queue[top][0]
+		queue[top] = queue[top][1:]
+		held[top] -= e.Size
+		freed += e.Size
+		evict = append(evict, e)
+	}
+	return evict, true
 }
 
 // oldest is the least recently used entry that keep is true for. The caller
