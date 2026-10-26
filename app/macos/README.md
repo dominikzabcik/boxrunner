@@ -15,7 +15,7 @@ The menu is drawn like a terminal UI, dark and monospaced, with each action's ke
 1. Build it: `app/macos/build-app.sh`, then move `app/macos/build/boxrunner.app` to Applications and open it. It needs macOS 14.
 2. Click its menu bar item, enter the Worker's address and press **connect** (⏎). It pairs under this Mac's name.
 3. Your browser opens the Worker's pairing page. Sign in if asked, check that it shows the same code as the app, and press **Pair** there.
-4. The menu shows the fleet within a few seconds. Choose which box is this Mac, so the switch knows what to turn off.
+4. The menu shows the fleet within a few seconds, with the switch for this Mac's box. The app finds that box on its own when exactly one box of the fleet is named like this Mac or like a Linux VM that OrbStack or Lima runs on it. Otherwise choose it under **this mac**.
 
 The app keeps its token in the login keychain. **Unpair** in the app forgets it; **Unpair** on the dashboard stops it at once. Whoever approved the pairing must be able to open the dashboard, or the token stops working.
 
