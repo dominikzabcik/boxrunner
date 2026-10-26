@@ -59,7 +59,7 @@ For `services:`, `container:` jobs and `docker build`, add `--docker` to the ins
 
 To run an AI coding agent on the box, one job at a time behind an egress allowlist, see [running coding agents](docs/coding-agents.md).
 
-`sudo boxrunner doctor` checks the box, including that a job cannot reach the host, your private network or the cloud metadata service. `sudo boxrunner status` shows what runs, and `sudo boxrunner shell` opens a shell in a running job, or in a failed one a class keeps for you. When a new box takes over from one that died, [replacing a box](docs/architecture.md#replacing-a-box) says how to recover the jobs the old one had acquired.
+`sudo boxrunner doctor` checks the box, including that a job cannot reach the host, your private network or the cloud metadata service. `sudo boxrunner status` shows what runs (`--json` prints the same data as JSON for scripts and monitoring), and `sudo boxrunner shell` opens a shell in a running job, or in a failed one a class keeps for you. When a new box takes over from one that died, [replacing a box](docs/architecture.md#replacing-a-box) says how to recover the jobs the old one had acquired.
 
 ## Why
 

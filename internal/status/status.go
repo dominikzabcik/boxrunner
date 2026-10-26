@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -122,6 +121,26 @@ type Class struct {
 	// Limit is the limit set for the class on this box on the Worker's
 	// dashboard, when there is one; the box runs at most the lower of the two.
 	Limit *int `json:"limit,omitempty"`
+	// Paused means the class is paused on the dashboard: the box starts no
+	// runner for it on any repository until someone resumes it.
+	Paused bool `json:"paused"`
+}
+
+// Dashboard says what the Worker's dashboard sets for the class, such as
+// "paused, limit 1", or "" when it sets nothing.
+func (c Class) Dashboard() string {
+	var parts []string
+	if c.Paused {
+		parts = append(parts, "paused")
+	}
+	switch {
+	case c.Limit == nil:
+	case *c.Limit == 0:
+		parts = append(parts, "limit 0, off on this box")
+	default:
+		parts = append(parts, fmt.Sprintf("limit %d", *c.Limit))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // NextTry says when a class that holds its starts tries again, or "" when
@@ -486,6 +505,14 @@ func call(ctx context.Context, socket, method, path string) (*http.Response, err
 	return resp, nil
 }
 
+// PrintJSON writes a snapshot as the agent sends it on its socket, indented,
+// for scripts and monitoring.
+func PrintJSON(w io.Writer, s Snapshot) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(s)
+}
+
 // Print writes a snapshot for people.
 func Print(w io.Writer, s Snapshot, now time.Time) {
 	images := ""
@@ -527,13 +554,9 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 		}
 	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
+	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX\tDASHBOARD")
 	for _, c := range s.Classes {
-		most := strconv.Itoa(c.Max)
-		if c.Limit != nil {
-			most += fmt.Sprintf(", limit %d on the dashboard", *c.Limit)
-		}
-		fmt.Fprintf(t, "%s\t%s\t%d\t%s\n", c.Name, c.Priority, c.Active, most)
+		fmt.Fprintf(t, "%s\t%s\t%d\t%d\t%s\n", c.Name, c.Priority, c.Active, c.Max, cmp.Or(c.Dashboard(), "-"))
 	}
 	t.Flush()
 	if len(s.Egress) > 0 {
