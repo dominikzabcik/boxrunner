@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
@@ -112,15 +113,25 @@ func Ensure(ctx context.Context, d *docker.Client, addr netip.AddrPort) error {
 	return d.Start(ctx, id)
 }
 
-// Remove deletes the mirror's container, its cache and its image, unless
-// another container uses that image.
+// HasImage is whether the mirror's image is on the box and not among the
+// image IDs in used.
+func HasImage(images []docker.ImageSummary, used map[string]bool) bool {
+	return slices.ContainsFunc(images, func(img docker.ImageSummary) bool {
+		return !used[img.ID] && slices.Contains(img.RepoDigests, Image)
+	})
+}
+
+// Remove deletes the mirror's container and its cache. The image stays:
+// RemoveImage deletes it.
 func Remove(ctx context.Context, d *docker.Client) error {
 	if err := d.Remove(ctx, layout.Mirror); err != nil {
 		return err
 	}
-	if err := d.RemoveVolume(ctx, layout.Mirror); err != nil {
-		return err
-	}
+	return d.RemoveVolume(ctx, layout.Mirror)
+}
+
+// RemoveImage deletes the mirror's image, unless a container uses it.
+func RemoveImage(ctx context.Context, d *docker.Client) error {
 	var inUse *docker.Error
 	if err := d.RemoveImage(ctx, Image); err != nil && !(errors.As(err, &inUse) && inUse.Status == http.StatusConflict) {
 		return err

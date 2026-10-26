@@ -343,3 +343,81 @@ func TestBlockListAfterAWholeUpload(t *testing.T) {
 		t.Errorf("restored %q; want newdata", archive)
 	}
 }
+
+// TestSlowUploadsFailBeforeRemovingOthers: an upload whose declared length
+// cannot fit takes nothing from another repository, however slowly its body
+// comes.
+func TestSlowUploadsFailBeforeRemovingOthers(t *testing.T) {
+	b := newBox(t, 1000)
+	for i := range 3 {
+		b.save(otherToken, fmt.Sprint("o", i), "v1", strings.Repeat("o", 300))
+	}
+	capability := strings.TrimPrefix(b.reserve(mainToken, "k"), b.srv.URL+uploadPath)
+	slow := iotest.OneByteReader(strings.NewReader(strings.Repeat("x", 800)))
+	if err := b.store.Put(capability, "", slow, 800, b.clock()); !errors.Is(err, ErrNoRoom) || !reflect.DeepEqual(b.kept(), []int64{900, 3}) {
+		t.Errorf("800 declared bytes, one at a time, beside another repository's 900 = %v, leaving %v; want ErrNoRoom and [900 3]", err, b.kept())
+	}
+}
+
+// TestChunkedUploadsStopAtTheirShare: a body of unknown length takes entries
+// from other repositories only until its writer holds a share, here a third
+// of the cache with three repositories, and then fails.
+func TestChunkedUploadsStopAtTheirShare(t *testing.T) {
+	b := newBox(t, 1000)
+	for i := range 5 {
+		b.save(otherToken, fmt.Sprint("o", i), "v1", strings.Repeat("o", 100))
+	}
+	b.save(runtimeToken("300", "refs/heads/main:3"), "c", "v1", strings.Repeat("c", 100))
+	capability := strings.TrimPrefix(b.reserve(mainToken, "k"), b.srv.URL+uploadPath)
+	slow := iotest.OneByteReader(strings.NewReader(strings.Repeat("x", 600)))
+	if err := b.store.Put(capability, "", slow, -1, b.clock()); !errors.Is(err, ErrNoRoom) || !reflect.DeepEqual(b.kept(), []int64{600, 6}) {
+		t.Errorf("600 bytes of unknown length with 600 taken by two repositories = %v, leaving %v; want ErrNoRoom and [600 6]", err, b.kept())
+	}
+}
+
+// TestTheBiggestRepositoryIsNotPinned: a write that would fit only if the
+// cache gave up entries it never gives up fails at once, and removes none of
+// the writer's own.
+func TestTheBiggestRepositoryIsNotPinned(t *testing.T) {
+	b := newBox(t, 1000)
+	for i := range 3 {
+		b.save(mainToken, fmt.Sprint("m", i), "v1", strings.Repeat("m", 300))
+	}
+	b.save(otherToken, "o", "v1", strings.Repeat("o", 100))
+	if got := b.put(b.reserve(mainToken, "big"), strings.Repeat("x", 950)); got != http.StatusBadRequest || !reflect.DeepEqual(b.kept(), []int64{1000, 4}) {
+		t.Errorf("950 bytes from the repository that holds 900 of 1000 = %d, leaving %v; want 400 and [1000 4]", got, b.kept())
+	}
+}
+
+// TestConnectionsFollowTheContainers: with eight containers possible, one
+// gets 32 of the 256 connections, so the other seven can always reach theirs.
+func TestConnectionsFollowTheContainers(t *testing.T) {
+	b := newBox(t, 1<<20)
+	addr := b.serveFor(8, func(n int) string {
+		if n <= 33 {
+			return "10.0.0.1"
+		}
+		return fmt.Sprint("10.0.0.", 2+n%7)
+	})
+	for i := range 32 {
+		if _, status, err := ask(t, addr); status != http.StatusOK {
+			t.Fatalf("connection %d = %d %v", i+1, status, err)
+		}
+	}
+	if _, status, err := ask(t, addr); err == nil {
+		t.Errorf("a 33rd connection from one of eight containers = %d; want it closed", status)
+	}
+	for i := range 224 {
+		if _, status, err := ask(t, addr); status != http.StatusOK {
+			t.Fatalf("connection %d of the other containers = %d %v", i+1, status, err)
+		}
+	}
+}
+
+func TestConnectionsPerContainer(t *testing.T) {
+	for _, c := range []struct{ containers, want int }{{0, 64}, {1, 64}, {4, 64}, {5, 51}, {8, 32}, {32, 8}, {100, 8}} {
+		if got := addrConns(c.containers); got != c.want {
+			t.Errorf("addrConns(%d) = %d; want %d", c.containers, got, c.want)
+		}
+	}
+}

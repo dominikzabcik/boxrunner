@@ -173,7 +173,7 @@ It installs the latest release on the box, checked like the first install, and r
 sudo boxrunner uninstall
 ```
 
-It closes the box's sessions and removes the service, containers, network, firewall rules and files. Docker stays, and so does Sysbox if `install` added it.
+It closes the box's sessions and removes the service, containers, images, network, firewall rules and files. Docker stays, and so does Sysbox if `install` added it.
 
 ## Contributing
 
