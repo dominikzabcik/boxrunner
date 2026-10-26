@@ -18,6 +18,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 )
 
 // Desired is what the person running install asked for. Empty strings keep
@@ -86,8 +87,13 @@ type Observed struct {
 	EgressTable    bool
 	Image          bool
 	Containers     int
-	UnitEnabled    bool
-	UnitActive     bool
+	// RunnerImages are the references to the runner images that install
+	// pulled, and MirrorImage is whether the mirror's image is on the box; both
+	// only while no container outside boxrunner's own uses the image.
+	RunnerImages []string
+	MirrorImage  bool
+	UnitEnabled  bool
+	UnitActive   bool
 	// AgentReplaced means the running agent's binary was replaced after it
 	// started, as install.sh does before it runs install.
 	AgentReplaced bool
@@ -118,20 +124,24 @@ type (
 	// jobs may reach.
 	ApplyFirewall struct{ Services firewall.Services }
 	// StartMirror runs the registry mirror on the network's gateway.
-	StartMirror      struct{}
-	RemoveMirror     struct{}
-	BuildImage       struct{}
-	EnableUnit       struct{}
-	RestartUnit      struct{}
-	StopUnit         struct{}
-	StopSlice        struct{}
-	RemoveContainers struct{}
-	RemoveNetwork    struct{}
+	StartMirror  struct{}
+	RemoveMirror struct{}
+	// RemoveMirrorImage removes the registry image the mirror ran.
+	RemoveMirrorImage struct{}
+	BuildImage        struct{}
+	EnableUnit        struct{}
+	RestartUnit       struct{}
+	StopUnit          struct{}
+	StopSlice         struct{}
+	RemoveContainers  struct{}
+	RemoveNetwork     struct{}
 	// RemoveEgress removes the networks of egress classes and the table of their rules.
 	RemoveEgress   struct{ Networks []string }
 	RemoveFirewall struct{}
 	RemoveImage    struct{}
-	RemovePath     struct{ Path string }
+	// RemoveRunnerImages removes the runner images the job image was built from.
+	RemoveRunnerImages struct{ Refs []string }
+	RemovePath         struct{ Path string }
 )
 
 func (s Blocked) String() string { return "cannot continue: " + s.Reason }
@@ -167,6 +177,9 @@ func (StartMirror) String() string {
 func (RemoveMirror) String() string {
 	return "remove the registry mirror " + layout.Mirror + " and its cache"
 }
+func (RemoveMirrorImage) String() string {
+	return "remove the registry image " + mirror.Image
+}
 func (BuildImage) String() string       { return "build the job image " + layout.Image }
 func (EnableUnit) String() string       { return "enable and start " + layout.UnitName }
 func (RestartUnit) String() string      { return "restart " + layout.UnitName }
@@ -176,7 +189,10 @@ func (RemoveContainers) String() string { return "remove the job containers" }
 func (RemoveNetwork) String() string    { return "remove the Docker network " + layout.Network }
 func (RemoveFirewall) String() string   { return "remove the firewall rules" }
 func (RemoveImage) String() string      { return "remove the job image " + layout.Image }
-func (s RemovePath) String() string     { return "remove " + s.Path }
+func (RemoveRunnerImages) String() string {
+	return "remove the runner images " + runnerdigests.Image
+}
+func (s RemovePath) String() string { return "remove " + s.Path }
 
 // SysboxPackage is a pinned Sysbox release for one architecture.
 type SysboxPackage struct {
@@ -342,6 +358,9 @@ func Plan(d Desired, o Observed) []Step {
 		steps = append(steps, StartMirror{})
 	case !wantMirror && o.Mirror != mirror.State{}:
 		steps = append(steps, RemoveMirror{})
+		if o.MirrorImage {
+			steps = append(steps, RemoveMirrorImage{})
+		}
 	}
 	services := firewall.Services{Mirror: wantMirror, Cache: cfg.Cache > 0}
 	wall := o.Firewall
@@ -408,6 +427,9 @@ func PlanUninstall(o Observed) []Step {
 		if o.Mirror != (mirror.State{}) {
 			steps = append(steps, RemoveMirror{})
 		}
+		if o.MirrorImage {
+			steps = append(steps, RemoveMirrorImage{})
+		}
 		if len(o.EgressNetworks) > 0 {
 			steps = append(steps, RemoveEgress{Networks: o.EgressNetworks})
 		} else if o.EgressTable {
@@ -418,6 +440,10 @@ func PlanUninstall(o Observed) []Step {
 		}
 		if o.Image {
 			steps = append(steps, RemoveImage{})
+		}
+		if len(o.RunnerImages) > 0 {
+			// After the job image, which they are the parent of.
+			steps = append(steps, RemoveRunnerImages{Refs: o.RunnerImages})
 		}
 	}
 	if !o.DockerUp && o.EgressTable {
