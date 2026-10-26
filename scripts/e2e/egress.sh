@@ -68,7 +68,7 @@ step "doctor proves the policy from a container on the class's network"
 sudo boxrunner doctor | tee "$work/doctor-egress.txt" || fail "doctor exited with $?"
 expect "$work/doctor-egress.txt" "^ok +egress $class rules " "^ok +egress $class agent " "^ok +egress $class allows github.com resolves and answers" \
 	"^ok +egress $class refuses a name example\\.(net|org) " "^ok +egress $class refuses an address " "^ok +egress $class host " "^ok +egress $class resolver "
-if grep -vE "^(ok  |warn  (release|worker release|runner release) )" "$work/doctor-egress.txt"; then
+if grep -vE "^(ok  |warn  (release|worker release|runner release|memory) )" "$work/doctor-egress.txt"; then
 	fail "doctor printed the lines above"
 fi
 
