@@ -64,7 +64,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `cache` | `false` | Keeps the class's [Actions cache](#actions-cache) entries on the box. Needs `cache` at the top. |
 | `egress` | none | Closes the class's network to everything its entries do not allow; see [Egress allowlist](#egress-allowlist). Without it the class reaches the internet as before. |
 
-Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
+Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%. `sudo boxrunner doctor` adds up `memory` times `max` over all classes, idle ones too, and warns when the sum is more than the box has: if every class then ran at its `max`, the kernel's OOM killer would pick a job or the agent. The defaults add up to more than the box on purpose, because the idle class rarely runs at its `max` beside a busy normal class; lower `memory` or `max` to silence the warning.
 
 ## Isolation
 

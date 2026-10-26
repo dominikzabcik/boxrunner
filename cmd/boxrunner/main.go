@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -344,7 +345,7 @@ func doctorCmd(ctx context.Context) error {
 		}
 		fmt.Printf("%s  %-15s %s\n", mark, r.Name, r.Detail)
 	}
-	for _, r := range append(checks.Forks(ctx), checks.Releases(ctx)...) {
+	for _, r := range slices.Concat(checks.Memory(), checks.Forks(ctx), checks.Releases(ctx)) {
 		mark := "ok  "
 		if !r.OK {
 			mark = "warn"
