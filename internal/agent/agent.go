@@ -41,6 +41,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
@@ -81,7 +82,12 @@ type Options struct {
 	// EgressListen opens the sockets of an egress class's DNS forwarder; nil
 	// listens on port 53 of the class network's gateway.
 	EgressListen func(egress.Net) (net.PacketConn, net.Listener, error)
-	// OpenPackets reads what the egress rules log; nil opens the NFLOG group.
+	// DestinationsFile holds the destinations jobs connected to, and
+	// SaveDestinationsEvery is how often it is written; 0 means the real path
+	// and five minutes.
+	DestinationsFile      string
+	SaveDestinationsEvery time.Duration
+	// OpenPackets reads what the rules log; nil opens the NFLOG group.
 	OpenPackets func(group uint16) (PacketSource, error)
 	// EgressUpstream answers the names an egress class allows; nil asks the
 	// box's own resolvers.
@@ -123,6 +129,8 @@ type Agent struct {
 	jobRules firewall.Rules
 	// egress is what the agent keeps for the classes with an allowlist.
 	egress *egressState
+	// dest is what the agent keeps of where jobs connect.
+	dest   *destinationsState
 	queue  *queue.Client
 	events chan scheduler.Event
 	// stopped closes when the scheduler loop no longer reads events.
@@ -167,6 +175,9 @@ type Agent struct {
 	// case) whose jobs the class's organization scale set acquires.
 	org     atomic.Pointer[worker.Organization]
 	accepts atomic.Pointer[map[string]map[string]bool]
+	// paused are the classes paused on the dashboard, as the Worker last listed
+	// the repositories.
+	paused atomic.Pointer[[]string]
 	// refused counts, by scale set and repository, the jobs an organization
 	// scale set was offered from repositories the box does not serve.
 	refusedMu sync.Mutex
@@ -197,6 +208,7 @@ func Run(ctx context.Context, o Options) error {
 	o.SysboxDir = cmp.Or(o.SysboxDir, layout.SysboxDir)
 	o.CgroupDir = cmp.Or(o.CgroupDir, layout.CgroupDir)
 	o.CacheDir = cmp.Or(o.CacheDir, layout.CacheDir)
+	o.DestinationsFile = cmp.Or(o.DestinationsFile, layout.DestinationsPath)
 	a := &Agent{
 		Options: o,
 		queue:   &queue.Client{HTTP: &http.Client{Timeout: 90 * time.Second}, UserAgent: "boxrunner/" + o.Version},
@@ -207,6 +219,7 @@ func Run(ctx context.Context, o Options) error {
 		resync:  make(chan struct{}, 1),
 		beat:    make(chan struct{}, 1),
 		egress:  &egressState{enforcer: &egress.Enforcer{Run: o.Run}, ledger: &egress.Ledger{}},
+		dest:    &destinationsState{book: &seen.Book{}},
 	}
 	info, err := a.Docker.Info(ctx)
 	if err != nil {
@@ -217,6 +230,9 @@ func Run(ctx context.Context, o Options) error {
 	a.Config = a.Config.ResolveIsolation(a.sysbox)
 	if err := a.converge(ctx); err != nil {
 		return err
+	}
+	if err := a.dest.book.Load(a.DestinationsFile); err != nil {
+		a.Log.Warn("reading the destinations jobs connected to; starting with none", "err", err)
 	}
 	// The cache outlives the rest of the agent's shutdown, so that a job
 	// whose step talks to it while the agent stops gets its answer.
@@ -325,6 +341,7 @@ func (a *Agent) converge(ctx context.Context) error {
 	}
 	a.jobRules = rules
 	a.convergeEgress(ctx, services, gateway)
+	a.convergeDestinations(ctx)
 	return nil
 }
 
@@ -349,7 +366,7 @@ func (a *Agent) serveCache(ctx context.Context) func() {
 	}
 	upstream, _ := url.Parse(cache.Upstream)
 	srv := &cache.Server{
-		Store: store, Base: cache.URL(a.CacheAddr), Upstream: upstream, Log: a.Log, Now: time.Now,
+		Store: store, Base: cache.URL(a.CacheAddr), Upstream: upstream, Log: a.Log, Now: time.Now, Containers: a.Config.CacheContainers(),
 		Keys: &cache.Keys{URL: cache.KeysURL, Issuer: cache.Issuer, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: a.Log},
 	}
 	a.cache = srv.Base
@@ -908,8 +925,9 @@ func (a *Agent) publish(s scheduler.State) {
 		}
 		snap.Runners = append(snap.Runners, status.Runner{Name: r.Name, Repo: r.ScaleSet.Repo, Class: r.ScaleSet.Class, Phase: r.Phase.String(), Since: r.Since, Warm: warm[r.Name]})
 	}
+	paused := a.paused.Load()
 	for _, c := range a.Config.Classes {
-		class := status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until}
+		class := status.Class{Name: c.Name, Priority: c.Priority.String(), Max: c.Max, Active: active[c.Name], HeldUntil: s.Backoff[c.Name].Until, Paused: paused != nil && slices.Contains(*paused, c.Name)}
 		if limit, ok := s.Limits[c.Name]; ok {
 			class.Limit = &limit
 		}
@@ -951,6 +969,8 @@ func (a *Agent) status() status.Snapshot {
 		a.Log.Warn("reading the job log", "err", err)
 	}
 	snap.Jobs = jobs
+	snap.Destinations = a.dest.book.Repos(statusDestinations)
+	snap.DestinationsProblem = a.dest.why()
 	return snap
 }
 
@@ -1056,6 +1076,7 @@ func (a *Agent) wanted(ctx context.Context, paused map[string]bool) (map[schedul
 	want := map[scheduler.Key]bool{}
 	org := repos.Organization
 	a.org.Store(org)
+	a.paused.Store(&repos.Paused)
 	if org != nil && org.Problem != "" {
 		a.Log.Error("the Worker serves no repository of its organization", "org", org.Name, "group", org.Group, "problem", org.Problem)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/autoupgrade"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 var t0 = time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC)
@@ -141,9 +142,64 @@ func TestPrintDraining(t *testing.T) {
 	Print(&b, snap, t0)
 	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n" +
-		"CLASS  PRIORITY  RUNNERS  MAX\n"
+		"CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n"
 	if got := b.String(); !strings.HasPrefix(got, want) {
 		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
+	}
+}
+
+func TestPrintJSON(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0", Worker: "0.1.0",
+		Classes: []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 1}, {Name: "boxrunner-light", Priority: "idle", Max: 2, Limit: new(0), Paused: true}},
+		Runners: []Runner{{Name: "box-1-boxrunner-3f9a2c", Repo: "octo/site", Class: "boxrunner", Phase: "running", Since: t0}},
+		Image:   ImageStatus{Built: "2.338.0", Latest: "2.338.0"}, DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
+	}
+	var b strings.Builder
+	if err := PrintJSON(&b, snap); err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "box": "box-1",
+  "version": "0.1.0",
+  "classes": [
+    {
+      "name": "boxrunner",
+      "priority": "normal",
+      "max": 2,
+      "active": 1,
+      "paused": false
+    },
+    {
+      "name": "boxrunner-light",
+      "priority": "idle",
+      "max": 2,
+      "active": 0,
+      "limit": 0,
+      "paused": true
+    }
+  ],
+  "scaleSets": null,
+  "runners": [
+    {
+      "name": "box-1-boxrunner-3f9a2c",
+      "repo": "octo/site",
+      "class": "boxrunner",
+      "phase": "running",
+      "since": "2026-10-13T21:00:00Z"
+    }
+  ],
+  "image": {
+    "built": "2.338.0",
+    "latest": "2.338.0"
+  },
+  "diskFree": 41250000000,
+  "diskFloor": 10000000000,
+  "worker": "0.1.0"
+}
+`
+	if got := b.String(); got != want {
+		t.Errorf("PrintJSON =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -151,7 +207,8 @@ func TestPrint(t *testing.T) {
 	snap := Snapshot{
 		Box: "box-1", Version: "0.1.0", Worker: "0.1.0", Latest: "0.1.0", Image: ImageStatus{Built: "2.338.0", Latest: "2.338.0", Disk: 3_140_000_000},
 		DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000,
-		Classes:   []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2, Limit: new(0)}},
+		Classes: []Class{{Name: "boxrunner", Priority: "normal", Max: 2, Active: 2}, {Name: "boxrunner-light", Priority: "idle", Max: 2, Limit: new(0)},
+			{Name: "boxrunner-gpu", Priority: "high", Max: 1, Paused: true}, {Name: "boxrunner-arm", Priority: "normal", Max: 4, Limit: new(1), Paused: true}},
 		ScaleSets: []ScaleSet{{Repo: "octo/site", Class: "boxrunner", Assigned: 1}},
 		Elsewhere: []Elsewhere{{Repo: "octo/docs", Class: "boxrunner", Box: "box-2"}},
 		Runners: []Runner{
@@ -173,9 +230,11 @@ func TestPrint(t *testing.T) {
 
 If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
-CLASS            PRIORITY  RUNNERS  MAX
-boxrunner        normal    2        2
-boxrunner-light  idle      0        2, limit 0 on the dashboard
+CLASS            PRIORITY  RUNNERS  MAX  DASHBOARD
+boxrunner        normal    2        2    -
+boxrunner-light  idle      0        2    limit 0, off on this box
+boxrunner-gpu    high      0        1    paused
+boxrunner-arm    normal    0        4    paused, limit 1
 
 REPOSITORY  CLASS      ASSIGNED JOBS
 octo/site   boxrunner  1
@@ -258,7 +317,7 @@ func TestPrintHeldClass(t *testing.T) {
 	Print(&b, snap, t0)
 	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Runners of class web exit before taking a job; next try at " + t0.Add(4*time.Minute).Local().Format("15:04:05") + ". See `journalctl -u boxrunner` for their output.\n\n" +
-		"CLASS      PRIORITY  RUNNERS  MAX\n"
+		"CLASS      PRIORITY  RUNNERS  MAX  DASHBOARD\n"
 	if got := b.String(); !strings.HasPrefix(got, want) {
 		t.Errorf("Print =\n%s\nwant it to start with\n%s", got, want)
 	}
@@ -375,9 +434,9 @@ func TestPrintEgress(t *testing.T) {
 	at := func(d time.Duration) string { return t0.Add(d).Local().Format("15:04:05") }
 	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Class coder has an egress allowlist and is not served: nft is not installed; run sudo boxrunner install\n\n" +
-		"CLASS  PRIORITY  RUNNERS  MAX\n" +
-		"agent  normal    0        1\n" +
-		"web    normal    0        1\n\n" +
+		"CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n" +
+		"agent  normal    0        1    -\n" +
+		"web    normal    0        1    -\n\n" +
 		"EGRESS CLASS  ENTRIES  PACKETS DROPPED  LOOKUPS REFUSED\n" +
 		"agent         3        12               1\n" +
 		"coder         1        0                0\n\n" +
@@ -390,6 +449,40 @@ func TestPrintEgress(t *testing.T) {
 	}
 	if got, want := snap.Egress[0].Summary(), "12 packets dropped and 1 lookup refused since the agent started"; got != want {
 		t.Errorf("Summary = %q, want %q", got, want)
+	}
+}
+
+func TestPrintDestinations(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0",
+		Classes: []Class{{Name: "agent", Priority: "normal", Max: 1}},
+		Destinations: []seen.Repo{
+			{Repo: "", Destinations: []seen.Destination{{Addr: "198.51.100.4", Port: 53, Proto: "udp", First: t0, Last: t0, Count: 1}}},
+			{Repo: "octo/site", Destinations: []seen.Destination{
+				{Addr: "203.0.113.9", Port: 443, Proto: "tcp", Name: "api.example.com", First: t0.Add(time.Hour), Last: t0.Add(time.Hour), Count: 12},
+				{Addr: "203.0.113.20", Proto: "icmp", First: t0, Last: t0, Count: 2},
+			}},
+		},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	at := func(d time.Duration) string { return t0.Add(d).Local().Format("Jan 02 15:04") }
+	want := "CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n" +
+		"agent  normal    0        1    -\n\n" +
+		"REPOSITORY  FIRST SEEN    CONNECTIONS  DESTINATION\n" +
+		"?           " + at(0) + "  1            198.51.100.4:53 udp\n" +
+		"octo/site   " + at(time.Hour) + "  12           203.0.113.9:443 (api.example.com)\n" +
+		"octo/site   " + at(0) + "  2            203.0.113.20 icmp\n" +
+		"Up to 10 destinations per repository, the newest first. A ? is a container that is not one of the agent's runners.\n\n"
+	if got := b.String(); !strings.Contains(got, want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", got, want)
+	}
+
+	snap.Destinations, snap.DestinationsProblem = nil, "nft is not installed, so the destinations jobs connect to are not recorded; run sudo boxrunner install"
+	b.Reset()
+	Print(&b, snap, t0)
+	if got, want := b.String(), "Destinations: nft is not installed, so the destinations jobs connect to are not recorded; run sudo boxrunner install\n\nCLASS"; !strings.Contains(got, want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", got, want)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
+	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 )
 
 // Desired is what the person running install asked for. Empty strings keep
@@ -78,7 +79,7 @@ type Observed struct {
 	FirewallOpen map[firewall.Services]firewall.State
 	Mirror       mirror.State
 	// Nft is true when the nft command is there, which classes with an egress
-	// allowlist need.
+	// allowlist need, and which logs where jobs connect.
 	Nft bool
 	// EgressNetworks are the Docker networks of egress classes, and EgressTable
 	// is whether the nftables table of their rules exists.
@@ -86,8 +87,13 @@ type Observed struct {
 	EgressTable    bool
 	Image          bool
 	Containers     int
-	UnitEnabled    bool
-	UnitActive     bool
+	// RunnerImages are the references to the runner images that install
+	// pulled, and MirrorImage is whether the mirror's image is on the box; both
+	// only while no container outside boxrunner's own uses the image.
+	RunnerImages []string
+	MirrorImage  bool
+	UnitEnabled  bool
+	UnitActive   bool
 	// AgentReplaced means the running agent's binary was replaced after it
 	// started, as install.sh does before it runs install.
 	AgentReplaced bool
@@ -105,7 +111,7 @@ type (
 	// with Docker.
 	InstallSysbox struct{ Package SysboxPackage }
 	// InstallNftables installs the nftables package, which holds the nft
-	// command that the egress allowlists need.
+	// command that logs where jobs connect and that the egress allowlists need.
 	InstallNftables struct{}
 	WriteFile       struct {
 		Path    string
@@ -118,20 +124,24 @@ type (
 	// jobs may reach.
 	ApplyFirewall struct{ Services firewall.Services }
 	// StartMirror runs the registry mirror on the network's gateway.
-	StartMirror      struct{}
-	RemoveMirror     struct{}
-	BuildImage       struct{}
-	EnableUnit       struct{}
-	RestartUnit      struct{}
-	StopUnit         struct{}
-	StopSlice        struct{}
-	RemoveContainers struct{}
-	RemoveNetwork    struct{}
+	StartMirror  struct{}
+	RemoveMirror struct{}
+	// RemoveMirrorImage removes the registry image the mirror ran.
+	RemoveMirrorImage struct{}
+	BuildImage        struct{}
+	EnableUnit        struct{}
+	RestartUnit       struct{}
+	StopUnit          struct{}
+	StopSlice         struct{}
+	RemoveContainers  struct{}
+	RemoveNetwork     struct{}
 	// RemoveEgress removes the networks of egress classes and the table of their rules.
 	RemoveEgress   struct{ Networks []string }
 	RemoveFirewall struct{}
 	RemoveImage    struct{}
-	RemovePath     struct{ Path string }
+	// RemoveRunnerImages removes the runner images the job image was built from.
+	RemoveRunnerImages struct{ Refs []string }
+	RemovePath         struct{ Path string }
 )
 
 func (s Blocked) String() string { return "cannot continue: " + s.Reason }
@@ -145,7 +155,7 @@ func (s InstallSysbox) String() string {
 	return "install Sysbox " + s.Package.Version + "; Docker reloads its configuration and running containers keep running"
 }
 func (InstallNftables) String() string {
-	return "install nftables, for the egress allowlists of classes"
+	return "install nftables, to log where jobs connect and for the egress allowlists of classes"
 }
 func (s RemoveEgress) String() string {
 	return "remove the egress allowlists' rules and networks"
@@ -167,6 +177,9 @@ func (StartMirror) String() string {
 func (RemoveMirror) String() string {
 	return "remove the registry mirror " + layout.Mirror + " and its cache"
 }
+func (RemoveMirrorImage) String() string {
+	return "remove the registry image " + mirror.Image
+}
 func (BuildImage) String() string       { return "build the job image " + layout.Image }
 func (EnableUnit) String() string       { return "enable and start " + layout.UnitName }
 func (RestartUnit) String() string      { return "restart " + layout.UnitName }
@@ -176,7 +189,10 @@ func (RemoveContainers) String() string { return "remove the job containers" }
 func (RemoveNetwork) String() string    { return "remove the Docker network " + layout.Network }
 func (RemoveFirewall) String() string   { return "remove the firewall rules" }
 func (RemoveImage) String() string      { return "remove the job image " + layout.Image }
-func (s RemovePath) String() string     { return "remove " + s.Path }
+func (RemoveRunnerImages) String() string {
+	return "remove the runner images " + runnerdigests.Image
+}
+func (s RemovePath) String() string { return "remove " + s.Path }
 
 // SysboxPackage is a pinned Sysbox release for one architecture.
 type SysboxPackage struct {
@@ -287,8 +303,11 @@ func Plan(d Desired, o Observed) []Step {
 	// mirror.
 	wantMirror := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Docker })
 	needSysbox := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Isolation == config.Sysbox })
-	needNft := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Egress != nil }) && !o.Nft
-	if needNft && !o.Debian {
+	// Every box logs where its jobs connect, which takes nft; a class with an
+	// egress allowlist cannot run without it.
+	needAllowlist := slices.ContainsFunc(cfg.Classes, func(c config.Class) bool { return c.Egress != nil }) && !o.Nft
+	needNft := !o.Nft && (needAllowlist || o.Debian)
+	if needAllowlist && !o.Debian {
 		block("a class has an egress allowlist, which needs the nft command, and this is not Debian or Ubuntu; install nftables and run install again")
 	}
 	sysbox := !o.Sysbox && (d.Docker || d.Sysbox || needSysbox)
@@ -342,6 +361,9 @@ func Plan(d Desired, o Observed) []Step {
 		steps = append(steps, StartMirror{})
 	case !wantMirror && o.Mirror != mirror.State{}:
 		steps = append(steps, RemoveMirror{})
+		if o.MirrorImage {
+			steps = append(steps, RemoveMirrorImage{})
+		}
 	}
 	services := firewall.Services{Mirror: wantMirror, Cache: cfg.Cache > 0}
 	wall := o.Firewall
@@ -408,6 +430,9 @@ func PlanUninstall(o Observed) []Step {
 		if o.Mirror != (mirror.State{}) {
 			steps = append(steps, RemoveMirror{})
 		}
+		if o.MirrorImage {
+			steps = append(steps, RemoveMirrorImage{})
+		}
 		if len(o.EgressNetworks) > 0 {
 			steps = append(steps, RemoveEgress{Networks: o.EgressNetworks})
 		} else if o.EgressTable {
@@ -418,6 +443,10 @@ func PlanUninstall(o Observed) []Step {
 		}
 		if o.Image {
 			steps = append(steps, RemoveImage{})
+		}
+		if len(o.RunnerImages) > 0 {
+			// After the job image, which they are the parent of.
+			steps = append(steps, RemoveRunnerImages{Refs: o.RunnerImages})
 		}
 	}
 	if !o.DockerUp && o.EgressTable {

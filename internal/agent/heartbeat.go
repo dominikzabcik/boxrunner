@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 	"github.com/dominikzabcik/boxrunner/internal/status"
 	"github.com/dominikzabcik/boxrunner/internal/worker"
 )
@@ -31,6 +32,10 @@ const (
 	heartbeatImage = 128
 	// The Worker refuses bodies over 16 KB; the margin covers headers it counts.
 	heartbeatLimit = 15 * 1024
+	// The heartbeat names the newest destinations: this many of each
+	// repository and this many in all.
+	heartbeatDestinationsPerRepo = 10
+	heartbeatDestinations        = 40
 )
 
 // heartbeat reports the box's state to the Worker's dashboard until ctx ends.
@@ -54,6 +59,7 @@ func (a *Agent) heartbeat(ctx context.Context) {
 			var reply worker.HeartbeatReply
 			hb := heartbeatBody(snap, jobs)
 			hb.Rank = a.Config.Rank
+			hb.Destinations = destinationsFor(a.dest.book.Repos(heartbeatDestinationsPerRepo))
 			for i, ss := range hb.ScaleSets {
 				hb.ScaleSets[i].Pending = a.pendingRepos(scheduler.Key{Repo: ss.Repo, Class: ss.Class})
 			}
@@ -181,6 +187,23 @@ func (a *Agent) fleetShares(shares *[]worker.FleetShare) map[scheduler.Key]int {
 	return out
 }
 
+// destinationsFor lists the newest destinations of all repositories, newest
+// first, leaving out those of containers that are not the agent's runners.
+func destinationsFor(repos []seen.Repo) []worker.HeartbeatDestination {
+	var out []worker.HeartbeatDestination
+	for _, r := range repos {
+		if r.Repo == "" {
+			// The Worker lists destinations by repository.
+			continue
+		}
+		for _, d := range r.Destinations {
+			out = append(out, worker.HeartbeatDestination{Repo: r.Repo, Addr: d.Addr, Port: d.Port, Proto: d.Proto, Name: d.Name, First: d.First, Count: d.Count})
+		}
+	}
+	slices.SortStableFunc(out, func(x, y worker.HeartbeatDestination) int { return y.First.Compare(x.First) })
+	return out[:min(len(out), heartbeatDestinations)]
+}
+
 func optional(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
@@ -188,15 +211,19 @@ func optional(t time.Time) *time.Time {
 	return &t
 }
 
-// fitHeartbeat leaves out the oldest jobs until the body fits in limit bytes.
-// status.Recent lists jobs oldest first.
+// fitHeartbeat leaves out the oldest destinations, then the oldest jobs,
+// until the body fits in limit bytes. status.Recent lists jobs oldest first.
 func fitHeartbeat(hb worker.Heartbeat, limit int) worker.Heartbeat {
-	for len(hb.Jobs) > 0 {
+	for len(hb.Destinations) > 0 || len(hb.Jobs) > 0 {
 		body, _ := json.Marshal(hb)
 		if len(body) <= limit {
 			break
 		}
-		hb.Jobs = hb.Jobs[1:]
+		if len(hb.Destinations) > 0 {
+			hb.Destinations = hb.Destinations[:len(hb.Destinations)-1]
+		} else {
+			hb.Jobs = hb.Jobs[1:]
+		}
 	}
 	return hb
 }

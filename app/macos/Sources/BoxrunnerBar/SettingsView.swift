@@ -10,6 +10,10 @@ struct SettingsView: View {
 		Form {
 			Section {
 				TextField("Fleet name", text: $state.fleetName)
+				if let version = AppState.version {
+					Toggle("Update automatically", isOn: $state.updatesAutomatically)
+					LabeledContent("Version", value: version)
+				}
 				Toggle("Open at login", isOn: $openAtLogin)
 					.onChange(of: openAtLogin) { _, on in
 						do {

@@ -309,6 +309,12 @@ export type FinishedJob = {
  */
 export type BoxScaleSet = { repo: RepoName; className: ClassName; assigned: number; pending: RepoName[] };
 
+/**
+ * A place a repository's jobs connected to, as the box reports it: the address, port and protocol, the name the box's DNS forwarder opened the address for, when it did, when the box first saw the connection and how many it saw.
+ * Only the box's newest ones are sent.
+ */
+export type BoxDestination = { repo: RepoName; addr: string; port: number; proto: string; name: string | null; firstSeen: number; count: number };
+
 export type BoxStatus = {
 	box: BoxName;
 	version: string;
@@ -325,6 +331,8 @@ export type BoxStatus = {
 	scaleSets: BoxScaleSet[];
 	/** Where the box stands when several boxes serve a class: lower ranks get jobs first. 0 from an agent too old to send it. */
 	rank: number;
+	/** The newest places jobs connected to, newest first; empty from an agent too old to send them, or on a box without nft. */
+	destinations: BoxDestination[];
 };
 
 export type Heartbeat = BoxStatus & { jobs: FinishedJob[] };
@@ -332,7 +340,7 @@ export type Heartbeat = BoxStatus & { jobs: FinishedJob[] };
 /** The agent reports every 30 seconds; three missed heartbeats break its run. */
 export const heartbeatGapMs = 90_000;
 
-export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50, scaleSets: 128, pending: 128 } as const;
+export const heartbeatLimits = { classes: 32, runners: 128, jobs: 50, scaleSets: 128, pending: 128, destinations: 100 } as const;
 
 /** A rank is a whole number from 0 to 1000. */
 const rank = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1000 ? value : undefined);
@@ -368,6 +376,10 @@ const label = (max: number) => (value: unknown) =>
 	typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
 
 const semver = (value: unknown) => (typeof value === 'string' && semverPattern.test(value) && value.length <= 64 ? value : undefined);
+
+const ipAddress = (value: unknown) => (typeof value === 'string' && /^[0-9a-fA-F:.]{2,45}$/.test(value) ? value : undefined);
+
+const port = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 65_535 ? value : undefined);
 
 const seconds = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 1e9 ? value : undefined);
 
@@ -421,6 +433,19 @@ export function parseHeartbeat(body: Record<string, unknown>): { ok: true; heart
 						className: need(parse.className(value.class), `${at}.class`),
 						assigned: need(count(value.assigned), `${at}.assigned`),
 						pending: list(value.pending ?? [], `${at}.pending`, heartbeatLimits.pending).map((repo, j) => need(parse.repo(repo), `${at}.pending[${j}]`)),
+					};
+				}),
+				destinations: list(body.destinations ?? [], 'destinations', heartbeatLimits.destinations).map((raw, i) => {
+					const at = `destinations[${i}]`;
+					const value = record(raw, at);
+					return {
+						repo: need(parse.scope(value.repo), `${at}.repo`),
+						addr: need(ipAddress(value.addr), `${at}.addr`),
+						port: need(port(value.port), `${at}.port`),
+						proto: need(matching(/^[a-z0-9]{1,16}$/)(value.proto), `${at}.proto`),
+						name: value.name === undefined || value.name === null ? null : need(label(253)(value.name), `${at}.name`),
+						firstSeen: need(instant(value.first), `${at}.first`),
+						count: need(count(value.count), `${at}.count`),
 					};
 				}),
 				jobs: list(body.jobs, 'jobs', heartbeatLimits.jobs).map((raw, i) => {

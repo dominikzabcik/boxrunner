@@ -3,6 +3,7 @@
 package doctor
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -26,6 +27,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/disk"
 	"github.com/dominikzabcik/boxrunner/internal/docker"
 	"github.com/dominikzabcik/boxrunner/internal/firewall"
+	"github.com/dominikzabcik/boxrunner/internal/install"
 	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/release"
@@ -116,7 +118,7 @@ func (c Checks) All(ctx context.Context) []Result {
 	}
 
 	if d != nil {
-		results = append(results, c.probe(ctx, d, services.Cache)...)
+		results = append(results, c.probe(ctx, d, services.Cache, Busy(snap))...)
 		if c.ConfigErr == nil {
 			results = append(results, isolation(ctx, d, c.Config.Classes, sysbox)...)
 			results = append(results, c.egressChecks(ctx, d, services, gateway, sysbox, snap)...)
@@ -169,6 +171,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, Draining(*snap)...)
 		results = append(results, Held(*snap, time.Now())...)
 		results = append(results, Elsewhere(*snap)...)
+		results = append(results, Destinations(*snap)...)
 		results = append(results, RunnerImage(snap.Image)...)
 	}
 	return results
@@ -231,6 +234,14 @@ func Draining(s status.Snapshot) []Result {
 	return []Result{{"draining", false, "the agent opens no sessions and starts no runners; resume with: sudo boxrunner resume"}}
 }
 
+// Destinations fails while the agent cannot record where jobs connect.
+func Destinations(s status.Snapshot) []Result {
+	if s.DestinationsProblem == "" {
+		return nil
+	}
+	return []Result{{"destinations", false, s.DestinationsProblem}}
+}
+
 // Elsewhere fails once for every repository and class the running agent
 // cannot serve because another box's session holds the scale set, unless the
 // Worker shares the scale set's jobs between the boxes.
@@ -273,6 +284,53 @@ func Held(snap status.Snapshot, now time.Time) []Result {
 		}
 	}
 	return results
+}
+
+// Memory warns when the classes may be allowed more memory together than the
+// box has. Run it after All. A result that is not OK is a warning: the box
+// works until jobs of the classes really use that much, and then the kernel's
+// OOM killer picks a job or the agent.
+func (c Checks) Memory() []Result {
+	if c.ConfigErr != nil {
+		return nil
+	}
+	total, err := install.HostMemory()
+	if err != nil {
+		return []Result{{"memory", false, fmt.Sprintf("could not read the box's memory: %v", err)}}
+	}
+	return []Result{Memory(c.Config.Classes, total)}
+}
+
+// Memory adds up memory times max over classes, idle ones too, since
+// SCHED_IDLE shares CPU and not memory, and compares the sum with the box's
+// total bytes. Over the total it names the classes that contribute most.
+func Memory(classes []config.Class, total int64) Result {
+	type share struct {
+		name         string
+		max          int
+		memory, size int64
+	}
+	var shares []share
+	var sum int64
+	for _, k := range classes {
+		size := int64(k.Memory) * int64(k.Max)
+		shares = append(shares, share{k.Name, k.Max, int64(k.Memory), size})
+		sum += size
+	}
+	if sum <= total {
+		return Result{"memory", true, fmt.Sprintf("the classes may use %s together when each runs its max, within the box's %s", gib(sum), gib(total))}
+	}
+	slices.SortStableFunc(shares, func(a, b share) int { return cmp.Compare(b.size, a.size) })
+	var biggest []string
+	for _, s := range shares[:min(len(shares), 3)] {
+		biggest = append(biggest, fmt.Sprintf("%s %d x %s = %s", s.name, s.max, gib(s.memory), gib(s.size)))
+	}
+	return Result{"memory", false, fmt.Sprintf("the classes may use %s together when each runs its max, and the box has %s, so the kernel's OOM killer may kill a job or the agent; most from %s; lower memory or max in %s and restart boxrunner", gib(sum), gib(total), strings.Join(biggest, ", "), layout.ConfigPath)}
+}
+
+// gib writes a size in GiB with one decimal.
+func gib(n int64) string {
+	return fmt.Sprintf("%.1f GiB", float64(n)/float64(config.GiB))
 }
 
 // Forks warns about each repository this box serves whose fork pull requests
@@ -399,6 +457,42 @@ func Versions(agent, latest string, latestErr error, workerVersion string, worke
 	return results
 }
 
+// ProbeWait is how long doctor waits for a probe container to finish its
+// tries; each takes three seconds at most, so a container still running after
+// this never got going.
+const ProbeWait = 90 * time.Second
+
+// ProbeRun says why a probe container did not run its tries, "" when it
+// did. exit and waitErr are what waiting for the container gave, and logs its
+// output. A container that ran its script prints a line for every try, even a
+// try that failed, so a container with no lines never started the script,
+// was killed, or was still waiting for the box when doctor gave up; that says
+// nothing about the firewall.
+func ProbeRun(exit int, waitErr error, logs string) string {
+	switch {
+	case errors.Is(waitErr, context.DeadlineExceeded):
+		return fmt.Sprintf("the probe container did not finish within %d seconds", int(ProbeWait.Seconds()))
+	case waitErr != nil:
+		return fmt.Sprintf("waiting for the probe container failed: %v", waitErr)
+	case exit != 0:
+		return fmt.Sprintf("the probe container exited with code %d before it ran its tries", exit)
+	case len(ParseProbes(logs)) == 0:
+		return "the probe container exited without printing an answer"
+	}
+	return ""
+}
+
+// Busy is the sentence that follows a probe container that failed to run
+// while the agent builds the job image or a class image, which slows every
+// container on the box. It is "" when the agent builds nothing or is not
+// running.
+func Busy(snap *status.Snapshot) string {
+	if snap == nil || snap.Image.Building == "" {
+		return ""
+	}
+	return fmt.Sprintf("; the agent is building job image %s or its class images and the box is busy, so run doctor again once that finishes (sudo boxrunner status shows when)", snap.Image.Building)
+}
+
 const probeScript = `probe() { timeout 3 bash -c "exec 3<>/dev/tcp/$2/$3" 2>/dev/null; echo "$1 $?"; }
 probe host %s 22
 %s
@@ -411,8 +505,9 @@ probe github github.com 443
 // probe starts a container like a job's, in the idle slice on the boxrunner
 // network, and tries to reach what jobs must not reach and what they must.
 // With withCache, it also runs the job image's node wrapper as an action of a
-// class with cache = true would.
-func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool) []Result {
+// class with cache = true would. busy is what Busy says while the agent builds
+// an image, and follows every failure to run the container.
+func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool, busy string) []Result {
 	var results []Result
 	add := func(name string, ok bool, format string, args ...any) {
 		results = append(results, Result{name, ok, fmt.Sprintf(format, args...)})
@@ -453,12 +548,12 @@ func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool) []R
 		return results
 	}
 	if err != nil {
-		add("probe container", false, "%v", err)
+		add("probe container", false, "%v%s", err, busy)
 		return results
 	}
 	defer d.Remove(context.WithoutCancel(ctx), id)
 	if err := d.Start(ctx, id); err != nil {
-		add("probe container", false, "%v", err)
+		add("probe container", false, "%v%s", err, busy)
 		return results
 	}
 
@@ -474,11 +569,14 @@ func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool) []R
 		}
 	}
 
-	if _, err := d.Wait(ctx, id); err != nil {
-		add("probe container", false, "%v", err)
+	waited, cancel := context.WithTimeout(ctx, ProbeWait)
+	exit, waitErr := d.Wait(waited, id)
+	cancel()
+	logs, _ := d.Logs(ctx, id)
+	if why := ProbeRun(exit, waitErr, logs); why != "" {
+		add("probe container", false, "%s%s", why, busy)
 		return results
 	}
-	logs, _ := d.Logs(ctx, id)
 	codes := ParseProbes(logs)
 	// A dropped packet times out (124); a refusal or an unreachable answer
 	// means something past the firewall saw it.
@@ -486,7 +584,7 @@ func (c Checks) probe(ctx context.Context, d *docker.Client, withCache bool) []R
 		code, ok := codes[name]
 		switch {
 		case !ok:
-			add(name, false, "no answer from the probe for %s", what)
+			add(name, false, "the probe stopped before it tried %s", what)
 		case code == 0:
 			add(name, false, "a job container reached %s", what)
 		case code != 124:

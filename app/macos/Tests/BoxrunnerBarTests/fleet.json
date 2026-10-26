@@ -84,6 +84,7 @@
 			"memoryPeak": 9812000768
 		}
 	],
+	"destinations": [],
 	"unserved": [],
 	"webhook": {
 		"lastDelivery": null,

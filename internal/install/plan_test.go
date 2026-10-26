@@ -35,7 +35,7 @@ func installed() Observed {
 	cfg := config.Default(desired.Worker, desired.Box, desired.Host, false)
 	return Observed{
 		Debian: true, Distro: "ubuntu", DistroVersion: "24.04", Kernel: "6.8.0-45-generic", Arch: "arm64",
-		DockerBinary: true, DockerUp: true, CgroupV2: true, CgroupDriver: "systemd",
+		DockerBinary: true, DockerUp: true, CgroupV2: true, CgroupDriver: "systemd", Nft: true,
 		Paths: map[string]File{
 			layout.Binary:        {[]byte("boxrunner binary"), 0o755},
 			layout.IdleSlicePath: {[]byte(sliceUnit), 0o644},
@@ -64,6 +64,7 @@ func TestPlanFreshUbuntu(t *testing.T) {
 	steps := Plan(desired, fresh())
 	want := []string{
 		"install Docker (docker.io) and start it",
+		"install nftables, to log where jobs connect and for the egress allowlists of classes",
 		"write /usr/local/bin/boxrunner (0755)",
 		"write /etc/systemd/system/boxrunner_idle.slice (0644)",
 		"write /etc/systemd/system/boxrunner.service (0644)",
@@ -78,11 +79,11 @@ func TestPlanFreshUbuntu(t *testing.T) {
 	if got := names(steps); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Plan =\n%q\nwant\n%q", got, want)
 	}
-	cfg, err := config.Parse(steps[4].(WriteFile).Content, "unused")
+	cfg, err := config.Parse(steps[5].(WriteFile).Content, "unused")
 	if err != nil || cfg.Worker.String() != "https://boxrunner.example.workers.dev" || cfg.Box != "box-1" || len(cfg.Classes) != 2 {
 		t.Errorf("new config = %+v, %v", cfg, err)
 	}
-	if tok := steps[5].(WriteFile); string(tok.Content) != "box-token\n" {
+	if tok := steps[6].(WriteFile); string(tok.Content) != "box-token\n" {
 		t.Errorf("token file = %q", tok.Content)
 	}
 }
@@ -161,6 +162,7 @@ func TestPlanDocker(t *testing.T) {
 			want: []string{
 				"install Docker (docker.io) and start it",
 				sysbox,
+				"install nftables, to log where jobs connect and for the egress allowlists of classes",
 				"write /usr/local/bin/boxrunner (0755)",
 				"write /etc/systemd/system/boxrunner_idle.slice (0644)",
 				"write /etc/systemd/system/boxrunner.service (0644)",
@@ -231,6 +233,17 @@ func TestPlanDocker(t *testing.T) {
 			want: []string{"remove the registry mirror boxrunner-mirror and its cache"},
 		},
 		{
+			name:    "a mirror and its image left after the last docker class went",
+			desired: desired,
+			observe: func(o *Observed) {
+				o.Mirror, o.MirrorImage = mirror.State{Volume: true}, true
+			},
+			want: []string{
+				"remove the registry mirror boxrunner-mirror and its cache",
+				"remove the registry image " + mirror.Image,
+			},
+		},
+		{
 			name:    "no flag and no docker class",
 			desired: desired,
 			observe: func(*Observed) {},
@@ -293,6 +306,7 @@ func TestPlanSysbox(t *testing.T) {
 			want: []string{
 				"install Docker (docker.io) and start it",
 				sysbox,
+				"install nftables, to log where jobs connect and for the egress allowlists of classes",
 				"write /usr/local/bin/boxrunner (0755)",
 				"write /etc/systemd/system/boxrunner_idle.slice (0644)",
 				"write /etc/systemd/system/boxrunner.service (0644)",
@@ -352,7 +366,7 @@ func TestPlanSysbox(t *testing.T) {
 
 	// --sysbox leaves Docker inside jobs off in a new config.
 	steps := Plan(withSysbox, fresh())
-	cfg, err := config.Parse(steps[5].(WriteFile).Content, "unused")
+	cfg, err := config.Parse(steps[6].(WriteFile).Content, "unused")
 	if err != nil || len(cfg.Classes) != 2 || cfg.Classes[0].Docker || cfg.Classes[1].Docker || cfg.Classes[0].Isolation != config.AutoIsolation {
 		t.Errorf("new config = %+v, %v", cfg.Classes, err)
 	}
@@ -365,7 +379,7 @@ func TestPlanDockerWritesDockerClasses(t *testing.T) {
 	if got := steps[1].(InstallSysbox).Package.URL; got != "https://github.com/nestybox/sysbox/releases/download/v0.7.1/sysbox-ce_0.7.1.linux_arm64.deb" {
 		t.Errorf("package = %s", got)
 	}
-	cfg, err := config.Parse(steps[5].(WriteFile).Content, "unused")
+	cfg, err := config.Parse(steps[6].(WriteFile).Content, "unused")
 	if err != nil || len(cfg.Classes) != 2 || !cfg.Classes[0].Docker || !cfg.Classes[1].Docker {
 		t.Errorf("new config = %+v, %v", cfg.Classes, err)
 	}
@@ -434,13 +448,17 @@ func TestPlanUninstall(t *testing.T) {
 	o := installed()
 	o.Containers = 2
 	o.Mirror = mirror.State{Identity: mirror.Identity(netip.MustParseAddrPort("172.18.0.1:5000")), Volume: true}
+	o.MirrorImage = true
+	o.RunnerImages = []string{"ghcr.io/actions/actions-runner:2.338.0", "ghcr.io/actions/actions-runner@sha256:4ffa"}
 	o.Paths["/run/boxrunner.sock"] = File{Mode: fs.ModeSocket | 0o600}
 	want := []string{
 		"stop and disable boxrunner.service (closes sessions)",
 		"remove the job containers",
 		"remove the registry mirror boxrunner-mirror and its cache",
+		"remove the registry image registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
 		"remove the Docker network boxrunner",
 		"remove the job image boxrunner/runner:local",
+		"remove the runner images ghcr.io/actions/actions-runner",
 		"remove the firewall rules",
 		"stop boxrunner_idle.slice",
 		"remove /etc/systemd/system/boxrunner.service",
@@ -453,6 +471,9 @@ func TestPlanUninstall(t *testing.T) {
 	}
 	if got := names(PlanUninstall(o)); !reflect.DeepEqual(got, want) {
 		t.Errorf("PlanUninstall =\n%q\nwant\n%q", got, want)
+	}
+	if got := PlanUninstall(o)[6].(RemoveRunnerImages).Refs; !reflect.DeepEqual(got, o.RunnerImages) {
+		t.Errorf("uninstall removes the runner images %q, want %q", got, o.RunnerImages)
 	}
 	clean := Observed{DockerBinary: true, DockerUp: true, CgroupV2: true, Paths: map[string]File{}}
 	if got := PlanUninstall(clean); len(got) != 0 {
@@ -523,14 +544,19 @@ func TestPlanEgress(t *testing.T) {
 		observe func(*Observed)
 		want    []string
 	}{
-		{"a class with an allowlist and no nft", func(o *Observed) { withEgress(o) }, []string{
-			"install nftables, for the egress allowlists of classes",
+		{"a class with an allowlist and no nft", func(o *Observed) { withEgress(o); o.Nft = false }, []string{
+			"install nftables, to log where jobs connect and for the egress allowlists of classes",
 		}},
-		{"a class with an allowlist and nft", func(o *Observed) { withEgress(o); o.Nft = true }, nil},
-		{"no allowlist and no nft", func(o *Observed) {}, nil},
+		{"a class with an allowlist and nft", func(o *Observed) { withEgress(o) }, nil},
+		{"no allowlist and no nft", func(o *Observed) { o.Nft = false }, []string{
+			"install nftables, to log where jobs connect and for the egress allowlists of classes",
+		}},
+		{"no allowlist and no nft outside Debian", func(o *Observed) {
+			o.Nft, o.Debian, o.Distro = false, false, "fedora"
+		}, nil},
 		{"a class with an allowlist and no nft outside Debian", func(o *Observed) {
 			withEgress(o)
-			o.Debian, o.Distro = false, "fedora"
+			o.Nft, o.Debian, o.Distro = false, false, "fedora"
 		}, []string{"cannot continue: a class has an egress allowlist, which needs the nft command, and this is not Debian or Ubuntu; install nftables and run install again"}},
 	}
 	for _, c := range cases {

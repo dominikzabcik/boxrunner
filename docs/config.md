@@ -65,7 +65,7 @@ Each `[[class]]` is one kind of runner. A workflow picks it by name, as in `runs
 | `cache` | `false` | Keeps the class's [Actions cache](#actions-cache) entries on the box. Needs `cache` at the top. |
 | `egress` | none | Closes the class's network to everything its entries do not allow; see [Egress allowlist](#egress-allowlist). Without it the class reaches the internet as before. |
 
-Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%.
+Memory is not prioritised the way CPU is. Give the classes limits that fit side by side: the defaults give the normal class about 75% of the box's memory and each idle runner about 40%. `sudo boxrunner doctor` adds up `memory` times `max` over all classes, idle ones too, and warns when the sum is more than the box has: if every class then ran at its `max`, the kernel's OOM killer would pick a job or the agent. The defaults add up to more than the box on purpose, because the idle class rarely runs at its `max` beside a busy normal class; lower `memory` or `max` to silence the warning.
 
 ## Isolation
 
@@ -256,14 +256,14 @@ Entries follow GitHub's rules ([GitHub's docs](https://docs.github.com/en/action
 - **Write once.** An entry with the same key and version stays as the first job saved it.
 - **Matching.** The key itself, then the newest entry whose key starts with it, then the newest entry for each restore key in turn.
 
-Entries and the uploads in progress together stay within `cache`, and the cache stops writing before the filesystem that holds `/var/lib/boxrunner/cache` has less than `disk_floor` free. An upload counts as it is written, and joining its blocks counts the block being copied. When a write does not fit, the cache removes the least recently restored entry of the repository that holds the most, uploads and the write included, so a repository's saves remove its own entries before those of a repository that holds less. When the repository that holds the most is the writer's and it has no entries left, the write fails rather than remove more of other repositories' entries. A write that would not fit even with every entry gone, such as one larger than `cache`, fails before it removes any. When a write fails, so does the save. While free space is below `disk_floor`, because jobs took it, the cache removes entries until the space is back, or until none are left, and drops the uploads in progress, so it gives the disk back to jobs.
+Entries and the uploads in progress together stay within `cache`, and the cache stops writing before the filesystem that holds `/var/lib/boxrunner/cache` has less than `disk_floor` free. An upload counts as it is written, and joining its blocks counts the block being copied. A write that states its length, as `actions/cache`'s do, counts that length as soon as it starts. When a write does not fit, the cache removes the least recently restored entry of the repository that holds the most, uploads and the write included, so a repository's saves remove its own entries before those of a repository that holds less. It works out first which entries that takes, and removes none when they would not be enough. That is the case when the repository that holds the most is the writer's and has too few entries of its own, and when the write would not fit even with every entry gone, such as one larger than `cache`. A write that does not state its length takes entries from other repositories only until its repository holds an equal share of `cache` with the others that hold anything; past that it can only remove its own, and otherwise fails. When a write fails, so does the save. While free space is below `disk_floor`, because jobs took it, the cache removes entries until the space is back, or until none are left, and drops the uploads in progress, so it gives the disk back to jobs.
 
 The cache also holds these limits:
 
 - 10,000 entries per repository; a new one removes the repository's least recently restored.
 - 16 uploads in progress per repository and 64 in all. An upload is dropped after ten minutes without a write.
 - 4,000 blocks per upload: 125 GiB with `actions/cache`'s 32 MiB blocks.
-- 256 connections at once, and 64 from one container: more wait, and a container's 65th is closed. A request's body or a download that stops for 30 seconds is cut off, whether or not the cache reads the body.
+- 256 connections at once, and from one container 64 or, when more than four containers can use the cache (the `max` of its classes added up), 256 divided by that many, but at least 8, so the others can always connect: more wait, and a container's connection past its share is closed. A request's body or a download that stops for 30 seconds is cut off, whether or not the cache reads the body.
 
 Sizes count the bytes written. The filesystem stores each file in whole blocks, 4 KiB on most, so an upload of many tiny blocks takes more disk than it counts for: at most about 1 GiB more in all, with 64 uploads of 4,000 blocks. `disk_floor` is checked against the filesystem's free space, so it holds regardless.
 
@@ -360,6 +360,17 @@ The agent checks the rules before it starts each runner of an egress class, and 
 ### Seeing what was refused
 
 `sudo boxrunner status` has a table per class with the packets dropped and the lookups refused since the agent started, and the latest refusals with the job that made each, the address or name and, when the address was opened for a name, that name. The agent logs each distinct refusal at most once a minute, and for each class no more than thirty a minute of each kind (dropped packets, refused lookups, addresses withheld from an answer and lookups it could not answer); the counters count them all. The metrics have `boxrunner_egress_blocked_total` by class and kind (`packet` or `lookup`) and `boxrunner_egress_ready`. `sudo boxrunner doctor` shows the same summary and proves the policy from a container on each class's network: an allowed host answers, a name outside the list does not resolve, an address of one is unreachable by number, and the host, the metadata service and the box's resolver are unreachable.
+
+## Where jobs connect
+
+Every class, with or without `egress`, has the first connection of each job to an address, port and protocol recorded. `sudo boxrunner status` lists them for each repository, the newest first and up to 10, with when each was first seen and how many connections the agent counted; a container that is not one of the agent's runners shows `?` as the repository. The [dashboard](dashboard.md#where-jobs-connect) shows the newest across boxes, and the agent logs each new destination as `a job connected somewhere new`, at most thirty a minute.
+
+- **It needs `nft`.** `sudo boxrunner install` installs the `nftables` package on Debian and Ubuntu for this alone. Without `nft` jobs run as before, nothing is recorded, and `status` and `doctor` say why.
+- **It records connections that were allowed.** The rules sit after the job network's firewall and the egress table, so a refused connection appears under [what was refused](#seeing-what-was-refused) and not here. Traffic between containers on one bridge is left out.
+- **Counts are a lower bound.** The kernel passes at most 100 new connections a second to the agent.
+- **Names come from the egress forwarder.** A class without `egress` shows addresses only.
+- **The record is small and private to the box.** At most 64 repositories and 100 destinations each, the least recently used dropped first, saved to `/var/lib/boxrunner/destinations.json` and forgotten after 30 days. Only the addresses, ports, protocols and names go to the Worker, never what a job sent.
+- **The rules stay while the agent is stopped**, and a job that runs then is not recorded. `sudo boxrunner uninstall` removes them.
 
 ## Extending the job image
 

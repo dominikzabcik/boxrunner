@@ -26,7 +26,7 @@ Inline `style="…"` attributes and inline event handlers are blocked by the CSP
 bun run check
 ```
 
-Builds, serves `dist/` with `serve.ts` (which applies `_headers` and answers like Workers static assets) and checks every page at 1280 and 390px wide, in the light and the dark theme, in Chromium: no console errors or warnings, no CSP violations, nothing wider than a phone screen, every internal link and fragment resolves, no headline runs past two lines at 390 and 360px, the hero canvas draws, and the landing page stays under its byte budget (see `check.ts`). It also confirms that the CSP actually blocks an injected script. `bun run serve` serves the last build at http://127.0.0.1:8788.
+Builds, serves `dist/` with `serve.ts` (which applies `_headers` and answers like Workers static assets) and checks every page at 1280 and 390px wide, in the light and the dark theme, in Chromium: no console errors or warnings, no CSP violations, nothing wider than a phone screen, every internal link and fragment resolves, no headline runs past two lines at 390 and 360px, the hero canvas draws, and the landing page stays under its byte budget (see `check.ts`). It also confirms that the CSP actually blocks an injected script, and that the minutes calculator reads right with scripts off, adds up with them on, answers the keyboard and links every rate to GitHub's billing docs. `bun run serve` serves the last build at http://127.0.0.1:8788.
 
 ## Fonts
 

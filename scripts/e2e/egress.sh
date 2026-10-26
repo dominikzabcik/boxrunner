@@ -68,7 +68,7 @@ step "doctor proves the policy from a container on the class's network"
 sudo boxrunner doctor | tee "$work/doctor-egress.txt" || fail "doctor exited with $?"
 expect "$work/doctor-egress.txt" "^ok +egress $class rules " "^ok +egress $class agent " "^ok +egress $class allows github.com resolves and answers" \
 	"^ok +egress $class refuses a name example\\.(net|org) " "^ok +egress $class refuses an address " "^ok +egress $class host " "^ok +egress $class resolver "
-if grep -vE "^(ok  |warn  (release|worker release|runner release) )" "$work/doctor-egress.txt"; then
+if grep -vE "^(ok  |warn  (release|worker release|runner release|memory) )" "$work/doctor-egress.txt"; then
 	fail "doctor printed the lines above"
 fi
 
@@ -125,6 +125,16 @@ if [ "$mode" = docker ]; then
 else
 	expect "$work/egress-job.txt" '^mirror closed$'
 fi
+
+step "the agent records where the class's jobs connected, with the names its forwarder opened, and not what the rules refused"
+for _ in $(seq 20); do
+	# The refusals above the table name the same addresses, so read the table alone.
+	sudo boxrunner status | awk '/^REPOSITORY +FIRST SEEN/ { in_table = 1 } in_table { print } /^Up to / { in_table = 0 }' >"$work/status-destinations-egress.txt"
+	grep -qE '[0-9.]+:443 \(www\.example\.org\)$' "$work/status-destinations-egress.txt" && break
+	sleep 1
+done
+expect "$work/status-destinations-egress.txt" '[0-9.]+:443 \(example\.com\)$' '[0-9.]+:443 \(www\.example\.org\)$' ' 10\.20\.0\.2:5432$'
+grep -qE '169\.254\.169\.254| 10\.20\.0\.2:5433$' "$work/status-destinations-egress.txt" && fail "status lists a destination the rules refused"
 
 step "the other class, which has no allowlist, still cannot reach the private service"
 sudo docker run --rm --network boxrunner boxrunner/runner:local bash -c 'timeout 4 bash -c "exec 3<>/dev/tcp/10.20.0.2/5432" 2>/dev/null && echo open || echo closed' | tee "$work/open-class.txt"

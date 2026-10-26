@@ -24,6 +24,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 // Exec runs a command and returns its combined output.
@@ -117,6 +118,15 @@ func Observe(ctx context.Context, run firewall.Run) (Observed, *docker.Client) {
 	_, o.Image, _ = d.ImageLabels(ctx, layout.Image)
 	if list, err := d.List(ctx, layout.LabelBox, false); err == nil {
 		o.Containers = len(list)
+	}
+	// Uninstall removes boxrunner's own containers first, so only the others
+	// can keep an image on the box.
+	if images, err := d.Images(ctx); err == nil {
+		if all, err := d.List(ctx, "", false); err == nil {
+			used := docker.UsedImages(all, layout.LabelBox, layout.LabelMirror)
+			o.RunnerImages = runnerimage.Bases(images, used)
+			o.MirrorImage = mirror.HasImage(images, used)
+		}
 	}
 	return o, d
 }
@@ -252,6 +262,11 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 			return d, err
 		}
 		return d, mirror.Remove(ctx, d)
+	case RemoveMirrorImage:
+		if err := needDocker(); err != nil {
+			return d, err
+		}
+		return d, mirror.RemoveImage(ctx, d)
 	case BuildImage:
 		if err := needDocker(); err != nil {
 			return d, err
@@ -306,8 +321,18 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 			return d, err
 		}
 		return d, d.RemoveImage(ctx, layout.Image)
+	case RemoveRunnerImages:
+		if err := needDocker(); err != nil {
+			return d, err
+		}
+		for _, ref := range s.Refs {
+			if err := d.RemoveImage(ctx, ref); err != nil {
+				return d, err
+			}
+		}
+		return d, nil
 	case RemoveFirewall:
-		return d, firewall.Remove(ctx, run, layout.Bridge)
+		return d, errors.Join(firewall.Remove(ctx, run, layout.Bridge), seen.Remove(ctx, run))
 	case RemovePath:
 		return d, os.RemoveAll(s.Path)
 	case Blocked:

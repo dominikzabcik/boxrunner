@@ -67,6 +67,9 @@ type fakeDocker struct {
 	nets map[string]*fakeNet
 	// subnet and gateway, when set, are those of every new egress network.
 	subnet, gateway string
+	// jobAddr, when set, is the address with its prefix length of every job
+	// on an egress network; 172.30.0.7/16 when empty.
+	jobAddr string
 	// failInspect makes the nth inspection of a network, by name, fail.
 	failInspect map[string]int
 	inspected   map[string]int
@@ -85,6 +88,13 @@ type fakeNet struct {
 	Subnet string
 	// Gateway is the network's address on the host.
 	Gateway string
+}
+
+// networkMode is the network the container was created on.
+func (c *container) networkMode() string {
+	host, _ := c.Body["HostConfig"].(map[string]any)
+	mode, _ := host["NetworkMode"].(string)
+	return mode
 }
 
 // matches applies a containers/json label filter, key or key=value.
@@ -148,8 +158,8 @@ func (f *fakeDocker) serve(t *testing.T) string {
 			}
 			endpoints := map[string]any{}
 			for _, c := range f.containers {
-				if mode, _ := c.Body["HostConfig"].(map[string]any)["NetworkMode"].(string); mode == name {
-					endpoints[c.Name] = map[string]string{"Name": c.Name, "IPv4Address": "172.30.0.7/16"}
+				if c.networkMode() == name {
+					endpoints[c.Name] = map[string]string{"Name": c.Name, "IPv4Address": cmp.Or(f.jobAddr, "172.30.0.7/16")}
 				}
 			}
 			json.NewEncoder(w).Encode(map[string]any{
@@ -165,7 +175,16 @@ func (f *fakeDocker) serve(t *testing.T) string {
 				http.Error(w, `{"message":"no such network"}`, 404)
 				return
 			}
-			io.WriteString(w, `{"Name":"boxrunner","IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]}}`)
+			endpoints := map[string]any{}
+			for _, c := range f.containers {
+				if c.networkMode() == "boxrunner" {
+					endpoints[c.Name] = map[string]string{"Name": c.Name, "IPv4Address": "172.18.0.7/16"}
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"Name": "boxrunner", "Containers": endpoints,
+				"IPAM": map[string]any{"Config": []map[string]string{{"Subnet": "172.18.0.0/16", "Gateway": "172.18.0.1"}}},
+			})
 		case strings.HasPrefix(path, "/networks/") && r.Method == http.MethodGet:
 			http.Error(w, `{"message":"no such network"}`, 404)
 		case path == "/networks/create":
@@ -290,6 +309,8 @@ func (f *fakeDocker) snapshot() map[string]container {
 type fakeGitHub struct {
 	mu    sync.Mutex
 	calls []string
+	// beat is the latest heartbeat's body.
+	beat  string
 	queue chan string
 	// busy are runner ids that took a job, so removing them answers 409.
 	busy map[string]bool
@@ -429,6 +450,7 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 			http.Redirect(w, r, "/dominikzabcik/boxrunner/releases/tag/v0.2.2", http.StatusFound)
 		case r.URL.Path == "/v1/heartbeat":
 			g.mu.Lock()
+			g.beat = string(body)
 			reply := map[string]any{"paused": append([]string{}, g.paused...)}
 			if g.fleet != "" {
 				reply["fleet"] = json.RawMessage(g.fleet)
@@ -444,6 +466,13 @@ func (g *fakeGitHub) serve(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// lastHeartbeat is the body of the latest heartbeat.
+func (g *fakeGitHub) lastHeartbeat() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.beat
 }
 
 func (g *fakeGitHub) workerCalls() []string {
@@ -480,6 +509,9 @@ type harness struct {
 	guardEvery time.Duration
 	// reposEvery is how often an organization's repositories are listed, a minute when zero.
 	reposEvery time.Duration
+	// destinations is where the agent keeps the destinations jobs connected to;
+	// a file of its own in a temporary directory when empty.
+	destinations string
 	// logs is what the agent logged.
 	logs *logBuffer
 	// metrics is where the agent serves metrics, none when zero.
@@ -526,6 +558,9 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 	if h.run == nil {
 		h.run = (&fakeHost{}).run
 	}
+	if h.openPackets == nil {
+		h.openPackets = func(uint16) (PacketSource, error) { return newPackets(), nil }
+	}
 	cfg.Metrics, cfg.Cache, cfg.AutoUpgrade = h.metrics, h.cache, h.autoUpgrade
 	socket := h.docker.serve(t)
 	srv := h.github.serve(t)
@@ -558,27 +593,29 @@ func startAgent(t *testing.T, containers map[string]*container, busy map[string]
 				}
 				return h.run(stdin, name, args...)
 			},
-			ReleaseSeenFile:      h.seen,
-			UpgradeDelay:         h.upgradeDelay,
-			UpgradeEvery:         50 * time.Millisecond,
-			EgressListen:         h.egressListen,
-			OpenPackets:          h.openPackets,
-			EgressUpstream:       h.upstream,
-			EgressCountEvery:     50 * time.Millisecond,
-			EgressGuardEvery:     cmp.Or(h.guardEvery, 50*time.Millisecond),
-			EgressRetry:          50 * time.Millisecond,
-			JobsLog:              h.jobs,
-			DrainFile:            h.drain,
-			Socket:               h.socket,
-			Runner:               runnerdigests.Source{Releases: srv.URL + "/releases/latest", List: srv.URL + "/runner-digests.json", Registry: srv.URL},
-			BoxrunnerReleasesURL: srv.URL + "/dominikzabcik/boxrunner/releases/latest",
-			Tick:                 50 * time.Millisecond,
-			HeartbeatEvery:       50 * time.Millisecond,
-			ReposEvery:           h.reposEvery,
-			SysboxDir:            h.sysbox,
-			CgroupDir:            h.cgroup,
-			CacheDir:             t.TempDir(),
-			CacheAddr:            h.cacheAddr,
+			ReleaseSeenFile:       h.seen,
+			UpgradeDelay:          h.upgradeDelay,
+			UpgradeEvery:          50 * time.Millisecond,
+			EgressListen:          h.egressListen,
+			OpenPackets:           h.openPackets,
+			EgressUpstream:        h.upstream,
+			EgressCountEvery:      50 * time.Millisecond,
+			EgressGuardEvery:      cmp.Or(h.guardEvery, 50*time.Millisecond),
+			EgressRetry:           50 * time.Millisecond,
+			JobsLog:               h.jobs,
+			DrainFile:             h.drain,
+			Socket:                h.socket,
+			DestinationsFile:      cmp.Or(h.destinations, filepath.Join(t.TempDir(), "destinations.json")),
+			SaveDestinationsEvery: 50 * time.Millisecond,
+			Runner:                runnerdigests.Source{Releases: srv.URL + "/releases/latest", List: srv.URL + "/runner-digests.json", Registry: srv.URL},
+			BoxrunnerReleasesURL:  srv.URL + "/dominikzabcik/boxrunner/releases/latest",
+			Tick:                  50 * time.Millisecond,
+			HeartbeatEvery:        50 * time.Millisecond,
+			ReposEvery:            h.reposEvery,
+			SysboxDir:             h.sysbox,
+			CgroupDir:             h.cgroup,
+			CacheDir:              t.TempDir(),
+			CacheAddr:             h.cacheAddr,
 		})
 	}()
 	return h
@@ -864,8 +901,16 @@ func TestPauseAndResume(t *testing.T) {
 	waitFor(t, "a session", func() bool { return opened() == 1 })
 	h.github.pause("boxrunner")
 	waitFor(t, "the paused class's session to close", func() bool { return closed() == 1 })
+	paused := func(want bool) func() bool {
+		return func() bool {
+			snap, err := status.Fetch(context.Background(), h.socket)
+			return err == nil && len(snap.Classes) == 1 && snap.Classes[0].Paused == want
+		}
+	}
+	waitFor(t, "the class paused in the status", paused(true))
 	h.github.pause()
 	waitFor(t, "a session after resuming", func() bool { return opened() == 2 })
+	waitFor(t, "the class no longer paused in the status", paused(false))
 	if closed() != 1 {
 		t.Errorf("sessions closed while resumed: %d", closed())
 	}

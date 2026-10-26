@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/autoupgrade"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/release"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 type Snapshot struct {
@@ -62,6 +62,10 @@ type Snapshot struct {
 	Heartbeat time.Time `json:"heartbeat,omitzero"`
 	// Egress is the state of each class that has an allowlist.
 	Egress []Egress `json:"egress,omitempty"`
+	// Destinations are the places each repository's jobs connected to, the
+	// newest first; DestinationsProblem says why the agent does not record them.
+	Destinations        []seen.Repo `json:"destinations,omitempty"`
+	DestinationsProblem string      `json:"destinationsProblem,omitempty"`
 	// Organization is set while the Worker serves an organization.
 	Organization *Organization `json:"organization,omitempty"`
 }
@@ -162,6 +166,26 @@ type Class struct {
 	// Limit is the limit set for the class on this box on the Worker's
 	// dashboard, when there is one; the box runs at most the lower of the two.
 	Limit *int `json:"limit,omitempty"`
+	// Paused means the class is paused on the dashboard: the box starts no
+	// runner for it on any repository until someone resumes it.
+	Paused bool `json:"paused"`
+}
+
+// Dashboard says what the Worker's dashboard sets for the class, such as
+// "paused, limit 1", or "" when it sets nothing.
+func (c Class) Dashboard() string {
+	var parts []string
+	if c.Paused {
+		parts = append(parts, "paused")
+	}
+	switch {
+	case c.Limit == nil:
+	case *c.Limit == 0:
+		parts = append(parts, "limit 0, off on this box")
+	default:
+		parts = append(parts, fmt.Sprintf("limit %d", *c.Limit))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // NextTry says when a class that holds its starts tries again, or "" when
@@ -526,6 +550,14 @@ func call(ctx context.Context, socket, method, path string) (*http.Response, err
 	return resp, nil
 }
 
+// PrintJSON writes a snapshot as the agent sends it on its socket, indented,
+// for scripts and monitoring.
+func PrintJSON(w io.Writer, s Snapshot) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(s)
+}
+
 // Print writes a snapshot for people.
 func Print(w io.Writer, s Snapshot, now time.Time) {
 	images := ""
@@ -567,14 +599,13 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			fmt.Fprintf(w, "Class %s has an egress allowlist and is not served: %s\n\n", e.Class, e.Problem)
 		}
 	}
+	if s.DestinationsProblem != "" {
+		fmt.Fprintf(w, "Destinations: %s\n\n", s.DestinationsProblem)
+	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX")
+	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX\tDASHBOARD")
 	for _, c := range s.Classes {
-		most := strconv.Itoa(c.Max)
-		if c.Limit != nil {
-			most += fmt.Sprintf(", limit %d on the dashboard", *c.Limit)
-		}
-		fmt.Fprintf(t, "%s\t%s\t%d\t%s\n", c.Name, c.Priority, c.Active, most)
+		fmt.Fprintf(t, "%s\t%s\t%d\t%d\t%s\n", c.Name, c.Priority, c.Active, c.Max, cmp.Or(c.Dashboard(), "-"))
 	}
 	t.Flush()
 	if len(s.Egress) > 0 {
@@ -603,6 +634,18 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			}
 			t.Flush()
 		}
+	}
+
+	if len(s.Destinations) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(t, "REPOSITORY\tFIRST SEEN\tCONNECTIONS\tDESTINATION")
+		for _, r := range s.Destinations {
+			for _, d := range r.Destinations {
+				fmt.Fprintf(t, "%s\t%s\t%d\t%s\n", cmp.Or(r.Repo, "?"), d.First.Local().Format("Jan 02 15:04"), d.Count, d)
+			}
+		}
+		t.Flush()
+		fmt.Fprintln(w, "Up to 10 destinations per repository, the newest first. A ? is a container that is not one of the agent's runners.")
 	}
 
 	fmt.Fprintln(w)

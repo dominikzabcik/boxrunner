@@ -15,12 +15,23 @@ async function ready() {
 		expect(response.status).toBe(200);
 		return (await response.json()) as {
 			boxes: { name: string; version: string; online: boolean }[];
+			destinations: { box: string; repo: string; addr: string; port: number; proto: string; name: string | null; firstSeen: string; secondsSinceFirstSeen: number; count: number }[];
 			jobs: { runner: string; result: string; minutes: number }[];
 			totals: { today: { jobs: number; minutes: number; dollars: number }; last30Days: { jobs: number; minutes: number; dollars: number } };
 		};
 	};
 	return { call: agent(token), token, dashboard };
 }
+
+const destination = (extra: Record<string, unknown> = {}) => ({
+	repo: 'octo/site',
+	addr: '203.0.113.9',
+	port: 443,
+	proto: 'tcp',
+	first: '2026-10-14T09:00:00Z',
+	count: 3,
+	...extra,
+});
 
 describe('POST /v1/heartbeat', () => {
 	it('answers with the paused classes and keeps the latest status per box', async () => {
@@ -58,6 +69,14 @@ describe('POST /v1/heartbeat', () => {
 			[{ jobs: [job('r-1', '2026-10-14T09:00:00Z', null, '2026-10-14T09:01:00Z', { usage: { cpuSeconds: 1, memoryPeak: 1.5 } })] }, 'jobs[0].usage.memoryPeak'],
 			[{ classes: [{ name: 'boxrunner', priority: 'idle', max: 1, heldUntil: 'soon' }] }, 'classes[0].heldUntil'],
 			[{ draining: 'yes' }, 'draining'],
+			[{ destinations: [destination({ repo: 'not a repository' })] }, 'destinations[0].repo'],
+			[{ destinations: [destination({ addr: 'api.example.com' })] }, 'destinations[0].addr'],
+			[{ destinations: [destination({ port: 70_000 })] }, 'destinations[0].port'],
+			[{ destinations: [destination({ proto: 'TCP' })] }, 'destinations[0].proto'],
+			[{ destinations: [destination({ name: '' })] }, 'destinations[0].name'],
+			[{ destinations: [destination({ first: 'yesterday' })] }, 'destinations[0].first'],
+			[{ destinations: [destination({ count: -1 })] }, 'destinations[0].count'],
+			[{ destinations: Array.from({ length: 101 }, () => destination()) }, 'destinations'],
 			[{ scaleSets: [{ repo: 'octo/site', class: 'boxrunner', assigned: -1 }] }, 'scaleSets[0].assigned'],
 			[{ scaleSets: Array.from({ length: 129 }, (_, i) => ({ repo: `octo/r${i}`, class: 'boxrunner', assigned: 1 })) }, 'scaleSets'],
 			[{ jobs: Array.from({ length: 51 }, (_, i) => job(`r-${i}`, '2026-10-14T09:00:00Z', null, '2026-10-14T09:01:00Z')) }, 'jobs'],
@@ -83,6 +102,36 @@ describe('POST /v1/heartbeat', () => {
 			body: chunked,
 		});
 		await expectError(response, 400, 'bad_request', 'The body is larger than 16 KB.');
+	});
+
+	it('keeps the newest places jobs connected to and shows them, newest first', async () => {
+		const { call, dashboard } = await ready();
+		await call(
+			'POST',
+			'/v1/heartbeat',
+			heartbeatBody({
+				destinations: [
+					destination({ addr: '203.0.113.9', first: '2026-10-14T09:30:00Z', name: 'api.example.com', count: 12 }),
+					destination({ repo: 'octo/docs', addr: '2001:db8::1', first: '2026-10-14T09:40:00Z' }),
+					destination({ addr: '198.51.100.4', port: 53, proto: 'udp', first: '2026-10-14T09:00:00Z', count: 1 }),
+					destination({ addr: '203.0.113.20', port: 0, proto: 'icmp', first: '2026-10-14T08:00:00Z' }),
+				],
+			}),
+		);
+		expect((await dashboard()).destinations).toEqual([
+			{ box: 'box-1', repo: 'octo/docs', addr: '2001:db8::1', port: 443, proto: 'tcp', name: null, firstSeen: '2026-10-14T09:40:00.000Z', secondsSinceFirstSeen: 1200, count: 3 },
+			{ box: 'box-1', repo: 'octo/site', addr: '203.0.113.9', port: 443, proto: 'tcp', name: 'api.example.com', firstSeen: '2026-10-14T09:30:00.000Z', secondsSinceFirstSeen: 1800, count: 12 },
+			{ box: 'box-1', repo: 'octo/site', addr: '198.51.100.4', port: 53, proto: 'udp', name: null, firstSeen: '2026-10-14T09:00:00.000Z', secondsSinceFirstSeen: 3600, count: 1 },
+			{ box: 'box-1', repo: 'octo/site', addr: '203.0.113.20', port: 0, proto: 'icmp', name: null, firstSeen: '2026-10-14T08:00:00.000Z', secondsSinceFirstSeen: 7200, count: 3 },
+		]);
+	});
+
+	it('shows no destinations for a box that sent none, and replaces what the last heartbeat held', async () => {
+		const { call, dashboard } = await ready();
+		await call('POST', '/v1/heartbeat', heartbeatBody({ destinations: [destination()] }));
+		expect((await dashboard()).destinations).toHaveLength(1);
+		await call('POST', '/v1/heartbeat', heartbeatBody());
+		expect((await dashboard()).destinations).toEqual([]);
 	});
 
 	it('upserts jobs by runner name, so a job sent in every heartbeat counts once', async () => {

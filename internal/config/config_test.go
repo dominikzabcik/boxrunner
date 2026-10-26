@@ -413,6 +413,13 @@ func TestParseMetrics(t *testing.T) {
 	}
 }
 
+func TestCacheContainers(t *testing.T) {
+	cfg := Config{Classes: []Class{{Name: "a", Max: 3, Cache: true}, {Name: "b", Max: 5}, {Name: "c", Max: 2, Cache: true}}}
+	if got := cfg.CacheContainers(); got != 5 {
+		t.Errorf("CacheContainers = %d for cache classes with max 3 and 2 and a class with max 5 and no cache; want 5", got)
+	}
+}
+
 func TestParseCache(t *testing.T) {
 	file := func(top, class string) string {
 		return top + "\nworker = \"https://w.example.dev\"\nbox = \"b\"\n[[class]]\nname = \"web\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n" + class +

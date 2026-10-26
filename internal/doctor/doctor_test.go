@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"os"
@@ -318,6 +319,16 @@ func TestDraining(t *testing.T) {
 	}
 }
 
+func TestDestinations(t *testing.T) {
+	if got := Destinations(status.Snapshot{}); got != nil {
+		t.Errorf("Destinations of an agent that records them = %+v", got)
+	}
+	want := []Result{{"destinations", false, "nft is not installed, so the destinations jobs connect to are not recorded; install nftables and restart boxrunner"}}
+	if got := Destinations(status.Snapshot{DestinationsProblem: want[0].Detail}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Destinations = %+v, want %+v", got, want)
+	}
+}
+
 func TestForks(t *testing.T) {
 	settings := func(run, approval, write, secrets bool) *worker.ForkPullRequests {
 		return &worker.ForkPullRequests{RunWorkflows: run, RequireApproval: approval, SendWriteTokens: write, SendSecrets: secrets}
@@ -410,5 +421,104 @@ func TestOrgForks(t *testing.T) {
 	want := Result{"fork PRs", true, `cannot check them: reading the fork pull request settings takes the permission Administration, which the App serving an organization does not have. Check "Fork pull request workflows in private repositories" at https://github.com/organizations/octo/settings/actions and in each served repository's Settings, Actions, General`}
 	if got := OrgForks("octo"); got != want {
 		t.Errorf("OrgForks = %+v, want %+v", got, want)
+	}
+}
+
+func TestMemory(t *testing.T) {
+	const box = 32 * int64(config.GiB)
+	class := func(name string, memory config.Bytes, max int, priority config.Priority) config.Class {
+		return config.Class{Name: name, Memory: memory, Max: max, Priority: priority}
+	}
+	overFix := "lower memory or max in /etc/boxrunner/config.toml and restart boxrunner"
+	cases := []struct {
+		name    string
+		classes []config.Class
+		total   int64
+		want    Result
+	}{
+		{
+			"under the box's memory",
+			[]config.Class{class("boxrunner", 6*config.GiB, 2, config.Normal), class("boxrunner-light", 3*config.GiB, 2, config.Idle)},
+			box,
+			Result{"memory", true, "the classes may use 18.0 GiB together when each runs its max, within the box's 32.0 GiB"},
+		},
+		{
+			"exactly the box's memory",
+			[]config.Class{class("boxrunner", 16*config.GiB, 1, config.Normal), class("boxrunner-light", 8*config.GiB, 2, config.Idle)},
+			box,
+			Result{"memory", true, "the classes may use 32.0 GiB together when each runs its max, within the box's 32.0 GiB"},
+		},
+		{
+			"a little over, with the idle class counted",
+			[]config.Class{class("boxrunner", 16*config.GiB, 1, config.Normal), class("boxrunner-light", 8*config.GiB, 2, config.Idle)},
+			box - int64(256*config.MiB),
+			Result{"memory", false, "the classes may use 32.0 GiB together when each runs its max, and the box has 31.8 GiB, so the kernel's OOM killer may kill a job or the agent; most from boxrunner 1 x 16.0 GiB = 16.0 GiB, boxrunner-light 2 x 8.0 GiB = 16.0 GiB; " + overFix},
+		},
+		{
+			"the defaults on an 8 GiB box",
+			[]config.Class{class("boxrunner", 6*config.GiB, 1, config.Normal), class("boxrunner-light", 3*config.GiB, 2, config.Idle)},
+			8 * int64(config.GiB),
+			Result{"memory", false, "the classes may use 12.0 GiB together when each runs its max, and the box has 8.0 GiB, so the kernel's OOM killer may kill a job or the agent; most from boxrunner 1 x 6.0 GiB = 6.0 GiB, boxrunner-light 2 x 3.0 GiB = 6.0 GiB; " + overFix},
+		},
+		{
+			"four classes name the three that contribute most",
+			[]config.Class{
+				class("small", 1*config.GiB, 1, config.Normal), class("big", 20*config.GiB, 1, config.Normal),
+				class("many", 4*config.GiB, 4, config.Idle), class("mid", 8*config.GiB, 1, config.Normal),
+			},
+			box,
+			Result{"memory", false, "the classes may use 45.0 GiB together when each runs its max, and the box has 32.0 GiB, so the kernel's OOM killer may kill a job or the agent; most from big 1 x 20.0 GiB = 20.0 GiB, many 4 x 4.0 GiB = 16.0 GiB, mid 1 x 8.0 GiB = 8.0 GiB; " + overFix},
+		},
+	}
+	for _, c := range cases {
+		if got := Memory(c.classes, c.total); got != c.want {
+			t.Errorf("%s: Memory =\n%+v\nwant\n%+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestProbeRun(t *testing.T) {
+	answered := "host 124\r\nmetadata 124\r\ngithub 0\r\n"
+	cases := []struct {
+		name    string
+		exit    int
+		waitErr error
+		logs    string
+		want    string
+	}{
+		{"it ran its tries", 0, nil, answered, ""},
+		{"it ran its tries and every one failed", 0, nil, "host 1\nmetadata 1\ngithub 1\n", ""},
+		{"it did not finish in time", 0, context.DeadlineExceeded, "", "the probe container did not finish within 90 seconds"},
+		{"docker could not be asked", 0, errors.New("connection refused"), "", "waiting for the probe container failed: connection refused"},
+		{"it was killed", 137, nil, "", "the probe container exited with code 137 before it ran its tries"},
+		{"it exited with only noise", 1, nil, "bash: warning\r\n", "the probe container exited with code 1 before it ran its tries"},
+		{"it printed nothing", 0, nil, "", "the probe container exited without printing an answer"},
+		{"it printed no answer", 0, nil, "bash: warning\r\n", "the probe container exited without printing an answer"},
+	}
+	for _, c := range cases {
+		if got := ProbeRun(c.exit, c.waitErr, c.logs); got != c.want {
+			t.Errorf("%s: ProbeRun = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBusy(t *testing.T) {
+	cases := []struct {
+		name string
+		snap *status.Snapshot
+		want string
+	}{
+		{"the agent is not running", nil, ""},
+		{"the agent builds nothing", &status.Snapshot{Image: status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e"}}, ""},
+		{
+			"the agent builds the job image or the class images",
+			&status.Snapshot{Image: status.ImageStatus{Built: "2.338.0+3f9a2c0b1d4e", Building: "2.338.0+3f9a2c0b1d4e"}},
+			"; the agent is building job image 2.338.0+3f9a2c0b1d4e or its class images and the box is busy, so run doctor again once that finishes (sudo boxrunner status shows when)",
+		},
+	}
+	for _, c := range cases {
+		if got := Busy(c.snap); got != c.want {
+			t.Errorf("%s: Busy = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

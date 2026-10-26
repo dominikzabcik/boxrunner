@@ -169,6 +169,18 @@ func (c Config) Class(name string) (Class, bool) {
 	return c.Classes[i], true
 }
 
+// CacheContainers is how many job containers can use the Actions cache at
+// once: the sum of max over the classes with cache = true.
+func (c Config) CacheContainers() int {
+	n := 0
+	for _, k := range c.Classes {
+		if k.Cache {
+			n += k.Max
+		}
+	}
+	return n
+}
+
 const (
 	DefaultDiskFloor = 10 * GB
 	maxRank          = 1000
