@@ -364,6 +364,7 @@ export class FakeGitHub {
 					return new Response(null, { status: open ? 204 : 404 });
 				}
 				if (method === 'PATCH') {
+					if (!open && this.sessions.has(key)) return json({ typeName: 'TaskAgentSessionConflictException' }, 400);
 					if (!open) return json({ typeName: 'TaskAgentSessionExpiredException' }, 404);
 					return json({ sessionId: session[1], messageQueueUrl: `${actionsBase}/queue/${id}`, messageQueueAccessToken: 'queue-token-refreshed' });
 				}

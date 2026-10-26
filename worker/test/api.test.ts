@@ -359,6 +359,22 @@ describe('sessions', () => {
 		await expectError(await call('DELETE', `/v1/sessions/not-a-uuid?repo=octo/site&scaleSetId=${id}`), 400, 'bad_request');
 	});
 
+	it('tells a box its session is gone once another box holds the scale set', async () => {
+		const { call } = await ready();
+		const id = await scaleSet(call);
+		const open = async (owner: string) =>
+			((await (await call('POST', '/v1/sessions', { repo: 'octo/site', scaleSetId: id, owner })).json()) as { sessionId: string }).sessionId;
+		const first = await open('box-1');
+		expect((await call('DELETE', `/v1/sessions/${first}?repo=octo/site&scaleSetId=${id}`)).status).toBe(204);
+		await open('box-2');
+		await expectError(
+			await call('PATCH', `/v1/sessions/${first}`, { repo: 'octo/site', scaleSetId: id }),
+			404,
+			'not_found',
+			'The session is gone; open a new one.',
+		);
+	});
+
 	it('refuses scale sets the Worker did not make for that repository', async () => {
 		const { github, call } = await ready();
 		const docs = await scaleSet(call, 'octo/docs');

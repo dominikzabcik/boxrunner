@@ -460,7 +460,9 @@ export async function openSession(connection: AdminConnection, id: ScaleSetId, o
 
 export async function refreshSession(connection: AdminConnection, id: ScaleSetId, sessionId: SessionId): Promise<SessionResult> {
 	const path = `${scaleSets}/${id}/sessions/${sessionId}`;
-	const response = await actions(connection, 'PATCH', path, [200, 404]);
+	const response = await actions(connection, 'PATCH', path, [200, 400, 404]);
+	// GitHub answers 400, not 404, once another session holds the scale set.
+	if (response.status === 400) return { kind: 'gone' };
 	return sessionResult(response, connection, id, `PATCH ${path}`);
 }
 
