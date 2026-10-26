@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.10.0
+
+Upgrade the Worker and every box. This is the last upgrade a box needs by hand: from now on it upgrades itself.
+
+**Features**
+- The agent upgrades itself to a newer release of its major version, once the release has been out for six hours and no job of an egress class is running, through a transient systemd unit so the installer's restart does not cut it off. `auto_upgrade = false` turns it off; `status` and `doctor` show it (#143, docs/upgrading.md).
+- Each release publishes the menu bar app, and the app updates itself: it checks daily, verifies the zip against the release's checksums and the bundle's signature, swaps itself and relaunches. Settings can turn it off (#139).
+- The agent records where each repository's jobs connect, for every class, and shows the first destinations in `status` and on the dashboard (#145, the first half of #53; the egress allowlist was the second).
+- `status` shows a class paused or limited on the dashboard, and `status --json` prints the agent's snapshot for scripts (#137, #56, #32).
+- `doctor` warns when the classes' `memory` times `max` adds up to more than the box has, and says why a probe did not answer, with a hint to run it again while an image builds (#138, #33, #108).
+- `uninstall` also removes the runner base image and the mirror's registry image (#140, #70).
+- The landing page has a calculator of the minutes a month and what GitHub's runners would charge for them (#141, #34).
+
+**Fixes**
+- `boxrunner upgrade` restarts the agent once, not twice: installers since 0.3.0 restart it themselves (#143).
+- The Actions cache refuses a write that cannot fit before it gives up any entry, stops a chunked upload from taking other repositories' room past its share, and sizes the connections each container may hold from the classes' `max` (#142, #91).
+- CI fails on high or critical advisories in the Worker's and the site's packages, and runs weekly as well; two in the Worker's test tooling are fixed (#144).
+
 ## v0.9.7
 
 **Features**
