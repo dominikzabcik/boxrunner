@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/dnsfwd"
@@ -72,7 +71,7 @@ func (c Checks) egressChecks(ctx context.Context, d *docker.Client, services fir
 		if snap != nil {
 			results = append(results, Refusals(*snap, k.Name))
 		}
-		results = append(results, c.egressProbe(ctx, d, k)...)
+		results = append(results, c.egressProbe(ctx, d, k, Busy(snap))...)
 	}
 	return results
 }
@@ -182,7 +181,7 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 		code, ok := codes[name]
 		switch {
 		case !ok:
-			return false, "the probe gave no answer"
+			return false, "the probe stopped before this try"
 		case code == 0:
 			return false, "a job container got through"
 		}
@@ -192,7 +191,7 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 		code, ok := codes[name]
 		switch {
 		case !ok:
-			return false, "the probe gave no answer"
+			return false, "the probe stopped before this try"
 		case code == 0:
 			return false, "a job container got through"
 		case code != 124:
@@ -245,8 +244,9 @@ func JudgeEgress(class string, p EgressProbe, logs string) []Result {
 	return results
 }
 
-// egressProbe runs a container like a job of the class on its network.
-func (c Checks) egressProbe(ctx context.Context, d *docker.Client, class config.Class) []Result {
+// egressProbe runs a container like a job of the class on its network. busy is
+// what Busy says, which follows every failure to run the container.
+func (c Checks) egressProbe(ctx context.Context, d *docker.Client, class config.Class, busy string) []Result {
 	n := egress.NetOf(class.Name)
 	name := "egress " + class.Name + " probe"
 	network, ok, err := d.Network(ctx, n.Name)
@@ -280,18 +280,19 @@ func (c Checks) egressProbe(ctx context.Context, d *docker.Client, class config.
 		return []Result{{name, false, fmt.Sprintf("the job image %s is missing; run install", layout.Image)}}
 	}
 	if err != nil {
-		return []Result{{name, false, err.Error()}}
+		return []Result{{name, false, err.Error() + busy}}
 	}
 	defer d.Remove(context.WithoutCancel(ctx), id)
 	if err := d.Start(ctx, id); err != nil {
-		return []Result{{name, false, err.Error()}}
+		return []Result{{name, false, err.Error() + busy}}
 	}
-	waited, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	if _, err := d.Wait(waited, id); err != nil {
-		return []Result{{name, false, err.Error()}}
-	}
+	waited, cancel := context.WithTimeout(ctx, ProbeWait)
+	exit, waitErr := d.Wait(waited, id)
+	cancel()
 	logs, _ := d.Logs(ctx, id)
+	if why := ProbeRun(exit, waitErr, logs); why != "" {
+		return []Result{{name, false, why + busy}}
+	}
 	return JudgeEgress(class.Name, p, logs)
 }
 

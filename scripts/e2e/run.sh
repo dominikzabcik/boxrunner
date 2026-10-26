@@ -94,9 +94,11 @@ if [ "$mode" = docker ]; then
 fi
 # The release checks ask github.com for boxrunner's and the runner's latest
 # releases, so they only warn: a release out after this commit, or one the
-# runner digests workflow has not verified yet, is no fault of the box.
-expect "$work/doctor.txt" '^ok +runner image +sha256:[0-9a-f]{64}, which boxrunner.s CI verified$'
-if grep -vE "^(ok  |warn  (release|worker release|runner release) )" "$work/doctor.txt"; then
+# runner digests workflow has not verified yet, is no fault of the box. The
+# default classes may be allowed more memory than the box has when each runs at
+# its max, so the memory check warns here.
+expect "$work/doctor.txt" '^(ok|warn) +memory ' '^ok +runner image +sha256:[0-9a-f]{64}, which boxrunner.s CI verified$'
+if grep -vE "^(ok  |warn  (release|worker release|runner release|memory) )" "$work/doctor.txt"; then
 	fail "doctor printed the lines above"
 fi
 
