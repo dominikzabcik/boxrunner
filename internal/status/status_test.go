@@ -195,7 +195,10 @@ func TestPrintJSON(t *testing.T) {
   },
   "diskFree": 41250000000,
   "diskFloor": 10000000000,
-  "worker": "0.1.0"
+  "worker": "0.1.0",
+  "autoUpgrade": {
+    "enabled": false
+  }
 }
 `
 	if got := b.String(); got != want {
