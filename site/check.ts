@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { serve } from './serve.ts';
 
 // Landing page bytes on the wire: the HTML gzipped, the four fonts and the response headers.
-// Measured 140,871 in October 2026: 21,146 of HTML, 113,020 of fonts and about 6,700 of headers,
+// Measured 142,571 in October 2026: about 22,800 of HTML, 113,020 of fonts and about 6,700 of headers,
 // most of them the CSP sent with each response. Cloudflare's brotli makes the HTML a little smaller.
 const LANDING_BUDGET = 160_000;
 
@@ -146,6 +146,53 @@ async function headlines(browser: Browser) {
 	if (!wide.length) ok('every headline fits two lines at 390 and 360px');
 }
 
+// The calculator must read right without scripts, agree with itself once they run, follow the keyboard and link every rate to GitHub's billing docs.
+async function calculator(browser: Browser) {
+	const bare = await browser.newContext({ javaScriptEnabled: false });
+	const plain = await bare.newPage();
+	await plain.goto(`${origin}/`, { waitUntil: 'load' });
+	const before = (await plain.locator('#c-out').textContent())!.trim();
+	const rates = await plain.locator('.rates a').evaluateAll((as) => as.map((a) => (a as HTMLAnchorElement).href));
+	await bare.close();
+	if (before !== '9,600 minutes a month: $45.60 on GitHub, $0 on boxrunner.') fail(`calculator without scripts reads "${before}"`);
+	if (rates.length !== 6 || rates.some((h) => !h.startsWith('https://docs.github.com/en/billing/reference/actions-runner-pricing'))) fail(`calculator rates do not all link to GitHub's pricing page: ${rates.join(' ')}`);
+	const context = await browser.newContext({ viewport: { width: 400, height: 844 } });
+	const page = await context.newPage();
+	const problems: string[] = [];
+	page.on('pageerror', (e) => problems.push(e.message));
+	await page.goto(`${origin}/`, { waitUntil: 'load' });
+	const out = page.locator('#c-out');
+	const read = async () => (await out.textContent())!.trim();
+	if ((await read()) !== before) fail(`calculator with scripts starts at "${await read()}", not at "${before}"`);
+	const cases: [string, string, string, string, string][] = [
+		['100', '10', '2', '2000', '30,000 minutes a month: $168.00 on GitHub, $0 on boxrunner.'],
+		['100', '10', '8', '2000', '30,000 minutes a month: $660.00 on GitHub, $0 on boxrunner.'],
+		['100', '10', '2', '50000', '30,000 minutes a month: $0.00 on GitHub, $0 on boxrunner.'],
+		['1', '7.5', '64', '3000', '240 minutes a month: $38.88 on GitHub, $0 on boxrunner.'],
+		['', '8', '2', '2000', 'Jobs a day: 1 to 10,000. Minutes a job: 1 to 360.'],
+	];
+	for (const [jobs, len, size, plan, want] of cases) {
+		await page.fill('#c-jobs', jobs);
+		await page.fill('#c-len', len);
+		await page.selectOption('#c-size', size);
+		await page.selectOption('#c-plan', plan);
+		if ((await read()) !== want) fail(`calculator for ${jobs} jobs of ${len} minutes on ${size} cores with ${plan} free reads "${await read()}", expected "${want}"`);
+	}
+	await page.fill('#c-jobs', '40');
+	await page.fill('#c-len', '8');
+	await page.selectOption('#c-plan', '2000');
+	await page.focus('#c-size');
+	await page.keyboard.type('4');
+	const picked = await page.evaluate(() => ({ size: (document.getElementById('c-size') as HTMLSelectElement).value, now: document.querySelector('.rates [aria-current] a')?.textContent, how: document.getElementById('c-how')!.textContent }));
+	if (picked.size !== '4' || picked.now !== '$0.012' || !picked.how?.includes('The 4-core runner costs $0.012 a minute')) fail(`the keyboard did not pick the 4-core runner: ${JSON.stringify(picked)}`);
+	if ((await read()) !== '9,600 minutes a month: $115.20 on GitHub, $0 on boxrunner.') fail(`calculator for the 4-core runner reads "${await read()}"`);
+	const small = await page.locator('#calc input, #calc select').evaluateAll((els) => els.filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.id));
+	if (small.length) fail(`calculator controls under 44px tall: ${small.join(', ')}`);
+	for (const p of problems) fail(`calculator: ${p}`);
+	await context.close();
+	if (!failures.some((f) => f.includes('calculator'))) ok('calculator: right without scripts, right with them, follows the keyboard, every rate links to GitHub');
+}
+
 const browser = await chromium.launch();
 try {
 	await headers();
@@ -165,6 +212,7 @@ try {
 	}
 	await links(hrefs);
 	await headlines(browser);
+	await calculator(browser);
 	const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 	await landing(await context.newPage());
 	await context.close();
