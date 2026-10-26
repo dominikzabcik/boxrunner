@@ -19,6 +19,23 @@ final class AppState {
 	var updated: Date?
 	var busy = false
 
+	/// What the self-update is doing, shown on the menu's bottom line.
+	enum UpdateStatus: Equatable {
+		case idle
+		case installing(String)
+		case installed(String)
+		case failed(String)
+	}
+
+	var update: UpdateStatus = .idle
+	/// Looks for a newer release at launch and once a day, and installs it.
+	var updatesAutomatically: Bool {
+		didSet {
+			defaults.set(updatesAutomatically, forKey: "updateAutomatically")
+			startUpdateChecks()
+		}
+	}
+
 	/// The fleet's name in the menu, such as the team calls it.
 	var fleetName: String { didSet { defaults.set(fleetName, forKey: "fleetName") } }
 	/// The box this Mac runs, whose availability the menu switches.
@@ -27,6 +44,7 @@ final class AppState {
 
 	private let defaults = UserDefaults.standard
 	private var poller: Task<Void, Never>?
+	private var updateChecker: Task<Void, Never>?
 	private var token: String?
 	private var localBoxes: Set<String>?
 
@@ -34,6 +52,12 @@ final class AppState {
 		fleetName = defaults.string(forKey: "fleetName") ?? "boxrunner"
 		thisBox = defaults.string(forKey: "thisBox") ?? ""
 		worker = defaults.url(forKey: "worker")
+		updatesAutomatically = defaults.object(forKey: "updateAutomatically") as? Bool ?? true
+		if let updated = defaults.string(forKey: "updatedTo") {
+			defaults.removeObject(forKey: "updatedTo")
+			if updated == Self.version { update = .installed(updated) }
+		}
+		startUpdateChecks()
 		if let worker, let token = Keychain.token(for: worker) {
 			self.token = token
 			phase = .paired
@@ -46,8 +70,15 @@ final class AppState {
 		self.fleetName = fleetName
 		self.thisBox = thisBox
 		self.fleet = fleet
+		updatesAutomatically = false
 		phase = .paired
 		updated = Date()
+	}
+
+	/// This app's version, nil when it does not run from a built boxrunner.app.
+	static var version: String? {
+		guard Bundle.main.bundleURL.pathExtension == "app" else { return nil }
+		return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
 	}
 
 	var client: Client? { worker.map { Client(worker: $0) } }
@@ -143,6 +174,40 @@ final class AppState {
 		guard thisBox.isEmpty else { return }
 		if localBoxes == nil { localBoxes = await LocalBoxes.names() }
 		if let found = LocalBoxes.pick(from: fleet.boxes.map(\.name), local: localBoxes ?? []) { thisBox = found }
+	}
+
+	private func startUpdateChecks() {
+		updateChecker?.cancel()
+		guard updatesAutomatically, let version = Self.version, let id = Bundle.main.bundleIdentifier else { return }
+		updateChecker = Task {
+			while !Task.isCancelled {
+				let wait = await updateOnce(from: version, id: id)
+				try? await Task.sleep(for: wait)
+			}
+		}
+	}
+
+	/// Installs the latest release when it is newer than `version`, and starts
+	/// it. Gives how long to wait before looking again: a day, or sooner after
+	/// a failure.
+	private func updateOnce(from version: String, id: String) async -> Duration {
+		let updater = Updater()
+		let latest: String
+		do { latest = try await updater.latest() } catch { return .seconds(3600) }
+		guard Release.isNewer(latest, than: version) else { return .seconds(86400) }
+		update = .installing(latest)
+		let bundle = Bundle.main.bundleURL
+		do {
+			try await updater.install(version: latest, over: bundle, identifier: id)
+			defaults.set(latest, forKey: "updatedTo")
+			update = .installed(latest)
+			try Updater.relaunch(bundle)
+			NSApp.terminate(nil)
+			return .seconds(86400)
+		} catch {
+			update = Task.isCancelled ? .idle : .failed(error.localizedDescription)
+			return .seconds(6 * 3600)
+		}
 	}
 
 	private func startPolling() {
