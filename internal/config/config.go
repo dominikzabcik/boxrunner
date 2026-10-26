@@ -156,6 +156,9 @@ type Config struct {
 	Metrics netip.AddrPort
 	// Cache is the most the box's Actions cache keeps; 0 runs no cache server.
 	Cache Bytes
+	// AutoUpgrade lets the agent install a newer release of its own major
+	// version; it is on unless the file turns it off.
+	AutoUpgrade bool
 }
 
 func (c Config) Class(name string) (Class, bool) {
@@ -200,6 +203,7 @@ type rawConfig struct {
 	Metrics       string     `toml:"metrics"`
 	MetricsPublic bool       `toml:"metrics_public"`
 	Cache         string     `toml:"cache"`
+	AutoUpgrade   *bool      `toml:"auto_upgrade"` // a pointer, so that a missing key differs from false
 	Classes       []rawClass `toml:"class"`
 }
 
@@ -272,6 +276,8 @@ func Parse(data []byte, hostname string) (Config, error) {
 			errs = append(errs, fmt.Errorf("cache: %s is less than %s", cfg.Cache, minCache))
 		}
 	}
+
+	cfg.AutoUpgrade = raw.AutoUpgrade == nil || *raw.AutoUpgrade
 
 	if len(raw.Classes) == 0 {
 		errs = append(errs, errors.New("no [[class]]: at least one is needed"))

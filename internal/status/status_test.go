@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/autoupgrade"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
@@ -139,7 +140,7 @@ func TestPrintDraining(t *testing.T) {
 	snap := Snapshot{Box: "box-1", Version: "0.1.0", DiskFree: 41_250_000_000, DiskFloor: 10_000_000_000, Draining: true}
 	var b strings.Builder
 	Print(&b, snap, t0)
-	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Draining: the agent closed its sessions and starts no runners; running jobs finish. Resume with: sudo boxrunner resume\n\n" +
 		"CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n"
 	if got := b.String(); !strings.HasPrefix(got, want) {
@@ -194,7 +195,10 @@ func TestPrintJSON(t *testing.T) {
   },
   "diskFree": 41250000000,
   "diskFloor": 10000000000,
-  "worker": "0.1.0"
+  "worker": "0.1.0",
+  "autoUpgrade": {
+    "enabled": false
+  }
 }
 `
 	if got := b.String(); got != want {
@@ -225,7 +229,7 @@ func TestPrint(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0.Add(4*time.Minute+10*time.Second))
-	want := `box-1  boxrunner 0.1.0  worker 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.1.0  worker 0.1.0  image 2.338.0 (latest 2.338.0)  images 3.1 GB  disk 41.2 GB free, floor 10.0 GB  auto-upgrade off
 
 If this box replaced one that died, jobs the old box had acquired stay queued: see docs/architecture.md#replacing-a-box.
 
@@ -270,7 +274,7 @@ func TestPrintRunnerImage(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0)
-	want := `box-1  boxrunner 0.1.0  worker unknown  image 2.337.0+3f9a2c0b1d4e (latest 2.338.0+3f9a2c0b1d4e)  disk 0.0 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.1.0  worker unknown  image 2.337.0+3f9a2c0b1d4e (latest 2.338.0+3f9a2c0b1d4e)  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off
 
 The job image is built from runner image sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4, which boxrunner's CI verified.
 
@@ -300,7 +304,7 @@ func TestPrintBuildingImage(t *testing.T) {
 	for _, c := range cases {
 		var b strings.Builder
 		Print(&b, Snapshot{Box: "box-1", Version: "0.7.0", DiskFloor: 10e9, Image: c.img}, t0)
-		want := "box-1  boxrunner 0.7.0  worker unknown  " + c.want + "  disk 0.0 GB free, floor 10.0 GB\n"
+		want := "box-1  boxrunner 0.7.0  worker unknown  " + c.want + "  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off\n"
 		if got, _, _ := strings.Cut(b.String(), "\n"); got+"\n" != want {
 			t.Errorf("%s: Print starts with\n%s\nwant\n%s", c.name, got, want)
 		}
@@ -314,7 +318,7 @@ func TestPrintHeldClass(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, snap, t0)
-	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB\n\n" +
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 41.2 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Runners of class web exit before taking a job; next try at " + t0.Add(4*time.Minute).Local().Format("15:04:05") + ". See `journalctl -u boxrunner` for their output.\n\n" +
 		"CLASS      PRIORITY  RUNNERS  MAX  DASHBOARD\n"
 	if got := b.String(); !strings.HasPrefix(got, want) {
@@ -336,9 +340,9 @@ func TestPrintSaysWhenANewerReleaseIsOut(t *testing.T) {
 		return head
 	}
 	snap := Snapshot{Box: "box-1", Version: "0.2.1", Worker: "0.2.0", Latest: "0.2.2", DiskFloor: 10e9}
-	want := `box-1  boxrunner 0.2.1  worker 0.2.0  image none (latest none)  disk 0.0 GB free, floor 10.0 GB
+	want := `box-1  boxrunner 0.2.1  worker 0.2.0  image none (latest none)  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off
 
-boxrunner 0.2.2 is out. Upgrade this agent with: sudo boxrunner upgrade
+boxrunner 0.2.2 is out. Auto-upgrade is off. Upgrade this agent with: sudo boxrunner upgrade
 
 The Worker runs 0.2.0. Redeploy it from 0.2.2: see docs/upgrading.md.
 
@@ -348,11 +352,44 @@ The Worker runs 0.2.0. Redeploy it from 0.2.2: see docs/upgrading.md.
 	}
 
 	snap.Version, snap.Worker = "0.2.2", ""
-	want = `box-1  boxrunner 0.2.2  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB
+	want = `box-1  boxrunner 0.2.2  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off
 
 `
 	if got := header(snap); got != want {
 		t.Errorf("current, with a Worker that names no version:\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestPrintAutoUpgrade(t *testing.T) {
+	until := t0.Add(2 * time.Hour)
+	at := until.Local().Format("Jan 02 15:04")
+	cases := []struct {
+		name string
+		auto AutoUpgrade
+		want string
+	}{
+		{"nothing decided yet", AutoUpgrade{Enabled: true}, "Auto-upgrade is on."},
+		{"held for the delay", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Hold, Until: until}, "Auto-upgrade installs it after " + at + "."},
+		{"after a failed attempt", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Retry, Until: until}, "Auto-upgrade tried a while ago and tries again after " + at + ". To upgrade now: sudo boxrunner upgrade"},
+		{"draining", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Draining}, "Auto-upgrade waits for the box to resume."},
+		{"an egress job runs", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Egress}, "Auto-upgrade waits until no job of a class with an egress allowlist runs."},
+		{"installing", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Go}, "Auto-upgrade is installing it now."},
+		{"a new major version", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Major}, "It is a new major version, which auto-upgrade leaves to you. Upgrade this agent with: sudo boxrunner upgrade"},
+		{"a development build", AutoUpgrade{Enabled: true, Verdict: autoupgrade.Unreleased}, "This agent is a development build, which auto-upgrade leaves alone. Upgrade this agent with: sudo boxrunner upgrade"},
+		{"turned off", AutoUpgrade{}, "Auto-upgrade is off. Upgrade this agent with: sudo boxrunner upgrade"},
+	}
+	for _, c := range cases {
+		var b strings.Builder
+		Print(&b, Snapshot{Box: "box-1", Version: "0.2.1", Worker: "0.2.2", Latest: "0.2.2", AutoUpgrade: c.auto}, t0)
+		wantOn := "auto-upgrade " + map[bool]string{true: "on", false: "off"}[c.auto.Enabled] + "\n\nboxrunner 0.2.2 is out. " + c.want + "\n\n"
+		if got := b.String(); !strings.Contains(got, wantOn) {
+			t.Errorf("%s: Print =\n%s\nwant it to contain\n%s", c.name, got, wantOn)
+		}
+	}
+	var b strings.Builder
+	Print(&b, Snapshot{Box: "box-1", Version: "0.2.2", Worker: "0.2.2", Latest: "0.2.2", AutoUpgrade: AutoUpgrade{Enabled: true}}, t0)
+	if got := b.String(); strings.Contains(got, "is out") || !strings.Contains(got, "  auto-upgrade on\n") {
+		t.Errorf("the latest release is installed, Print =\n%s", got)
 	}
 }
 
@@ -398,7 +435,7 @@ func TestPrintEgress(t *testing.T) {
 	var b strings.Builder
 	Print(&b, snap, t0)
 	at := func(d time.Duration) string { return t0.Add(d).Local().Format("15:04:05") }
-	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB\n\n" +
+	want := "box-1  boxrunner 0.1.0  worker unknown  image none (latest none)  disk 0.0 GB free, floor 10.0 GB  auto-upgrade off\n\n" +
 		"Class coder has an egress allowlist and is not served: nft is not installed; run sudo boxrunner install\n\n" +
 		"CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n" +
 		"agent  normal    0        1    -\n" +

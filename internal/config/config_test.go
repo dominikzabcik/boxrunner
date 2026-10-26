@@ -72,8 +72,9 @@ docker = true
 	}
 	got.Worker = nil
 	want := Config{
-		Box:       "box-1",
-		DiskFloor: 20_000_000_000,
+		Box:         "box-1",
+		DiskFloor:   20_000_000_000,
+		AutoUpgrade: true,
 		Classes: []Class{
 			{Name: "boxrunner", NanoCPUs: 4_000_000_000, Memory: 6 << 30, Pids: 4096, Shm: 1 << 30, Priority: Normal, Max: 1, Image: "boxrunner/runner:local"},
 			{Name: "boxrunner-light", NanoCPUs: 1_500_000_000, Memory: 2560 << 20, Pids: 512, Shm: 256 << 20, Priority: Idle, Max: 3, Image: "boxrunner/runner-node:local", Docker: true, Isolation: Sysbox},
@@ -479,5 +480,25 @@ func TestParseEgress(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("Parse(%s) error = %v\nwant one with %s", c.class, err, c.want)
 		}
+	}
+}
+
+func TestParseAutoUpgrade(t *testing.T) {
+	const class = "[[class]]\nname = \"a\"\ncpus = 1\nmemory = \"1GiB\"\nmax = 1\n"
+	for _, c := range []struct {
+		name, top string
+		want      bool
+	}{
+		{"unset", "", true},
+		{"on", "auto_upgrade = true\n", true},
+		{"off", "auto_upgrade = false\n", false},
+	} {
+		got, err := Parse([]byte("worker = \"http://127.0.0.1:8787\"\n"+c.top+class), "box")
+		if err != nil || got.AutoUpgrade != c.want {
+			t.Errorf("%s: AutoUpgrade = %v, %v; want %v", c.name, got.AutoUpgrade, err, c.want)
+		}
+	}
+	if _, err := Parse([]byte("worker = \"http://127.0.0.1:8787\"\nauto_upgrade = \"no\"\n"+class), "box"); err == nil {
+		t.Error("auto_upgrade = \"no\" was accepted")
 	}
 }

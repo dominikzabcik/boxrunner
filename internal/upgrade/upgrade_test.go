@@ -28,6 +28,8 @@ func releases(t *testing.T) *httptest.Server {
 			w.Write([]byte(installer("0.2.2")))
 		case "/releases/download/v0.2.3/install.sh":
 			w.Write([]byte(installer("0.2.2")))
+		case "/releases/download/v0.3.0/install.sh":
+			w.Write([]byte(installer("0.3.0")))
 		default:
 			http.NotFound(w, r)
 		}
@@ -91,6 +93,20 @@ func TestUpgradeToTheLatestRelease(t *testing.T) {
 		t.Errorf("restarted %d times, want once", r.restarts)
 	}
 	if r.out.String() != want {
+		t.Errorf("output =\n%s\nwant\n%s", r.out.String(), want)
+	}
+}
+
+func TestUpgradeLeavesTheRestartToANewInstaller(t *testing.T) {
+	srv := releases(t)
+	var r run
+	if err := Run(context.Background(), r.options(srv, "0.2.2", "0.3.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.installed) != 1 || r.restarts != 0 {
+		t.Errorf("installed %d times, restarted %d times; want once and never", len(r.installed), r.restarts)
+	}
+	if want := "==> download the installer of boxrunner 0.3.0\n==> skipped the installer's build attestation check (needs gh, signed in)\n"; r.out.String() != want {
 		t.Errorf("output =\n%s\nwant\n%s", r.out.String(), want)
 	}
 }

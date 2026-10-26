@@ -79,6 +79,12 @@ func Newer(a, b string) bool {
 	return a != "" && b != "" && Compare(a, b) > 0
 }
 
+// Major is the first number of a version, such as 0 for 0.3.1.
+func Major(v string) int {
+	numbers, _ := parse(v)
+	return numbers[0]
+}
+
 func parse(v string) (numbers [3]int, pre string) {
 	v = strings.TrimPrefix(v, "v")
 	v, _, _ = strings.Cut(v, "+")

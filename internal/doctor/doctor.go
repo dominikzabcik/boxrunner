@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dominikzabcik/boxrunner/internal/autoupgrade"
 	"github.com/dominikzabcik/boxrunner/internal/cache"
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/disk"
@@ -159,6 +160,13 @@ func (c Checks) All(ctx context.Context) []Result {
 			}
 		}
 	}
+	if c.ConfigErr == nil {
+		var err error
+		if c.Config.AutoUpgrade {
+			_, err = c.Exec(ctx, "", "systemd-run", "--version")
+		}
+		results = append(results, AutoUpgrade(c.Config.AutoUpgrade, err))
+	}
 	if snap != nil {
 		results = append(results, Draining(*snap)...)
 		results = append(results, Held(*snap, time.Now())...)
@@ -201,6 +209,20 @@ func LiveRestore(enabled, sysbox bool) Result {
 		return Result{"live-restore", true, "on; running jobs keep running through a Docker restart"}
 	default:
 		return Result{"live-restore", true, "off; restarting Docker stops running jobs, so drain first (docs/upgrading.md#rebooting-the-box)"}
+	}
+}
+
+// AutoUpgrade says whether the agent installs new releases itself. It fails
+// when it should but systemd-run, which starts the upgrade outside the
+// agent's own unit, does not run (runErr).
+func AutoUpgrade(enabled bool, runErr error) Result {
+	switch {
+	case !enabled:
+		return Result{"auto-upgrade", true, "off (auto_upgrade = false in the config); upgrade with: sudo boxrunner upgrade"}
+	case runErr != nil:
+		return Result{"auto-upgrade", false, fmt.Sprintf("on, but systemd-run does not run, so the agent cannot start an upgrade: %v", runErr)}
+	default:
+		return Result{"auto-upgrade", true, fmt.Sprintf("on; the agent installs a newer release of its major version %d hours after it first sees it (docs/upgrading.md#automatic-upgrades)", int(autoupgrade.Delay.Hours()))}
 	}
 }
 
