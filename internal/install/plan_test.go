@@ -231,6 +231,17 @@ func TestPlanDocker(t *testing.T) {
 			want: []string{"remove the registry mirror boxrunner-mirror and its cache"},
 		},
 		{
+			name:    "a mirror and its image left after the last docker class went",
+			desired: desired,
+			observe: func(o *Observed) {
+				o.Mirror, o.MirrorImage = mirror.State{Volume: true}, true
+			},
+			want: []string{
+				"remove the registry mirror boxrunner-mirror and its cache",
+				"remove the registry image " + mirror.Image,
+			},
+		},
+		{
 			name:    "no flag and no docker class",
 			desired: desired,
 			observe: func(*Observed) {},
@@ -434,13 +445,17 @@ func TestPlanUninstall(t *testing.T) {
 	o := installed()
 	o.Containers = 2
 	o.Mirror = mirror.State{Identity: mirror.Identity(netip.MustParseAddrPort("172.18.0.1:5000")), Volume: true}
+	o.MirrorImage = true
+	o.RunnerImages = []string{"ghcr.io/actions/actions-runner:2.338.0", "ghcr.io/actions/actions-runner@sha256:4ffa"}
 	o.Paths["/run/boxrunner.sock"] = File{Mode: fs.ModeSocket | 0o600}
 	want := []string{
 		"stop and disable boxrunner.service (closes sessions)",
 		"remove the job containers",
 		"remove the registry mirror boxrunner-mirror and its cache",
+		"remove the registry image registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
 		"remove the Docker network boxrunner",
 		"remove the job image boxrunner/runner:local",
+		"remove the runner images ghcr.io/actions/actions-runner",
 		"remove the firewall rules",
 		"stop boxrunner_idle.slice",
 		"remove /etc/systemd/system/boxrunner.service",
@@ -453,6 +468,9 @@ func TestPlanUninstall(t *testing.T) {
 	}
 	if got := names(PlanUninstall(o)); !reflect.DeepEqual(got, want) {
 		t.Errorf("PlanUninstall =\n%q\nwant\n%q", got, want)
+	}
+	if got := PlanUninstall(o)[6].(RemoveRunnerImages).Refs; !reflect.DeepEqual(got, o.RunnerImages) {
+		t.Errorf("uninstall removes the runner images %q, want %q", got, o.RunnerImages)
 	}
 	clean := Observed{DockerBinary: true, DockerUp: true, CgroupV2: true, Paths: map[string]File{}}
 	if got := PlanUninstall(clean); len(got) != 0 {

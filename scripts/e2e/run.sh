@@ -165,8 +165,9 @@ expect "$work/installed.txt" '^path /usr/local/bin/boxrunner$' '^path /etc/boxru
 	'^ip6tables -A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$' \
 	'^iptables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS$' '^nft table inet boxrunner$' \
 	'^link boxrunner0$' '^link boxrunner-[0-9a-f]{5}$' '^network boxrunner$' '^network boxrunner-boxrunner-light$' '^image boxrunner/runner:local$'
+expect "$work/installed.txt" '^image ghcr\.io/actions/actions-runner:[0-9]+\.[0-9]+\.[0-9]+$'
 if [ "$mode" = docker ]; then
-	expect "$work/installed.txt" '^container boxrunner-mirror$' '^volume boxrunner-mirror$'
+	expect "$work/installed.txt" '^container boxrunner-mirror$' '^volume boxrunner-mirror$' '^image registry@sha256:[0-9a-f]{64}$'
 fi
 
 step "install again changes nothing"

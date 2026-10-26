@@ -212,6 +212,31 @@ func Superseded(images []docker.ImageSummary, containers []docker.Container, run
 	return append(dangling, versions...)
 }
 
+// Bases returns the references to the runner images that Build pulled, as
+// ones to remove: each version's tag, then the digest references, because an
+// image goes only with its last reference. An image in used stays.
+func Bases(images []docker.ImageSummary, used map[string]bool) []string {
+	var tags, digests []string
+	for _, img := range images {
+		if used[img.ID] {
+			continue
+		}
+		for _, tag := range img.RepoTags {
+			if baseTag.MatchString(tag) {
+				tags = append(tags, tag)
+			}
+		}
+		for _, ref := range img.RepoDigests {
+			if strings.HasPrefix(ref, runnerdigests.Image+"@") {
+				digests = append(digests, ref)
+			}
+		}
+	}
+	slices.Sort(tags)
+	slices.Sort(digests)
+	return append(tags, digests...)
+}
+
 // DiskUse is what boxrunner's images take on disk: the job and class
 // images, which carry the job image's identity, and the runner images they
 // are built from. Each counts only the layers it adds to the nearest listed

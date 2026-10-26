@@ -113,6 +113,19 @@ type Container struct {
 	ImageID string            `json:"ImageID"`
 }
 
+// UsedImages returns the IDs of the images containers use, leaving out the
+// containers that carry one of the labels (keys), such as the ones uninstall
+// is about to remove.
+func UsedImages(containers []Container, except ...string) map[string]bool {
+	used := map[string]bool{}
+	for _, c := range containers {
+		if !slices.ContainsFunc(except, func(key string) bool { _, ok := c.Labels[key]; return ok }) {
+			used[c.ImageID] = true
+		}
+	}
+	return used
+}
+
 func (c Container) Running() bool { return c.State == "running" }
 
 func (c Container) CreatedAt() time.Time { return time.Unix(c.Created, 0).UTC() }
@@ -507,10 +520,14 @@ func (c *Client) Image(ctx context.Context, ref string) (ImageInfo, bool, error)
 // ImageSummary is one image as Docker lists it. Size counts the layers of
 // the image it was built from too.
 type ImageSummary struct {
-	ID       string            `json:"Id"`
-	RepoTags []string          `json:"RepoTags"`
-	Labels   map[string]string `json:"Labels"`
-	Size     int64             `json:"Size"`
+	ID       string   `json:"Id"`
+	RepoTags []string `json:"RepoTags"`
+	// RepoDigests are the references name@sha256:… the image was pulled by.
+	// A pull by digest sets no tag, and an image goes only when its last
+	// reference does, tag or digest.
+	RepoDigests []string          `json:"RepoDigests"`
+	Labels      map[string]string `json:"Labels"`
+	Size        int64             `json:"Size"`
 }
 
 // Images lists the images that are not intermediate layers of a build.
