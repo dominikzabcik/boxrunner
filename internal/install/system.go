@@ -24,6 +24,7 @@ import (
 	"github.com/dominikzabcik/boxrunner/internal/mirror"
 	"github.com/dominikzabcik/boxrunner/internal/runnerdigests"
 	"github.com/dominikzabcik/boxrunner/internal/runnerimage"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 // Exec runs a command and returns its combined output.
@@ -331,7 +332,7 @@ func execute(ctx context.Context, step Step, run firewall.Run, d *docker.Client)
 		}
 		return d, nil
 	case RemoveFirewall:
-		return d, firewall.Remove(ctx, run, layout.Bridge)
+		return d, errors.Join(firewall.Remove(ctx, run, layout.Bridge), seen.Remove(ctx, run))
 	case RemovePath:
 		return d, os.RemoveAll(s.Path)
 	case Blocked:

@@ -35,10 +35,22 @@ The page is laid out like a terminal UI, in the menu bar app's look: dark, monos
 - **Recent jobs.** The last 30: ✓ succeeded, ✗ failed or – cancelled, the job with its repository, class and box, how long the job waited in the queue, how long it took with its CPU time and peak memory when the box measured them, and when it finished.
 - **GitHub minutes not billed.** Jobs and minutes today (UTC) and in the last 30 days, each job rounded up to whole minutes as GitHub bills them. The dollar value uses $0.006 a minute, the price GitHub publishes for its standard 2-core Linux runner. Minutes within your plan's free allowance would not have cost money, so this is what the minutes are worth, not necessarily what you saved.
 - **What the Worker serves.** With `ORG` set, the organization and its runner group, or why the Worker serves none of its repositories ([config](config.md#organizations)). The repositories as the agent last fetched them with `GET /v1/repos`, and the Worker's `CLASSES`, each serving or paused, with who paused it and when. A paused class also reads "paused" in each box's classes. A repository whose fork pull requests run workflows without approval, with write tokens or with secrets gets a warning that names the settings to change ([api.md](api.md#get-v1repos)).
+- **Where jobs connect.** The newest destinations the boxes report, 30 at most: the address and port, the name when the box knows one, the repository and box, when the box first saw it and how many connections it counted since. See [below](#where-jobs-connect).
 - **Fallback to GitHub's runners.** Off, on and after how many minutes, or that the box is down and when the Worker switched. In red, why the Worker could not set or delete `BOXRUNNER_DOWN`, or why it cannot read `FALLBACK_MINUTES` ([fallback](fallback.md)).
 - **Alerts.** Off, or the webhook's host and after how many minutes without a heartbeat, or of jobs waiting, the Worker posts to it. In red, why the last post failed, or why it cannot read `ALERT_WEBHOOK` or `ALERT_MINUTES` ([alerts](alerts.md)).
 
 The page works without JavaScript; reload it to update it. With JavaScript, a small inline script fetches `GET /dashboard.json` every 10 seconds while the tab is visible, and stops while it is hidden. `dashboard.json` holds the same data and, under `html`, the same part of the page rendered by the Worker, which the script puts in place. The page has one renderer, on the Worker. While the keyboard focus is inside that part of the page (for example on a table that scrolls sideways on a phone), the script leaves it alone.
+
+## Where jobs connect
+
+Each box records the first connection a job opens to every address, port and protocol, for every class, and reports the newest 40 in its heartbeat ([api.md](api.md#post-v1heartbeat)). The section lists them across boxes, the newest first, 30 at most. `sudo boxrunner status` on a box lists up to 10 for each repository and keeps more (up to 100 for each of 64 repositories).
+
+- **A name appears only for a class with `egress`.** The box knows a name when its DNS forwarder opened the address for it. Other classes show the address alone.
+- **Connections is a lower bound.** The kernel passes at most 100 new connections a second to the agent, and a burst above that is not counted.
+- **Only allowed connections are listed.** A connection an [egress allowlist](config.md#seeing-what-was-refused) refuses is in that class's refusals instead.
+- **An organization's runners** show the organization's login as the repository.
+- **A box without `nft`** records nothing and says so in `status` and `doctor`; the section stays empty for it.
+- **The box keeps the record** in `/var/lib/boxrunner/destinations.json` across restarts and drops what it has not seen for 30 days. The Worker keeps only the latest heartbeat, so a box that stops reporting shows its last destinations for as long as the Worker keeps the box.
 
 ## Actions
 

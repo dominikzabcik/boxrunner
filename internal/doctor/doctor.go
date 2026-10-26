@@ -163,6 +163,7 @@ func (c Checks) All(ctx context.Context) []Result {
 		results = append(results, Draining(*snap)...)
 		results = append(results, Held(*snap, time.Now())...)
 		results = append(results, Elsewhere(*snap)...)
+		results = append(results, Destinations(*snap)...)
 		results = append(results, RunnerImage(snap.Image)...)
 	}
 	return results
@@ -209,6 +210,14 @@ func Draining(s status.Snapshot) []Result {
 		return nil
 	}
 	return []Result{{"draining", false, "the agent opens no sessions and starts no runners; resume with: sudo boxrunner resume"}}
+}
+
+// Destinations fails while the agent cannot record where jobs connect.
+func Destinations(s status.Snapshot) []Result {
+	if s.DestinationsProblem == "" {
+		return nil
+	}
+	return []Result{{"destinations", false, s.DestinationsProblem}}
 }
 
 // Elsewhere fails once for every repository and class the running agent

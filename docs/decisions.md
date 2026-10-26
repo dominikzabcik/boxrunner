@@ -170,6 +170,24 @@ A forwarder works because Docker's embedded resolver forwards what it does not k
 
 A third review, of the code, found more, and the code fixes each. A start that found the class's network missing put the job on the open job network. `nft flush ruleset` took the backstop with the table, and a job's connections opened in that time outlived the rules; jobs also outlived a stopped agent, with nobody to put the rules back. A second lookup of an address that was open already got the upstream's TTL, longer than the address had left. The class stayed "ready" with its network removed, its forwarder stopped or its rules not restored. A first start listed the box's networks before it made the class's, so the class's own subnet was missing from the deny list until a restart.
 
+## A log of where jobs connect
+
+[#53](https://github.com/dominikzabcik/boxrunner/issues/53) asked for a record of each job's outbound connections, for every class and not only those with an allowlist. Three ways were weighed:
+
+| Way | Verdict |
+|---|---|
+| Read the conntrack table | Polling misses short connections, and the netlink event stream needs a second reader and a conntrack module that not every kernel loads. |
+| Add a log rule to the existing `boxrunner` table | That table exists only while a class has `egress`, and its rules are replaced in one transaction, so a logging rule would share their lifecycle and their reader. |
+| A separate table with a log rule on new connections | Chosen. |
+
+The table is `inet boxrunner_seen`, with a forward chain at priority 10 and a rule per job bridge: `ct state new`, rate limited to 100 a second, `log group 4138`. Docker's iptables rules and the egress table judge at priority 0, so a rule at 10 sees only what they accepted, and the refusal log keeps what they dropped. A group of its own lets the agent read it with the netlink reader it already has, and a reader that fails does not stop the refusal log. Probes ran in an Ubuntu 24.04 arm64 VM: new TCP, UDP and ICMP connections were logged, a packet dropped at priority 0 was not, traffic inside one bridge was logged and so the agent filters it by subnet, and a wildcard `iifname "boxrunner-*"` matched the egress bridges.
+
+The agent keeps the record in memory, capped at 100 destinations for each of 64 repositories, and saves it to a file every five minutes and when it stops, because the Worker keeps only a box's latest heartbeat. The heartbeat carries the newest 10 per repository, 40 in all, inside the status blob the Worker already stores, so a heartbeat adds no database write beyond the one it made before. A name is shown only when the egress forwarder opened the address for it, because a class without one has no resolver in the agent's path, and guessing a name by reverse lookup would show something the job never asked for.
+
+`install` now adds `nftables` on every Debian or Ubuntu box, where before only a class with `egress` needed it. A container started by hand on the job network is recorded under `?`, so it stays visible and the end-to-end test can drive the log without a runner. Counts are a lower bound by design: the rate limit keeps a port scan from a job from filling the agent's queue.
+
+What a real box still has to confirm is in the end-to-end workflow: `scripts/e2e/run.sh` and `scripts/e2e/egress.sh` check that a container on the job network and a job of an egress class each appear in `status` with the right address, and that the metadata address does not.
+
 ## Organization scale sets, fenced by a selected runner group
 
 A repository scale set needs the App's repository permission Administration (read and write), which can also change the repository's settings and delete it. A company that runs boxrunner for an organization would rather give the App no power over its repositories. An organization scale set uses the same protocol with the organization's registration token ([actions/scaleset](https://github.com/actions/scaleset/blob/e6daac702355cdb5b880b4fbdcf6d85dcd9e48e5/client.go#L1020-L1033)), and the App needs only the organization permission Self-hosted runners ([GitHub's docs](https://docs.github.com/en/actions/tutorials/use-actions-runner-controller/authenticate-to-the-api)).

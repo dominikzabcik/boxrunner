@@ -12,6 +12,7 @@ export const dollarsPerMinute = 0.006;
 /** The agent reports every 30 seconds; four missed heartbeats mean the box is off. */
 export const offlineAfterSeconds = 120;
 const recentJobCount = 30;
+const recentDestinationCount = 30;
 
 type Totals = { jobs: number; minutes: number; dollars: number };
 
@@ -63,6 +64,18 @@ export type Dashboard = {
 		/** CPU time across all cores and the most memory the job held, in bytes; null when its box did not measure them. */
 		cpuSeconds: number | null;
 		memoryPeak: number | null;
+	}[];
+	/** The newest places jobs connected to, as the boxes last reported them, newest first; see docs/dashboard.md#where-jobs-connect. */
+	destinations: {
+		box: string;
+		repo: string;
+		addr: string;
+		port: number;
+		proto: string;
+		name: string | null;
+		firstSeen: string;
+		secondsSinceFirstSeen: number;
+		count: number;
 	}[];
 	/** Queued jobs no box here will run, oldest first, from the App's `workflow_job` event; see docs/unserved-jobs.md. */
 	unserved: {
@@ -215,6 +228,21 @@ export function dashboardData(box: Box, now: number): Dashboard {
 			cpuSeconds: job.usage?.cpuSeconds ?? null,
 			memoryPeak: job.usage?.memoryPeak ?? null,
 		})),
+		destinations: boxes
+			.flatMap(({ status }) => status.destinations.map((d) => ({ box: status.box, ...d })))
+			.sort((a, b) => b.firstSeen - a.firstSeen)
+			.slice(0, recentDestinationCount)
+			.map(({ box, repo, addr, port, proto, name, firstSeen, count }) => ({
+				box,
+				repo,
+				addr,
+				port,
+				proto,
+				name,
+				firstSeen: iso(firstSeen),
+				secondsSinceFirstSeen: secondsBetween(firstSeen, now),
+				count,
+			})),
 		unserved: store.queuedJobs(now).flatMap((job) => {
 			const reason = unservedReason(job, servedNow, now - job.queuedAt);
 			if (reason === null) return [];
@@ -457,6 +485,29 @@ function renderJobs({ jobs }: Dashboard) {
 	return block('jobs', 'Recent jobs', body, { trail: String(jobs.length) });
 }
 
+/** `203.0.113.9:443`, `[2001:db8::1]:443`, or the bare address of a protocol without ports; a protocol other than TCP follows. */
+function destinationText(d: Dashboard['destinations'][number]) {
+	const place = d.port === 0 ? d.addr : d.addr.includes(':') ? `[${d.addr}]:${d.port}` : `${d.addr}:${d.port}`;
+	return d.proto === 'tcp' ? place : `${place} ${d.proto}`;
+}
+
+const destinationsDocs = 'https://boxrunner.zabcik.me/docs/dashboard/#where-jobs-connect';
+
+function renderDestinations({ destinations }: Dashboard) {
+	const body = `${table(
+		[{ title: 'Destination' }, { title: 'Repository' }, { title: 'First seen' }, { title: 'Connections', number: true }],
+		destinations.map((d) => [
+			`<code>${escape(destinationText(d))}</code>${d.name === null ? '' : `<small>${escape(d.name)}</small>`}`,
+			`${escape(d.repo)}<small>${escape(d.box)}</small>`,
+			time(d.firstSeen, ago(d.secondsSinceFirstSeen)),
+			integer.format(d.count),
+		]),
+		'No box has reported a destination yet.',
+	)}
+<p class="hint">Where jobs started a connection, the newest at the top (<a href="${destinationsDocs}">how it is recorded</a>). Each box sends its newest 40 and keeps more: <code>boxrunner status</code> on the box lists up to 10 for each repository.</p>`;
+	return block('destinations', 'Where jobs connect', body, { trail: String(destinations.length) });
+}
+
 function renderWaiting({ waiting }: Dashboard) {
 	if (waiting.length === 0) return '';
 	const body = `${table(
@@ -640,7 +691,7 @@ ${hidden('id', d.id)}
 
 /** The part of the page the script refreshes: the fleet on the left, what the Worker does on the right. Its forms carry the session's CSRF token. */
 export function renderLive(data: Dashboard, csrf: string): string {
-	const main = [renderBoxes(data, csrf), renderWaiting(data), renderJobs(data), renderUnserved(data)];
+	const main = [renderBoxes(data, csrf), renderWaiting(data), renderJobs(data), renderDestinations(data), renderUnserved(data)];
 	const side = [renderTotals(data), renderServed(data, csrf), renderGuards(data), renderDevices(data, csrf)];
 	return `${renderSummary(data)}
 <div class="board">

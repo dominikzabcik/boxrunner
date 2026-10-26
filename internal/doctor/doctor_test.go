@@ -300,6 +300,16 @@ func TestDraining(t *testing.T) {
 	}
 }
 
+func TestDestinations(t *testing.T) {
+	if got := Destinations(status.Snapshot{}); got != nil {
+		t.Errorf("Destinations of an agent that records them = %+v", got)
+	}
+	want := []Result{{"destinations", false, "nft is not installed, so the destinations jobs connect to are not recorded; install nftables and restart boxrunner"}}
+	if got := Destinations(status.Snapshot{DestinationsProblem: want[0].Detail}); !reflect.DeepEqual(got, want) {
+		t.Errorf("Destinations = %+v, want %+v", got, want)
+	}
+}
+
 func TestForks(t *testing.T) {
 	settings := func(run, approval, write, secrets bool) *worker.ForkPullRequests {
 		return &worker.ForkPullRequests{RunWorkflows: run, RequireApproval: approval, SendWriteTokens: write, SendSecrets: secrets}

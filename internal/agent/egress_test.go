@@ -22,6 +22,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/config"
 	"github.com/dominikzabcik/boxrunner/internal/egress"
+	"github.com/dominikzabcik/boxrunner/internal/layout"
 	"github.com/dominikzabcik/boxrunner/internal/nflog"
 	"github.com/dominikzabcik/boxrunner/internal/scheduler"
 	"github.com/dominikzabcik/boxrunner/internal/status"
@@ -41,6 +42,11 @@ type fakeHost struct {
 	flushed bool
 	// failApply makes nft refuse a ruleset.
 	failApply bool
+	// seen is the script of the destinations log's table, "" when there is
+	// none, and seenScripts every one applied. failSeen makes nft refuse it.
+	seen        string
+	seenScripts []string
+	failSeen    bool
 	// packets is what every counter of the table reads.
 	packets  uint64
 	chains   map[string]bool
@@ -65,6 +71,7 @@ func (f *fakeHost) flushRuleset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.chains, f.sets, f.counters, f.jumps = nil, nil, nil, nil
+	f.seen = ""
 	f.ipt = map[string]map[string][]string{"iptables": {"INPUT": nil, "FORWARD": nil}, "ip6tables": {"INPUT": nil, "FORWARD": nil}}
 }
 
@@ -148,6 +155,27 @@ func (f *fakeHost) run(stdin, name string, args ...string) (string, error) {
 		return "", errors.New("exec: nft: executable file not found in $PATH")
 	case cmd == "nft --version":
 		return "nftables v1.0.9", nil
+	case cmd == "nft list table inet boxrunner_seen":
+		if f.seen == "" {
+			return "Error: No such file or directory", errors.New("exit status 1")
+		}
+		var b strings.Builder
+		b.WriteString("table inet boxrunner_seen {\n\tchain forward {\n\t\ttype filter hook forward priority filter + 10; policy accept;\n")
+		for _, line := range strings.Split(f.seen, "\n") {
+			if rule, ok := strings.CutPrefix(line, "add rule inet boxrunner_seen forward "); ok {
+				fmt.Fprintf(&b, "\t\t%s\n", rule)
+			}
+		}
+		b.WriteString("\t}\n}\n")
+		return b.String(), nil
+	case cmd == "nft delete table inet boxrunner_seen":
+		f.seen = ""
+	case cmd == "nft -f -" && strings.Contains(stdin, "inet boxrunner_seen"):
+		if f.failSeen {
+			return "Error: could not process rule", errors.New("exit status 1")
+		}
+		f.seen = stdin
+		f.seenScripts = append(f.seenScripts, stdin)
 	case cmd == "nft list table inet boxrunner":
 		if f.flushed || f.chains == nil {
 			return "Error: No such file or directory", errors.New("exit status 1")
@@ -203,6 +231,13 @@ func (f *fakeHost) applied() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.scripts)
+}
+
+// seenScript is the script of the destinations log's table now.
+func (f *fakeHost) seenScript() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seen
 }
 
 func (f *fakeHost) commands() []string {
@@ -280,8 +315,10 @@ type egressHarness struct {
 	*harness
 	host *fakeHost
 	// dns is where the class's forwarder listens.
-	dns     chan string
+	dns chan string
+	// packets is the log of what the table dropped, and seen the log of new connections.
 	packets *packets
+	seen    *packets
 	// udp is the forwarder's latest UDP socket.
 	mu  sync.Mutex
 	udp net.PacketConn
@@ -293,13 +330,18 @@ func startEgress(t *testing.T, host *fakeHost, containers map[string]*container,
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &egressHarness{host: host, dns: make(chan string, 4), packets: newPackets()}
+	e := &egressHarness{host: host, dns: make(chan string, 4), packets: newPackets(), seen: newPackets()}
 	change = append([]func(*config.Class, *harness){func(c *config.Class, h *harness) {
 		c.Egress = &policy
 		h.run = host.run
 		h.docker.subnet, h.docker.gateway = "127.0.0.0/8", "127.0.0.1"
 		h.upstream = answers{"203.0.113.5"}
-		h.openPackets = func(uint16) (PacketSource, error) { return e.packets, nil }
+		h.openPackets = func(group uint16) (PacketSource, error) {
+			if group == layout.SeenNFLogGroup {
+				return e.seen, nil
+			}
+			return e.packets, nil
+		}
 		h.egressListen = func(egress.Net) (net.PacketConn, net.Listener, error) {
 			pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 			if err != nil {
@@ -707,6 +749,9 @@ func TestEgressLogReopens(t *testing.T) {
 	e := startEgress(t, host, map[string]*container{}, func(_ *config.Class, h *harness) {
 		good := h.openPackets
 		h.openPackets = func(group uint16) (PacketSource, error) {
+			if group != layout.NFLogGroup {
+				return good(group)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if opens++; opens == 1 {

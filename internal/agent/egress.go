@@ -438,6 +438,10 @@ func (a *Agent) serveEgress(ctx context.Context) func() {
 		wg.Go(func() { a.countBlocked(ctx) })
 		wg.Go(func() { a.logBlocked(ctx) })
 	}
+	if a.dest.active {
+		wg.Go(func() { a.logSeen(ctx) })
+	}
+	wg.Go(func() { a.saveSeen(ctx) })
 	wg.Go(func() { a.guard(ctx) })
 	return func() {
 		cancel()
@@ -564,8 +568,15 @@ func cmpDuration(d, fallback time.Duration) time.Duration {
 }
 
 // logBlocked reads the packets the table logged as it dropped them, and says
-// who sent them where. When reading fails it opens the log again.
+// who sent them where.
 func (a *Agent) logBlocked(ctx context.Context) {
+	a.readLog(ctx, layout.NFLogGroup, a.onBlockedPacket,
+		"cannot read the egress rules' log; refused packets are counted, and described again once it opens")
+}
+
+// readLog hands every packet logged to a group to handle until ctx ends. When
+// reading fails it says why, with complaint, and opens the log again.
+func (a *Agent) readLog(ctx context.Context, group uint16, handle func(context.Context, nflog.Packet), complaint string) {
 	open := a.OpenPackets
 	if open == nil {
 		open = openPackets
@@ -573,14 +584,14 @@ func (a *Agent) logBlocked(ctx context.Context) {
 	retry := cmpDuration(a.EgressRetry, time.Second)
 	wait := retry
 	for {
-		read, err := a.readBlocked(ctx, open)
+		read, err := readPackets(ctx, open, group, handle)
 		if ctx.Err() != nil {
 			return
 		}
 		if read {
 			wait = retry
 		}
-		a.Log.Warn("cannot read the egress rules' log; refused packets are counted, and described again once it opens", "err", err)
+		a.Log.Warn(complaint, "err", err)
 		select {
 		case <-ctx.Done():
 			return
@@ -590,9 +601,9 @@ func (a *Agent) logBlocked(ctx context.Context) {
 	}
 }
 
-// readBlocked reads the log until it fails, and reports whether it read anything.
-func (a *Agent) readBlocked(ctx context.Context, open func(uint16) (PacketSource, error)) (bool, error) {
-	src, err := open(layout.NFLogGroup)
+// readPackets reads the log until it fails, and reports whether it read anything.
+func readPackets(ctx context.Context, open func(uint16) (PacketSource, error), group uint16, handle func(context.Context, nflog.Packet)) (bool, error) {
+	src, err := open(group)
 	if err != nil {
 		return false, err
 	}
@@ -607,7 +618,7 @@ func (a *Agent) readBlocked(ctx context.Context, open func(uint16) (PacketSource
 		}
 		read = true
 		for _, p := range packets {
-			a.onBlockedPacket(ctx, p)
+			handle(ctx, p)
 		}
 	}
 }
@@ -738,6 +749,7 @@ func (a *Agent) guard(ctx context.Context) {
 			a.Log.Error("the egress rules are gone and could not be put back; not serving the classes with an allowlist", "err", err)
 		}
 		a.checkEgressNets(ctx)
+		a.verifyDestinations(ctx)
 	}
 }
 

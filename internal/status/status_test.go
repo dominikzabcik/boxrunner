@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dominikzabcik/boxrunner/internal/egress"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 var t0 = time.Date(2026, 10, 13, 21, 0, 0, 0, time.UTC)
@@ -414,6 +415,40 @@ func TestPrintEgress(t *testing.T) {
 	}
 	if got, want := snap.Egress[0].Summary(), "12 packets dropped and 1 lookup refused since the agent started"; got != want {
 		t.Errorf("Summary = %q, want %q", got, want)
+	}
+}
+
+func TestPrintDestinations(t *testing.T) {
+	snap := Snapshot{
+		Box: "box-1", Version: "0.1.0",
+		Classes: []Class{{Name: "agent", Priority: "normal", Max: 1}},
+		Destinations: []seen.Repo{
+			{Repo: "", Destinations: []seen.Destination{{Addr: "198.51.100.4", Port: 53, Proto: "udp", First: t0, Last: t0, Count: 1}}},
+			{Repo: "octo/site", Destinations: []seen.Destination{
+				{Addr: "203.0.113.9", Port: 443, Proto: "tcp", Name: "api.example.com", First: t0.Add(time.Hour), Last: t0.Add(time.Hour), Count: 12},
+				{Addr: "203.0.113.20", Proto: "icmp", First: t0, Last: t0, Count: 2},
+			}},
+		},
+	}
+	var b strings.Builder
+	Print(&b, snap, t0)
+	at := func(d time.Duration) string { return t0.Add(d).Local().Format("Jan 02 15:04") }
+	want := "CLASS  PRIORITY  RUNNERS  MAX  DASHBOARD\n" +
+		"agent  normal    0        1    -\n\n" +
+		"REPOSITORY  FIRST SEEN    CONNECTIONS  DESTINATION\n" +
+		"?           " + at(0) + "  1            198.51.100.4:53 udp\n" +
+		"octo/site   " + at(time.Hour) + "  12           203.0.113.9:443 (api.example.com)\n" +
+		"octo/site   " + at(0) + "  2            203.0.113.20 icmp\n" +
+		"Up to 10 destinations per repository, the newest first. A ? is a container that is not one of the agent's runners.\n\n"
+	if got := b.String(); !strings.Contains(got, want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", got, want)
+	}
+
+	snap.Destinations, snap.DestinationsProblem = nil, "nft is not installed, so the destinations jobs connect to are not recorded; run sudo boxrunner install"
+	b.Reset()
+	Print(&b, snap, t0)
+	if got, want := b.String(), "Destinations: nft is not installed, so the destinations jobs connect to are not recorded; run sudo boxrunner install\n\nCLASS"; !strings.Contains(got, want) {
+		t.Errorf("Print =\n%s\nwant it to contain\n%s", got, want)
 	}
 }
 

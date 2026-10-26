@@ -24,6 +24,7 @@ import (
 
 	"github.com/dominikzabcik/boxrunner/internal/egress"
 	"github.com/dominikzabcik/boxrunner/internal/release"
+	"github.com/dominikzabcik/boxrunner/internal/seen"
 )
 
 type Snapshot struct {
@@ -57,6 +58,10 @@ type Snapshot struct {
 	Heartbeat time.Time `json:"heartbeat,omitzero"`
 	// Egress is the state of each class that has an allowlist.
 	Egress []Egress `json:"egress,omitempty"`
+	// Destinations are the places each repository's jobs connected to, the
+	// newest first; DestinationsProblem says why the agent does not record them.
+	Destinations        []seen.Repo `json:"destinations,omitempty"`
+	DestinationsProblem string      `json:"destinationsProblem,omitempty"`
 	// Organization is set while the Worker serves an organization.
 	Organization *Organization `json:"organization,omitempty"`
 }
@@ -553,6 +558,9 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			fmt.Fprintf(w, "Class %s has an egress allowlist and is not served: %s\n\n", e.Class, e.Problem)
 		}
 	}
+	if s.DestinationsProblem != "" {
+		fmt.Fprintf(w, "Destinations: %s\n\n", s.DestinationsProblem)
+	}
 	t := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(t, "CLASS\tPRIORITY\tRUNNERS\tMAX\tDASHBOARD")
 	for _, c := range s.Classes {
@@ -585,6 +593,18 @@ func Print(w io.Writer, s Snapshot, now time.Time) {
 			}
 			t.Flush()
 		}
+	}
+
+	if len(s.Destinations) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(t, "REPOSITORY\tFIRST SEEN\tCONNECTIONS\tDESTINATION")
+		for _, r := range s.Destinations {
+			for _, d := range r.Destinations {
+				fmt.Fprintf(t, "%s\t%s\t%d\t%s\n", cmp.Or(r.Repo, "?"), d.First.Local().Format("Jan 02 15:04"), d.Count, d)
+			}
+		}
+		t.Flush()
+		fmt.Fprintln(w, "Up to 10 destinations per repository, the newest first. A ? is a container that is not one of the agent's runners.")
 	}
 
 	fmt.Fprintln(w)

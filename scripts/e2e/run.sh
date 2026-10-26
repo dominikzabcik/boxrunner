@@ -102,6 +102,21 @@ if grep -vE "^(ok  |warn  (release|worker release|runner release|memory) )" "$wo
 	fail "doctor printed the lines above"
 fi
 
+step "a container on the job network connects out; the agent records where, and not what the firewall dropped"
+sudo docker run --rm --network boxrunner boxrunner/runner:local bash -c 'curl -sS -m 30 -o /dev/null https://github.com; curl -sS -m 3 -o /dev/null http://169.254.169.254/ || true'
+for _ in $(seq 20); do
+	sudo boxrunner status | awk '/^REPOSITORY +FIRST SEEN/ { in_table = 1 } in_table { print } /^Up to / { in_table = 0 }' >"$work/status-destinations.txt"
+	grep -qE '^\? +[A-Z][a-z]{2} [0-9]{2} [0-9:]{5} +[0-9]+ +[0-9.]+:443$' "$work/status-destinations.txt" && break
+	sleep 1
+done
+expect "$work/status-destinations.txt" '^REPOSITORY +FIRST SEEN +CONNECTIONS +DESTINATION$' \
+	'^\? +[A-Z][a-z]{2} [0-9]{2} [0-9:]{5} +[0-9]+ +[0-9.]+:443$'
+grep -q '169\.254\.169\.254' "$work/status-destinations.txt" && fail "status lists the metadata service, which the firewall dropped"
+sudo journalctl -u boxrunner.service --no-pager | tee "$work/agent-destinations.txt" >/dev/null
+expect "$work/agent-destinations.txt" 'msg="a job connected somewhere new" repo="" runner=[^ ]+ dest=[0-9.]+:443'
+sudo nft list table inet boxrunner_seen | tee "$work/seen-table.txt" >/dev/null
+expect "$work/seen-table.txt" 'iifname "boxrunner0" ct state new .*log group 4138' 'iifname "boxrunner-\*" ct state new .*log group 4138'
+
 # The workflow hands over its own runtime token, which GitHub signs, so the
 # cache checks it as it would a job's.
 if [ -n "${RUNTIME_TOKEN_FILE:-}" ]; then
@@ -165,7 +180,7 @@ expect "$work/installed.txt" '^path /usr/local/bin/boxrunner$' '^path /etc/boxru
 	'^ip6tables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-INPUT$' \
 	'^iptables -A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$' \
 	'^ip6tables -A (DOCKER-USER|FORWARD) -i boxrunner0 -m comment --comment boxrunner -j BOXRUNNER-FORWARD$' \
-	'^iptables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS$' '^nft table inet boxrunner$' \
+	'^iptables -A INPUT -m comment --comment boxrunner -j BOXRUNNER-EGRESS$' '^nft table inet boxrunner$' '^nft table inet boxrunner_seen$' \
 	'^link boxrunner0$' '^link boxrunner-[0-9a-f]{5}$' '^network boxrunner$' '^network boxrunner-boxrunner-light$' '^image boxrunner/runner:local$'
 expect "$work/installed.txt" '^image ghcr\.io/actions/actions-runner:[0-9]+\.[0-9]+\.[0-9]+$'
 if [ "$mode" = docker ]; then
